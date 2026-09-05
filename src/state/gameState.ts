@@ -170,7 +170,7 @@ function collectAdjacentRoadIds(building: PlacedBuilding): Set<string> {
   return roadIds;
 }
 
-function hasAdjacentFence(building: PlacedBuilding): boolean {
+export function hasAdjacentFence(building: PlacedBuilding): boolean {
   const { width, height } = BUILDING_DEFINITIONS[building.type].size;
 
   const isFence = (nx: number, ny: number): boolean => {
@@ -193,6 +193,30 @@ function hasAdjacentFence(building: PlacedBuilding): boolean {
   }
 
   return false;
+}
+
+export interface FenceLink {
+  fromId: string;
+  toId: string;
+}
+
+/** Right/down-only adjacency so each fence pair is reported once, for drawing connected fence-line segments. */
+export function getFenceLinks(): FenceLink[] {
+  const links: FenceLink[] = [];
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Fence) {
+      continue;
+    }
+    const right = getBuildingAtTile(building.tileX + 1, building.tileY);
+    if (right?.type === BuildingType.Fence) {
+      links.push({ fromId: building.id, toId: right.id });
+    }
+    const down = getBuildingAtTile(building.tileX, building.tileY + 1);
+    if (down?.type === BuildingType.Fence) {
+      links.push({ fromId: building.id, toId: down.id });
+    }
+  }
+  return links;
 }
 
 function isBuildingConnected(building: PlacedBuilding): boolean {

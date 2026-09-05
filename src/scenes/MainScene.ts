@@ -23,6 +23,7 @@ import {
   canPlaceBuilding,
   collectBuilding,
   getBuildingAtTile,
+  getFenceLinks,
   getMoney,
   getResources,
   getTotalMeatProduced,
@@ -30,6 +31,8 @@ import {
   runProductionTick,
   tickTimer,
 } from '../state/gameState';
+
+const FENCE_LINE_COLOR = 0x8d6748;
 
 const VALID_TINT = 0x00ff00;
 const INVALID_TINT = 0xff0000;
@@ -54,6 +57,7 @@ export class MainScene extends Phaser.Scene {
   private previewImage: Phaser.GameObjects.Image | null = null;
   private buildingVisuals = new Map<string, BuildingVisual>();
   private connectionGraphics!: Phaser.GameObjects.Graphics;
+  private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
 
@@ -71,6 +75,7 @@ export class MainScene extends Phaser.Scene {
     this.setupBuildingSelection();
     this.setupProductionTimer();
     this.setupConnectionVisuals();
+    this.setupFenceVisuals();
     this.setupHarvestIndicators();
     this.setupGameReset();
   }
@@ -317,6 +322,10 @@ export class MainScene extends Phaser.Scene {
     const readyIndicator = this.createReadyIndicator(building);
 
     this.buildingVisuals.set(building.id, { building, image, readyIndicator });
+    if (building.type === BuildingType.Fence) {
+      // connections-updated already fired before this building's visual existed; redraw now that it does.
+      this.redrawFenceLines();
+    }
     playPlacementSound();
   }
 
@@ -379,6 +388,37 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private setupFenceVisuals(): void {
+    this.fenceLineGraphics = this.add.graphics();
+    this.fenceLineGraphics.setDepth(15);
+
+    gameEvents.on('connections-updated', () => this.redrawFenceLines());
+  }
+
+  private redrawFenceLines(): void {
+    this.fenceLineGraphics.clear();
+    this.fenceLineGraphics.lineStyle(4, FENCE_LINE_COLOR, 1);
+
+    for (const { fromId, toId } of getFenceLinks()) {
+      const from = this.buildingVisuals.get(fromId);
+      const to = this.buildingVisuals.get(toId);
+      if (!from || !to) {
+        continue;
+      }
+      const fromCenter = this.tileCenter(from.building);
+      const toCenter = this.tileCenter(to.building);
+      this.fenceLineGraphics.lineBetween(fromCenter.x, fromCenter.y, toCenter.x, toCenter.y);
+    }
+  }
+
+  private tileCenter(building: PlacedBuilding): { x: number; y: number } {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    return {
+      x: building.tileX * TILE_SIZE + (width * TILE_SIZE) / 2,
+      y: building.tileY * TILE_SIZE + (height * TILE_SIZE) / 2,
+    };
+  }
+
   private setupGameReset(): void {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
@@ -390,6 +430,7 @@ export class MainScene extends Phaser.Scene {
       }
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();
+      this.fenceLineGraphics.clear();
     });
   }
 

@@ -1,5 +1,6 @@
 import { BUILDING_DEFINITIONS, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
+import { hasAdjacentFence } from '../state/gameState';
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
@@ -43,6 +44,9 @@ export class BuildingInfoPanel {
       bufferEntries.length > 0
         ? `Ready to collect: ${this.formatResourceMap(Object.fromEntries(bufferEntries))}`
         : null;
+    const fencedText = production?.requiresFence
+      ? `Fenced: ${hasAdjacentFence(this.selected) ? 'Yes (full output)' : 'No (half output)'}`
+      : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
@@ -50,6 +54,7 @@ export class BuildingInfoPanel {
       <div>Production: ${production ? (this.selected.active ? 'On' : 'Off') : '—'}</div>
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
+      ${fencedText ? `<div>${fencedText}</div>` : ''}
       ${readyText ? `<div>${readyText} (click to collect)</div>` : ''}
     `;
   }
