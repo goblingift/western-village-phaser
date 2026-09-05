@@ -1,18 +1,35 @@
 import Phaser from 'phaser';
-import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES, TILE_SIZE } from '../config/constants';
+import {
+  MAP_HEIGHT_TILES,
+  MAP_WIDTH_TILES,
+  PRODUCTION_TICK_MS,
+  TILE_SIZE,
+  VIEWPORT_WIDTH,
+} from '../config/constants';
 import { generateTileMap } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
 import { BuildingType, buildingTextureKey } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
-import { canPlaceBuilding, placeBuilding } from '../state/gameState';
+import {
+  canPlaceBuilding,
+  getBuildingAtTile,
+  getMoney,
+  getResources,
+  placeBuilding,
+  runProductionTick,
+} from '../state/gameState';
 
 const VALID_TINT = 0x00ff00;
 const INVALID_TINT = 0xff0000;
+const CLICK_MOVE_THRESHOLD = 6;
 
 export class MainScene extends Phaser.Scene {
   private infoText!: Phaser.GameObjects.Text;
+  private resourceText!: Phaser.GameObjects.Text;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  private pointerDownX = 0;
+  private pointerDownY = 0;
   private selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
 
@@ -24,7 +41,10 @@ export class MainScene extends Phaser.Scene {
     this.buildTilemap();
     this.setupCameraDrag();
     this.setupInfoText();
+    this.setupResourceHud();
     this.setupBuildingPlacement();
+    this.setupBuildingSelection();
+    this.setupProductionTimer();
   }
 
   private buildTilemap(): void {
@@ -72,24 +92,53 @@ export class MainScene extends Phaser.Scene {
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
+      this.pointerDownX = pointer.x;
+      this.pointerDownY = pointer.y;
     });
   }
 
   private setupInfoText(): void {
-    this.infoText = this.add.text(8, 8, 'tile: -, -', {
+    this.infoText = this.add.text(VIEWPORT_WIDTH - 8, 8, 'tile: -, -', {
       fontSize: '14px',
       color: '#ffffff',
       backgroundColor: '#000000aa',
       padding: { x: 6, y: 4 },
     });
+    this.infoText.setOrigin(1, 0);
     this.infoText.setScrollFactor(0);
     this.infoText.setDepth(1000);
   }
 
   private updateInfoText(pointer: Phaser.Input.Pointer): void {
-    const tileX = Math.floor(pointer.worldX / TILE_SIZE);
-    const tileY = Math.floor(pointer.worldY / TILE_SIZE);
+    const { tileX, tileY } = this.pointerToTile(pointer);
     this.infoText.setText(`tile: ${tileX}, ${tileY}`);
+  }
+
+  private setupResourceHud(): void {
+    this.resourceText = this.add.text(8, 8, this.formatResourceText(), {
+      fontSize: '14px',
+      color: '#ffffff',
+      backgroundColor: '#000000aa',
+      padding: { x: 6, y: 4 },
+    });
+    this.resourceText.setScrollFactor(0);
+    this.resourceText.setDepth(1000);
+
+    gameEvents.on('money-changed', () => this.resourceText.setText(this.formatResourceText()));
+    gameEvents.on('resources-changed', () => this.resourceText.setText(this.formatResourceText()));
+  }
+
+  private formatResourceText(): string {
+    const { rawMeat, meat, water } = getResources();
+    return `Money: $${getMoney()} | Raw Meat: ${rawMeat} | Meat: ${meat} | Water: ${water}`;
+  }
+
+  private setupProductionTimer(): void {
+    this.time.addEvent({
+      delay: PRODUCTION_TICK_MS,
+      loop: true,
+      callback: () => runProductionTick(),
+    });
   }
 
   private setupBuildingPlacement(): void {
@@ -116,6 +165,23 @@ export class MainScene extends Phaser.Scene {
       if (this.selectedType !== null && pointer.leftButtonDown()) {
         this.tryPlaceAt(pointer);
       }
+    });
+  }
+
+  private setupBuildingSelection(): void {
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (this.selectedType !== null) {
+        return;
+      }
+
+      const dx = pointer.x - this.pointerDownX;
+      const dy = pointer.y - this.pointerDownY;
+      if (Math.sqrt(dx * dx + dy * dy) > CLICK_MOVE_THRESHOLD) {
+        return;
+      }
+
+      const { tileX, tileY } = this.pointerToTile(pointer);
+      gameEvents.emit('building-selected', getBuildingAtTile(tileX, tileY));
     });
   }
 

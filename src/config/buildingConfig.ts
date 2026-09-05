@@ -11,12 +11,20 @@ export interface BuildingSize {
   height: number;
 }
 
+export type ResourceKey = 'rawMeat' | 'meat' | 'water';
+
+export interface BuildingProduction {
+  inputs?: Partial<Record<ResourceKey, number>>;
+  outputs?: Partial<Record<ResourceKey, number>>;
+}
+
 export interface BuildingDefinition {
   type: BuildingType;
   label: string;
   cost: number;
   size: BuildingSize;
   color: number;
+  production?: BuildingProduction;
 }
 
 export interface PlacedBuilding {
@@ -24,6 +32,7 @@ export interface PlacedBuilding {
   type: BuildingType;
   tileX: number;
   tileY: number;
+  active: boolean;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -33,6 +42,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 100,
     size: { width: 2, height: 2 },
     color: 0xa1887f,
+    production: { outputs: { rawMeat: 1 } },
   },
   [BuildingType.Butcher]: {
     type: BuildingType.Butcher,
@@ -40,6 +50,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 150,
     size: { width: 2, height: 2 },
     color: 0xc62828,
+    production: { inputs: { rawMeat: 1, water: 1 }, outputs: { meat: 1 } },
   },
   [BuildingType.Well]: {
     type: BuildingType.Well,
@@ -47,6 +58,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 50,
     size: { width: 1, height: 1 },
     color: 0x0288d1,
+    production: { outputs: { water: 1 } },
   },
   [BuildingType.House]: {
     type: BuildingType.House,
