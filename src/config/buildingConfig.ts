@@ -271,6 +271,70 @@ export const COWBOY_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
 /** Only one cowboy look exists, so a single fixed frame key (no per-kind lookup like animals/accents need). */
 export const COWBOY_TEXTURE_KEY = 'cowboy';
 
+/**
+ * Phase 23: threat factions for raid events. Fictional names by deliberate
+ * design (Outlaws/Rustlers/Coyotes), not standing in for any real group.
+ */
+export enum RaiderFaction {
+  Outlaws = 'Outlaws',
+  Rustlers = 'Rustlers',
+  Coyotes = 'Coyotes',
+}
+
+/**
+ * 'any' picks the nearest building regardless of type (Outlaws); 'farm-preferred'
+ * prefers the nearest building with an AnimalConfig (Rustlers/Coyotes - cattle
+ * thieves/wildlife go for livestock first) and falls back to 'any' behavior
+ * when no farm building exists.
+ */
+export type RaiderTargeting = 'any' | 'farm-preferred';
+
+export interface RaiderDefinition {
+  faction: RaiderFaction;
+  label: string;
+  maxHp: number;
+  damage: number;
+  speedPxPerSec: number;
+  targeting: RaiderTargeting;
+}
+
+export const RAIDER_DEFINITIONS: Record<RaiderFaction, RaiderDefinition> = {
+  [RaiderFaction.Outlaws]: {
+    faction: RaiderFaction.Outlaws,
+    label: 'Outlaws',
+    maxHp: 30,
+    damage: 6,
+    speedPxPerSec: 50,
+    targeting: 'any',
+  },
+  [RaiderFaction.Rustlers]: {
+    faction: RaiderFaction.Rustlers,
+    label: 'Rustlers',
+    maxHp: 25,
+    damage: 5,
+    speedPxPerSec: 50,
+    targeting: 'farm-preferred',
+  },
+  [RaiderFaction.Coyotes]: {
+    faction: RaiderFaction.Coyotes,
+    label: 'Coyotes',
+    maxHp: 15,
+    damage: 3,
+    speedPxPerSec: 75,
+    targeting: 'farm-preferred',
+  },
+};
+
+/** Distinct asset class again (Phase 23): hostile raid units, unrelated to any single building footprint. */
+export const RAIDERS_ATLAS_KEY = 'raiders-atlas';
+
+/** Same size class as animal/villager/cowboy sprites so all small units read consistently at the same camera zoom. */
+export const RAIDER_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
+
+export function raiderTextureKey(faction: RaiderFaction): string {
+  return `raider-${faction}`;
+}
+
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',

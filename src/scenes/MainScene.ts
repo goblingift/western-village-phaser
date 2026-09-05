@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import {
+  COWBOY_DAMAGE,
+  COWBOY_RANGE_TILES,
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -8,6 +10,11 @@ import {
   MINIMAP_WIDTH,
   POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
+  RAID_MAX_INTERVAL_MS,
+  RAID_MAX_UNITS,
+  RAID_MIN_INTERVAL_MS,
+  RAID_MIN_UNITS,
+  RAID_WAVE_TIMEOUT_MS,
   TILE_SIZE,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
@@ -26,17 +33,23 @@ import {
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
   PlacedBuilding,
+  RAIDERS_ATLAS_KEY,
+  RAIDER_DEFINITIONS,
+  RaiderDefinition,
+  RaiderFaction,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
+  raiderTextureKey,
 } from '../config/buildingConfig';
 import { playPlacementSound } from '../audio/sound';
 import { gameEvents } from '../state/gameEvents';
 import {
   canPlaceBuilding,
   getBuildingAtTile,
+  getBuildingById,
   getEmployedPopulation,
   getFenceLinks,
   getMoney,
@@ -117,12 +130,41 @@ const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
 const VILLAGER_PAUSE_MIN_MS = 500;
 const VILLAGER_PAUSE_MAX_MS = 2000;
 
+/**
+ * Phase 23 raiders share the villager/animal/cowboy small-unit depth band -
+ * just above buildings and accents, below the HP bars that must always read
+ * on top of everything they're reporting on.
+ */
+const RAIDER_SPRITE_DEPTH = 12;
+const COWBOY_SHOT_DEPTH = 13.5;
+const COWBOY_SHOT_COLOR = 0xffee58;
+const COWBOY_SHOT_FADE_MS = 200;
+
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
   animalImages: Phaser.GameObjects.Image[];
   accentObjects: Phaser.GameObjects.GameObject[];
   cowboyImages: Phaser.GameObjects.Image[];
+}
+
+/**
+ * Raiders are NOT tied to a BuildingVisual (unlike animals/cowboys, which are
+ * always owned by exactly one building) - they're independent hostile units
+ * that roam in from the map edge, so they get their own small scene-level
+ * tracking array, mirroring Phase 20's villagers but with more per-unit state.
+ * `targetBuildingId` is looked up through gameState.getBuildingById rather
+ * than holding a PlacedBuilding reference directly, since a building's own hp
+ * (the thing raiders actually damage) lives in gameState and must stay the
+ * single source of truth.
+ */
+interface Raider {
+  image: Phaser.GameObjects.Image;
+  faction: RaiderFaction;
+  hp: number;
+  targetBuildingId: string | null;
+  /** True once this raider's walk-to-target tween has completed; only then does it attack instead of moving. */
+  arrived: boolean;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -138,6 +180,12 @@ export class MainScene extends Phaser.Scene {
   private previewImage: Phaser.GameObjects.Image | null = null;
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
+  private raiders: Raider[] = [];
+  private raidActive = false;
+  private raidNoticeText!: Phaser.GameObjects.Text;
+  private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
+  private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
+  private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private hpBarGraphics!: Phaser.GameObjects.Graphics;
@@ -170,6 +218,7 @@ export class MainScene extends Phaser.Scene {
     this.setupAnimalVisuals();
     this.setupCowboyVisuals();
     this.setupHpBarVisuals();
+    this.setupRaidSystem();
     this.setupGameReset();
   }
 
@@ -285,11 +334,21 @@ export class MainScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * Raid combat resolution rides the same 2s cadence as production instead of
+   * its own timer: it's already the game's "slow tick" for anything that
+   * shouldn't run per-frame, and running it right after production means a
+   * building's HP regen (inside runProductionTick) and that tick's raider
+   * damage are both settled before the HP bars redraw.
+   */
   private setupProductionTimer(): void {
     this.time.addEvent({
       delay: PRODUCTION_TICK_MS,
       loop: true,
-      callback: () => runProductionTick(),
+      callback: () => {
+        runProductionTick();
+        this.runRaidCombatTick();
+      },
     });
   }
 
@@ -1012,7 +1071,348 @@ export class MainScene extends Phaser.Scene {
         villager.destroy();
       }
       this.villagers = [];
+
+      this.resetRaidState();
     });
+  }
+
+  /**
+   * Phase 23: raid events & combat. Raiders and all their state (hp, target,
+   * tween) live entirely in this scene rather than gameState.ts - unlike
+   * animals/cowboys they aren't owned by a single building, and unlike core
+   * resources/hp they're ephemeral, wave-scoped, and Phaser-tween-heavy, so
+   * splitting them into gameState.ts would only add cross-file plumbing for
+   * state nothing outside this scene needs. The one place they DO reach into
+   * gameState is building.hp: that's core game state (already mutated
+   * in-place elsewhere, e.g. runHpRegen), so raiders read it via
+   * getBuildingById/getPlacedBuildings and write it directly rather than
+   * duplicating it locally.
+   */
+  private setupRaidSystem(): void {
+    this.raidNoticeText = this.add.text(VIEWPORT_WIDTH / 2, 40, '', {
+      fontSize: '20px',
+      color: '#ffeb3b',
+      backgroundColor: '#2b1d12cc',
+      padding: { x: 10, y: 6 },
+    });
+    this.raidNoticeText.setOrigin(0.5, 0);
+    this.raidNoticeText.setScrollFactor(0);
+    this.raidNoticeText.setDepth(1000);
+    this.raidNoticeText.setVisible(false);
+
+    this.scheduleNextRaidCheck();
+  }
+
+  /**
+   * Rechecks on a freshly-randomized 45-90s delay every time (rather than
+   * only after a raid ends) so raid frequency stays independent of how long
+   * any given wave lasts; the "only trigger if none active" rule is enforced
+   * inside by simply skipping the spawn when one already is.
+   */
+  private scheduleNextRaidCheck(): void {
+    const delay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS, RAID_MAX_INTERVAL_MS);
+    this.raidCheckTimer = this.time.delayedCall(delay, () => {
+      if (!this.raidActive) {
+        this.startRaid();
+      }
+      this.scheduleNextRaidCheck();
+    });
+  }
+
+  private startRaid(): void {
+    const factions = Object.values(RaiderFaction);
+    const faction = factions[Phaser.Math.Between(0, factions.length - 1)];
+    const count = Phaser.Math.Between(RAID_MIN_UNITS, RAID_MAX_UNITS);
+
+    this.raidActive = true;
+    this.showRaidNotice(faction);
+    for (let i = 0; i < count; i++) {
+      this.spawnRaider(faction);
+    }
+
+    this.raidWaveTimer = this.time.delayedCall(RAID_WAVE_TIMEOUT_MS, () => this.endRaidWave());
+  }
+
+  private showRaidNotice(faction: RaiderFaction): void {
+    this.raidNoticeText.setText(`${RAIDER_DEFINITIONS[faction].label} incoming!`);
+    this.raidNoticeText.setVisible(true);
+  }
+
+  private hideRaidNotice(): void {
+    this.raidNoticeText.setVisible(false);
+  }
+
+  private spawnRaider(faction: RaiderFaction): void {
+    const spawn = this.pickRaidSpawnPoint();
+    const definition = RAIDER_DEFINITIONS[faction];
+
+    const image = this.add
+      .image(spawn.x, spawn.y, RAIDERS_ATLAS_KEY, raiderTextureKey(faction))
+      .setDepth(RAIDER_SPRITE_DEPTH);
+
+    const raider: Raider = {
+      image,
+      faction,
+      hp: definition.maxHp,
+      targetBuildingId: null,
+      arrived: false,
+    };
+    this.raiders.push(raider);
+    this.updateRaiderTargeting(raider);
+  }
+
+  /** Random point along one of the 4 map edges, in world pixels; already within bounds by construction since each axis is drawn from [0, map-dimension-px]. */
+  private pickRaidSpawnPoint(): { x: number; y: number } {
+    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
+    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
+    const edge = Phaser.Math.Between(0, 3);
+
+    switch (edge) {
+      case 0:
+        return { x: Phaser.Math.Between(0, mapWidthPx), y: 0 };
+      case 1:
+        return { x: mapWidthPx, y: Phaser.Math.Between(0, mapHeightPx) };
+      case 2:
+        return { x: Phaser.Math.Between(0, mapWidthPx), y: mapHeightPx };
+      default:
+        return { x: 0, y: Phaser.Math.Between(0, mapHeightPx) };
+    }
+  }
+
+  /**
+   * Only reassigns a target when the current one is missing/dead - a raider
+   * commits to its target once and walks there a single time (per the phase
+   * spec), it does not re-evaluate "nearest" on every leg like villagers do.
+   * Called once at spawn (target starts null) and again each combat tick so
+   * a raider whose target died (or that spawned with none, e.g. an empty
+   * map) can pick up a newly-valid building without needing its own timer.
+   */
+  private updateRaiderTargeting(raider: Raider): void {
+    const currentTarget = raider.targetBuildingId ? getBuildingById(raider.targetBuildingId) : null;
+    if (currentTarget && currentTarget.hp > 0) {
+      return;
+    }
+
+    const definition = RAIDER_DEFINITIONS[raider.faction];
+    const next = this.pickRaiderTarget(definition, raider.image.x, raider.image.y);
+    if (!next) {
+      raider.targetBuildingId = null;
+      raider.arrived = false;
+      this.tweens.killTweensOf(raider.image);
+      return;
+    }
+
+    raider.targetBuildingId = next.id;
+    raider.arrived = false;
+    this.sendRaiderToTarget(raider, next);
+  }
+
+  private pickRaiderTarget(definition: RaiderDefinition, x: number, y: number): PlacedBuilding | null {
+    if (definition.targeting === 'farm-preferred') {
+      const farm = this.findNearestBuilding(x, y, (building) => !!BUILDING_DEFINITIONS[building.type].animal);
+      if (farm) {
+        return farm;
+      }
+    }
+    return this.findNearestBuilding(x, y, () => true);
+  }
+
+  private findNearestBuilding(
+    x: number,
+    y: number,
+    predicate: (building: PlacedBuilding) => boolean,
+  ): PlacedBuilding | null {
+    let best: PlacedBuilding | null = null;
+    let bestDistance = Infinity;
+
+    for (const building of getPlacedBuildings()) {
+      if (building.hp <= 0 || !predicate(building)) {
+        continue;
+      }
+      const center = this.tileCenter(building);
+      const distance = Phaser.Math.Distance.Between(x, y, center.x, center.y);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = building;
+      }
+    }
+
+    return best;
+  }
+
+  /** Single point-to-point tween, same walk-speed/duration technique as Phase 20's villagers - but with no onComplete chain back into another leg, since this raider's target never moves. */
+  private sendRaiderToTarget(raider: Raider, target: PlacedBuilding): void {
+    const definition = RAIDER_DEFINITIONS[raider.faction];
+    const center = this.tileCenter(target);
+    const distance = Phaser.Math.Distance.Between(raider.image.x, raider.image.y, center.x, center.y);
+    const duration = (distance / definition.speedPxPerSec) * 1000;
+
+    raider.image.setFlipX(center.x < raider.image.x);
+
+    this.tweens.add({
+      targets: raider.image,
+      x: center.x,
+      y: center.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        raider.arrived = true;
+      },
+    });
+  }
+
+  /** Runs on the same 2s cadence as production (see setupProductionTimer); no-op when nothing is on the map so an idle game costs nothing extra. */
+  private runRaidCombatTick(): void {
+    if (this.raiders.length === 0) {
+      return;
+    }
+
+    for (const raider of this.raiders) {
+      this.updateRaiderTargeting(raider);
+    }
+    this.resolveRaiderAttacks();
+    this.resolveCowboyFire();
+    this.removeDeadRaiders();
+    this.redrawHpBars();
+  }
+
+  private resolveRaiderAttacks(): void {
+    for (const raider of this.raiders) {
+      if (!raider.arrived || !raider.targetBuildingId) {
+        continue;
+      }
+      const target = getBuildingById(raider.targetBuildingId);
+      if (!target || target.hp <= 0) {
+        continue;
+      }
+      const definition = RAIDER_DEFINITIONS[raider.faction];
+      target.hp = Math.max(0, target.hp - definition.damage);
+    }
+  }
+
+  /** Every living Cowboy, in every Barracks, fires once per combat tick at its own nearest in-range raider - not shared/coordinated targeting. */
+  private resolveCowboyFire(): void {
+    const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
+
+    for (const building of getPlacedBuildings()) {
+      if (building.type !== BuildingType.Barracks || building.hp <= 0) {
+        continue;
+      }
+      for (let index = 0; index < building.cowboyHp.length; index++) {
+        if (building.cowboyHp[index] <= 0) {
+          continue;
+        }
+        const slot = this.getCowboySlotPosition(building, index);
+        const target = this.findNearestRaider(slot.x, slot.y, rangePx);
+        if (!target) {
+          continue;
+        }
+        target.hp -= COWBOY_DAMAGE;
+        this.spawnCowboyShotVisual(slot, target.image);
+      }
+    }
+  }
+
+  private findNearestRaider(x: number, y: number, maxDistance: number): Raider | null {
+    let best: Raider | null = null;
+    let bestDistance = maxDistance;
+
+    for (const raider of this.raiders) {
+      if (raider.hp <= 0) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(x, y, raider.image.x, raider.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = raider;
+      }
+    }
+
+    return best;
+  }
+
+  /** Cheap fire-and-forget visual: a plain line, faded and destroyed shortly after - no projectile-physics/travel-time simulation. */
+  private spawnCowboyShotVisual(from: { x: number; y: number }, to: Phaser.GameObjects.Image): void {
+    const line = this.add.graphics().setDepth(COWBOY_SHOT_DEPTH);
+    line.lineStyle(2, COWBOY_SHOT_COLOR, 1);
+    line.lineBetween(from.x, from.y, to.x, to.y);
+    this.cowboyShotGraphics.push(line);
+
+    this.tweens.add({
+      targets: line,
+      alpha: 0,
+      duration: COWBOY_SHOT_FADE_MS,
+      onComplete: () => {
+        line.destroy();
+        const index = this.cowboyShotGraphics.indexOf(line);
+        if (index >= 0) {
+          this.cowboyShotGraphics.splice(index, 1);
+        }
+      },
+    });
+  }
+
+  private removeDeadRaiders(): void {
+    const survivors: Raider[] = [];
+    for (const raider of this.raiders) {
+      if (raider.hp > 0) {
+        survivors.push(raider);
+        continue;
+      }
+      this.tweens.killTweensOf(raider.image);
+      raider.image.destroy();
+    }
+    this.raiders = survivors;
+
+    if (this.raidActive && this.raiders.length === 0) {
+      this.endRaidWave();
+    }
+  }
+
+  /** Reached either when every raider in the wave is dead (removeDeadRaiders) or the wave timeout fires - whichever comes first. */
+  private endRaidWave(): void {
+    if (!this.raidActive) {
+      return;
+    }
+    this.raidActive = false;
+    this.raidWaveTimer?.remove();
+    this.raidWaveTimer = null;
+    this.hideRaidNotice();
+
+    for (const raider of this.raiders) {
+      this.tweens.killTweensOf(raider.image);
+      raider.image.destroy();
+    }
+    this.raiders = [];
+  }
+
+  /**
+   * Cancels the pending raid-check timer entirely (rather than letting it
+   * fire on stale timing) and starts a fresh one with a new random delay, so
+   * a just-reset game doesn't inherit a countdown from the previous run.
+   */
+  private resetRaidState(): void {
+    this.raidWaveTimer?.remove();
+    this.raidWaveTimer = null;
+    this.raidCheckTimer?.remove();
+    this.raidCheckTimer = null;
+
+    for (const raider of this.raiders) {
+      this.tweens.killTweensOf(raider.image);
+      raider.image.destroy();
+    }
+    this.raiders = [];
+
+    for (const shot of this.cowboyShotGraphics) {
+      this.tweens.killTweensOf(shot);
+      shot.destroy();
+    }
+    this.cowboyShotGraphics = [];
+
+    this.raidActive = false;
+    this.hideRaidNotice();
+
+    this.scheduleNextRaidCheck();
   }
 
   private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {

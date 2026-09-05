@@ -19,6 +19,19 @@ export const MINIMAP_MARGIN = 8;
 // one building type ever has them and they carry their own HP, not output.
 export const COWBOY_TRAIN_COST = 40;
 export const COWBOY_MAX_PER_BARRACKS = 3;
-// Not read anywhere this phase; Phase 23's combat system consumes both.
+// Phase 23's combat system reads both: range for targeting the nearest
+// raider, max HP as the regen cap already applied in gameState.runHpRegen.
 export const COWBOY_RANGE_TILES = 5;
 export const COWBOY_MAX_HP = 30;
+// Damage dealt by a single Cowboy shot per combat tick.
+export const COWBOY_DAMAGE = 8;
+
+// Phase 23: Raid Events & Combat. The gap before the next raid is randomized
+// per-raid (not a fixed period) so raids don't become predictable/farmable.
+export const RAID_MIN_INTERVAL_MS = 45000;
+export const RAID_MAX_INTERVAL_MS = 90000;
+export const RAID_MIN_UNITS = 2;
+export const RAID_MAX_UNITS = 5;
+// A wave force-ends after this long even if raiders survive (e.g. an
+// undefended town with nothing shooting back), so raids never stall forever.
+export const RAID_WAVE_TIMEOUT_MS = 60000;

@@ -12,12 +12,16 @@ import {
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  RAIDERS_ATLAS_KEY,
+  RAIDER_SPRITE_SIZE,
+  RaiderFaction,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_SPRITE_SIZE,
   VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
+  raiderTextureKey,
 } from '../config/buildingConfig';
 
 export const TILESET_KEY = 'tiles-atlas';
@@ -449,6 +453,44 @@ const COWBOY_SPRITE: PixelSprite = {
   pattern: ['HHHHHH', '.FFFF.', 'VVVVVV', 'VVVVVG', '.L..L.', '.L..L.'],
 };
 
+/**
+ * Phase 23 Outlaw: a near-black hat and a kerchief mask (M) drawn straight
+ * across the face row - no visible skin tone at all - reads as a masked
+ * bandit and keeps this raider's palette clearly darker/more muted than the
+ * friendly Cowboy's warm browns. G is the same holstered-gun hint as Cowboy.
+ */
+const OUTLAW_SPRITE: PixelSprite = {
+  palette: { H: 0x212121, M: 0x37474f, V: 0x3e2723, L: 0x1c1c1c, G: 0x000000 },
+  pattern: ['HHHHHH', 'MMMMMM', 'VVVVVV', 'VVVVVG', '.L..L.', '.L..L.'],
+};
+
+/**
+ * Phase 23 Rustler: unmasked (F, visible face) unlike the Outlaw, and a rope
+ * coil (R) at the hip instead of a gun - a cattle thief's tool, not a
+ * gunslinger's. Olive/tan palette keeps it distinct from both Outlaw and Cowboy.
+ */
+const RUSTLER_SPRITE: PixelSprite = {
+  palette: { H: 0x6d5a3a, F: 0xd9a066, V: 0x5b5a3c, L: 0x3e3a28, R: 0x9c7b52 },
+  pattern: ['HHHHHH', '.FFFF.', 'VVVVVV', 'VVVVRR', '.L..L.', '.L..L.'],
+};
+
+/**
+ * Phase 23 Coyote: a low four-legged canine silhouette, deliberately
+ * non-humanoid unlike the other two raiders - pointed ears (E) top corners,
+ * a tan body block, a dark tail tip (T) trailing off one side, and four
+ * separate leg pixels on the bottom row instead of the two-legged human gait.
+ */
+const COYOTE_SPRITE: PixelSprite = {
+  palette: { E: 0x6d5a42, B: 0xbfa980, T: 0x6d5a42, L: 0x4e3f2c },
+  pattern: ['E....E', 'BBBBBB', 'BBBBBB', 'BBBBBT', 'L.LL.L', '......'],
+};
+
+const RAIDER_SPRITES: Record<RaiderFaction, PixelSprite> = {
+  [RaiderFaction.Outlaws]: OUTLAW_SPRITE,
+  [RaiderFaction.Rustlers]: RUSTLER_SPRITE,
+  [RaiderFaction.Coyotes]: COYOTE_SPRITE,
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
@@ -480,6 +522,7 @@ export class BootScene extends Phaser.Scene {
     this.generateAccentAtlas();
     this.generateVillagerAtlas();
     this.generateCowboyAtlas();
+    this.generateRaiderAtlas();
   }
 
   create(): void {
@@ -602,5 +645,23 @@ export class BootScene extends Phaser.Scene {
 
     const texture = this.textures.get(COWBOYS_ATLAS_KEY);
     texture.add(COWBOY_TEXTURE_KEY, 0, 0, 0, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
+  }
+
+  /** Multi-frame atlas (one look per faction), same uniform-grid layout as generateAnimalAtlas. */
+  private generateRaiderAtlas(): void {
+    const factions = Object.keys(RAIDER_SPRITES) as RaiderFaction[];
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    factions.forEach((faction, index) => {
+      drawPixelSprite(graphics, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITES[faction], ANIMAL_PIXEL_SIZE);
+    });
+
+    graphics.generateTexture(RAIDERS_ATLAS_KEY, factions.length * RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(RAIDERS_ATLAS_KEY);
+    factions.forEach((faction, index) => {
+      texture.add(raiderTextureKey(faction), 0, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
+    });
   }
 }
