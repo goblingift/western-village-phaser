@@ -1,4 +1,9 @@
-import { COWBOY_MAX_PER_BARRACKS, COWBOY_TRAIN_COST } from './constants';
+import {
+  COWBOY_MAX_PER_BARRACKS,
+  COWBOY_TRAIN_COST,
+  MOUNTED_COWBOY_MAX_PER_HORSERY,
+  MOUNTED_COWBOY_TRAIN_COST,
+} from './constants';
 
 export enum BuildingType {
   CattleFarm = 'CattleFarm',
@@ -19,6 +24,7 @@ export enum BuildingType {
   PotatoField = 'PotatoField',
   Liquor = 'Liquor',
   Saloon = 'Saloon',
+  Horsery = 'Horsery',
 }
 
 export interface BuildingSize {
@@ -119,6 +125,15 @@ export interface PlacedBuilding {
    * exactly what Phase 23 needs to know which sprite to remove.
    */
   cowboyHp: number[];
+  /**
+   * Only meaningful for Horsery; trained Cowboy-on-Horse count, starts at 0.
+   * A parallel pair to cowboyCount/cowboyHp above rather than reusing them -
+   * Barracks and Horsery are two different buildings that can coexist, so
+   * their trained-unit counts/HP must not collide in the same array.
+   */
+  mountedCowboyCount: number;
+  /** Only meaningful for Horsery: one HP value per trained Cowboy-on-Horse, index-aligned with its spawn slot - same pattern as cowboyHp above. */
+  mountedCowboyHp: number[];
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -295,6 +310,15 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     requiresWorkers: true,
     maxHp: 90,
   },
+  [BuildingType.Horsery]: {
+    type: BuildingType.Horsery,
+    label: 'Horsery',
+    cost: 220,
+    size: { width: 2, height: 2 },
+    color: 0x795548,
+    requiresWorkers: true,
+    maxHp: 100,
+  },
 };
 
 /**
@@ -377,6 +401,21 @@ export const COWBOY_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
 
 /** Only one cowboy look exists, so a single fixed frame key (no per-kind lookup like animals/accents need). */
 export const COWBOY_TEXTURE_KEY = 'cowboy';
+
+/**
+ * Phase 28: Cowboy-on-Horse gets its own atlas rather than sharing
+ * COWBOYS_ATLAS_KEY - its frame isn't the square ANIMAL_SPRITE_SIZE the rest
+ * of the small-unit sprites share, so it needs its own width/height pair
+ * registered as a distinct texture size.
+ */
+export const MOUNTED_COWBOYS_ATLAS_KEY = 'mounted-cowboys-atlas';
+
+/** Wider than a plain Cowboy's square ANIMAL_SPRITE_SIZE frame to read as horse-body + rider. */
+export const MOUNTED_COWBOY_SPRITE_WIDTH = 16;
+export const MOUNTED_COWBOY_SPRITE_HEIGHT = 12;
+
+/** Only one Cowboy-on-Horse look exists, so a single fixed frame key, same as COWBOY_TEXTURE_KEY. */
+export const MOUNTED_COWBOY_TEXTURE_KEY = 'cowboy-on-horse';
 
 /**
  * Phase 23: threat factions for raid events. Fictional names by deliberate
@@ -491,6 +530,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Barracks) {
     parts.push(`Cowboys: $${COWBOY_TRAIN_COST} each, up to ${COWBOY_MAX_PER_BARRACKS}`);
+  }
+  if (definition.type === BuildingType.Horsery) {
+    parts.push(`Cowboys on Horse: $${MOUNTED_COWBOY_TRAIN_COST} each, up to ${MOUNTED_COWBOY_MAX_PER_HORSERY}`);
   }
   return parts.join(' | ');
 }

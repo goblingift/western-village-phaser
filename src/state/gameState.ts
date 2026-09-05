@@ -6,6 +6,9 @@ import {
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
+  MOUNTED_COWBOY_MAX_HP,
+  MOUNTED_COWBOY_MAX_PER_HORSERY,
+  MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
   WAREHOUSE_STORAGE_BONUS,
 } from '../config/constants';
@@ -158,6 +161,8 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     hp: definition.maxHp,
     cowboyCount: 0,
     cowboyHp: [],
+    mountedCowboyCount: 0,
+    mountedCowboyHp: [],
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -308,6 +313,32 @@ export function trainCowboy(buildingId: string): boolean {
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('cowboy-trained', building);
+
+  return true;
+}
+
+/** Mirrors trainCowboy exactly, gated on Horsery/mountedCowboyCount/MOUNTED_COWBOY_MAX_PER_HORSERY instead of Barracks/cowboyCount/COWBOY_MAX_PER_BARRACKS. */
+export function trainMountedCowboy(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Horsery) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.mountedCowboyCount >= MOUNTED_COWBOY_MAX_PER_HORSERY) {
+    return false;
+  }
+  if (money < MOUNTED_COWBOY_TRAIN_COST) {
+    return false;
+  }
+
+  money -= MOUNTED_COWBOY_TRAIN_COST;
+  building.mountedCowboyCount += 1;
+  building.mountedCowboyHp.push(MOUNTED_COWBOY_MAX_HP);
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('mounted-cowboy-trained', building);
 
   return true;
 }
@@ -546,6 +577,14 @@ function runHpRegen(): void {
       building.cowboyHp[i] = Math.min(
         COWBOY_MAX_HP,
         building.cowboyHp[i] + Math.ceil(COWBOY_MAX_HP * HP_REGEN_FRACTION),
+      );
+    }
+
+    // Empty for every non-Horsery building, so this is a no-op for them.
+    for (let i = 0; i < building.mountedCowboyHp.length; i++) {
+      building.mountedCowboyHp[i] = Math.min(
+        MOUNTED_COWBOY_MAX_HP,
+        building.mountedCowboyHp[i] + Math.ceil(MOUNTED_COWBOY_MAX_HP * HP_REGEN_FRACTION),
       );
     }
   }

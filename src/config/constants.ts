@@ -35,3 +35,13 @@ export const RAID_MAX_UNITS = 5;
 // A wave force-ends after this long even if raiders survive (e.g. an
 // undefended town with nothing shooting back), so raids never stall forever.
 export const RAID_WAVE_TIMEOUT_MS = 60000;
+
+// Phase 28: Horsery & Cowboy on Horse. Mirrors Phase 22's Barracks/Cowboy
+// cost/cap/HP constants above rather than sharing them - the two units differ
+// in cost, cap, HP and speed, so keeping separate named constants keeps each
+// building's numbers independently readable/tunable.
+export const MOUNTED_COWBOY_TRAIN_COST = 90;
+export const MOUNTED_COWBOY_MAX_PER_HORSERY = 2;
+export const MOUNTED_COWBOY_MAX_HP = 40;
+// 3x MainScene's COWBOY_WALK_SPEED_PX_PER_SEC (60px/sec), reflecting the horse's speed advantage.
+export const MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC = 180;

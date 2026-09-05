@@ -12,6 +12,10 @@ import {
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  MOUNTED_COWBOYS_ATLAS_KEY,
+  MOUNTED_COWBOY_SPRITE_HEIGHT,
+  MOUNTED_COWBOY_SPRITE_WIDTH,
+  MOUNTED_COWBOY_TEXTURE_KEY,
   RAIDERS_ATLAS_KEY,
   RAIDER_SPRITE_SIZE,
   RaiderFaction,
@@ -521,6 +525,32 @@ const SALOON_SPRITE: PixelSprite = {
   ],
 };
 
+const HORSERY_SPRITE: PixelSprite = {
+  // Horse-head silhouette (H, rows 5-7) sits over the doorway (D) in place of
+  // Barracks' badge window; the yard swaps Barracks' banner/fence line for a
+  // wood rail fence (F) alternating with a hay bale (W) - a stable/corral
+  // read instead of a fort/office read.
+  palette: { S: 0x4e342e, R: 0x8d6e4a, B: 0xa1887f, P: 0x8a7266, H: 0x3e2723, D: 0x2b1d12, F: 0x8d6748, W: 0xf9d776 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBP.HH.BPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBP.HH.BPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'FF..WW..FF..WW..',
+    '................',
+    'FF..WW..FF..WW..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -540,6 +570,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.PotatoField]: POTATO_FIELD_SPRITE,
   [BuildingType.Liquor]: LIQUOR_SPRITE,
   [BuildingType.Saloon]: SALOON_SPRITE,
+  [BuildingType.Horsery]: HORSERY_SPRITE,
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
@@ -621,6 +652,18 @@ const COWBOY_SPRITE: PixelSprite = {
 };
 
 /**
+ * Phase 28 Cowboy on Horse: a horse+rider silhouette, drawn wider than the
+ * plain Cowboy's square 6x6 frame (8 cols instead of 6, same 6 rows) so a
+ * mounted body reads clearly at this scale - a narrow rider (hat/face/vest,
+ * rows 0-2) over a wide horse body (rows 3-4) with four separate leg pixels
+ * (row 5) instead of the Cowboy's two-legged human gait.
+ */
+const MOUNTED_COWBOY_SPRITE: PixelSprite = {
+  palette: { H: 0x4e342e, F: 0xffcb8e, V: 0x8d6748, B: 0x6d4c41, L: 0x3e2723 },
+  pattern: ['..HHHH..', '..FFFF..', '.VVVVVV.', 'BBBBBBBB', 'BBBBBBBB', 'L.L..L.L'],
+};
+
+/**
  * Phase 23 Outlaw: a near-black hat and a kerchief mask (M) drawn straight
  * across the face row - no visible skin tone at all - reads as a masked
  * bandit and keeps this raider's palette clearly darker/more muted than the
@@ -689,6 +732,7 @@ export class BootScene extends Phaser.Scene {
     this.generateAccentAtlas();
     this.generateVillagerAtlas();
     this.generateCowboyAtlas();
+    this.generateMountedCowboyAtlas();
     this.generateRaiderAtlas();
   }
 
@@ -812,6 +856,29 @@ export class BootScene extends Phaser.Scene {
 
     const texture = this.textures.get(COWBOYS_ATLAS_KEY);
     texture.add(COWBOY_TEXTURE_KEY, 0, 0, 0, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
+  }
+
+  /**
+   * Single-frame atlas, same technique as generateCowboyAtlas but with a
+   * non-square frame (MOUNTED_COWBOY_SPRITE_WIDTH x ...HEIGHT rather than the
+   * uniform ANIMAL_SPRITE_SIZE square every other small-unit atlas uses).
+   */
+  private generateMountedCowboyAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, MOUNTED_COWBOY_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_SPRITE_WIDTH, MOUNTED_COWBOY_SPRITE_HEIGHT);
+    graphics.destroy();
+
+    const texture = this.textures.get(MOUNTED_COWBOYS_ATLAS_KEY);
+    texture.add(
+      MOUNTED_COWBOY_TEXTURE_KEY,
+      0,
+      0,
+      0,
+      MOUNTED_COWBOY_SPRITE_WIDTH,
+      MOUNTED_COWBOY_SPRITE_HEIGHT,
+    );
   }
 
   /** Multi-frame atlas (one look per faction), same uniform-grid layout as generateAnimalAtlas. */

@@ -8,6 +8,7 @@ import {
   MINIMAP_HEIGHT,
   MINIMAP_MARGIN,
   MINIMAP_WIDTH,
+  MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
   POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
   RAID_MAX_INTERVAL_MS,
@@ -32,6 +33,10 @@ import {
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  MOUNTED_COWBOYS_ATLAS_KEY,
+  MOUNTED_COWBOY_SPRITE_HEIGHT,
+  MOUNTED_COWBOY_SPRITE_WIDTH,
+  MOUNTED_COWBOY_TEXTURE_KEY,
   PlacedBuilding,
   RAIDERS_ATLAS_KEY,
   RAIDER_DEFINITIONS,
@@ -86,6 +91,17 @@ const ANIMAL_WANDER_DELAY_MAX_MS = 1000;
 const COWBOY_SPRITE_DEPTH = ANIMAL_SPRITE_DEPTH;
 const COWBOY_SLOT_GAP = 2;
 const COWBOY_SLOT_STEP = COWBOY_SPRITE_SIZE + COWBOY_SLOT_GAP;
+
+/**
+ * Phase 28: Cowboy-on-Horse shares the Cowboy's static-prop depth band but
+ * needs its own slot-step pair (not COWBOY_SLOT_STEP) since its sprite frame
+ * is wider/shorter than the square COWBOY_SPRITE_SIZE - separate X/Y steps
+ * (rather than one square step) keep the spawn-slot grid from overlapping.
+ */
+const MOUNTED_COWBOY_SPRITE_DEPTH = COWBOY_SPRITE_DEPTH;
+const MOUNTED_COWBOY_SLOT_GAP = 2;
+const MOUNTED_COWBOY_SLOT_STEP_X = MOUNTED_COWBOY_SPRITE_WIDTH + MOUNTED_COWBOY_SLOT_GAP;
+const MOUNTED_COWBOY_SLOT_STEP_Y = MOUNTED_COWBOY_SPRITE_HEIGHT + MOUNTED_COWBOY_SLOT_GAP;
 
 /** Idle-animation accents (Phase 19): layered just above a building's own image (depth 10) and below animal sprites (depth 11). */
 const ACCENT_DEPTH = 10.5;
@@ -195,11 +211,31 @@ interface Raider {
  * player-directed unit (Cowboy on Horse) that plugs into this same
  * selection/move system without needing its own parallel type.
  */
+/**
+ * Phase 28: the discriminant that lets a single CombatUnit type/tracking
+ * array/selection system serve two unit kinds. Kept as a plain string union
+ * plus one small lookup table (UNIT_KIND_CONFIG below) rather than a generic
+ * "unit type registry" - only walk speed actually varies per kind in this
+ * scene (combat range/damage are shared, per the phase spec), so that's all
+ * the table carries.
+ */
+type UnitKind = 'cowboy' | 'cowboyOnHorse';
+
+interface UnitKindConfig {
+  walkSpeedPxPerSec: number;
+}
+
+const UNIT_KIND_CONFIG: Record<UnitKind, UnitKindConfig> = {
+  cowboy: { walkSpeedPxPerSec: COWBOY_WALK_SPEED_PX_PER_SEC },
+  cowboyOnHorse: { walkSpeedPxPerSec: MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC },
+};
+
 interface CombatUnit {
   image: Phaser.GameObjects.Image;
   barracksId: string;
   index: number;
   moveTween: Phaser.Tweens.Tween | null;
+  kind: UnitKind;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -1022,6 +1058,11 @@ export class MainScene extends Phaser.Scene {
       // always cowboyHp.length - 1, the index gameState.trainCowboy just pushed).
       this.spawnCowboyUnit(building, building.cowboyHp.length - 1);
     });
+
+    // Same "only add the newly trained one" rule as 'cowboy-trained' above (Phase 24).
+    gameEvents.on('mounted-cowboy-trained', (building: PlacedBuilding) => {
+      this.spawnMountedCowboyUnit(building, building.mountedCowboyHp.length - 1);
+    });
   }
 
   private spawnCowboyUnit(building: PlacedBuilding, index: number): void {
@@ -1029,7 +1070,16 @@ export class MainScene extends Phaser.Scene {
     const image = this.add
       .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
       .setDepth(COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null });
+    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboy' });
+  }
+
+  /** Mirrors spawnCowboyUnit exactly, spawning at a Horsery's mounted-slot layout and tagging the unit 'cowboyOnHorse'. */
+  private spawnMountedCowboyUnit(building: PlacedBuilding, index: number): void {
+    const slot = this.getMountedCowboySlotPosition(building, index);
+    const image = this.add
+      .image(slot.x, slot.y, MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_TEXTURE_KEY)
+      .setDepth(MOUNTED_COWBOY_SPRITE_DEPTH);
+    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboyOnHorse' });
   }
 
   /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
@@ -1051,13 +1101,39 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
-  /** A Cowboy unit is combat-eligible/selectable only while both its Barracks and its own HP slot are alive - dead/destroyed either way, it no longer defends. */
+  /** Same deterministic row/column slot layout as getCowboySlotPosition, but stepped by MOUNTED_COWBOY_SLOT_STEP_X/Y since its sprite frame isn't square. */
+  private getMountedCowboySlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const footprintPxWidth = width * TILE_SIZE;
+    const columns = Math.max(1, Math.floor(footprintPxWidth / MOUNTED_COWBOY_SLOT_STEP_X));
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+
+    const rowPxWidth = columns * MOUNTED_COWBOY_SLOT_STEP_X - MOUNTED_COWBOY_SLOT_GAP;
+    const startX =
+      building.tileX * TILE_SIZE + (footprintPxWidth - rowPxWidth) / 2 + MOUNTED_COWBOY_SLOT_STEP_X / 2;
+    const startY = building.tileY * TILE_SIZE + height * TILE_SIZE + MOUNTED_COWBOY_SLOT_STEP_Y / 2;
+
+    return {
+      x: startX + col * MOUNTED_COWBOY_SLOT_STEP_X,
+      y: startY + row * MOUNTED_COWBOY_SLOT_STEP_Y,
+    };
+  }
+
+  /**
+   * A unit is combat-eligible/selectable only while both its training
+   * building and its own HP slot are alive - dead/destroyed either way, it no
+   * longer defends. Branches on `kind` to read the correct parallel HP array
+   * (Barracks' cowboyHp vs Horsery's mountedCowboyHp) since the two never
+   * share an index space.
+   */
   private isCowboyUnitAlive(unit: CombatUnit): boolean {
     const building = getBuildingById(unit.barracksId);
     if (!building || building.hp <= 0) {
       return false;
     }
-    return (building.cowboyHp[unit.index] ?? 0) > 0;
+    const hp = unit.kind === 'cowboy' ? building.cowboyHp[unit.index] : building.mountedCowboyHp[unit.index];
+    return (hp ?? 0) > 0;
   }
 
   /**
@@ -1192,7 +1268,7 @@ export class MainScene extends Phaser.Scene {
     unit.image.setFlipX(targetX < unit.image.x);
 
     const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, targetX, targetY);
-    const duration = (distance / COWBOY_WALK_SPEED_PX_PER_SEC) * 1000;
+    const duration = (distance / UNIT_KIND_CONFIG[unit.kind].walkSpeedPxPerSec) * 1000;
 
     unit.moveTween = this.tweens.add({
       targets: unit.image,
@@ -1537,10 +1613,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Every living Cowboy fires once per combat tick at its own nearest
+   * Every living unit (Cowboy or Cowboy-on-Horse - this.cowboyUnits holds
+   * both kinds, Phase 28) fires once per combat tick at its own nearest
    * in-range raider - not shared/coordinated targeting. Phase 24: reads each
    * unit's live image position instead of re-deriving a Barracks slot, so a
-   * Cowboy moved away from its Barracks still defends from where it stands.
+   * unit moved away from its training building still defends from where it
+   * stands. Range/damage are shared across both kinds (only speed/HP differ,
+   * per the phase spec), so no kind-branching is needed here.
    */
   private resolveCowboyFire(): void {
     const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;

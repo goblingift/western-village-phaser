@@ -16,6 +16,7 @@ export interface GameEventMap {
   'game-reset': () => void;
   'animal-bought': (building: PlacedBuilding) => void;
   'cowboy-trained': (building: PlacedBuilding) => void;
+  'mounted-cowboy-trained': (building: PlacedBuilding) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}
