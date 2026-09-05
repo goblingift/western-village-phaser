@@ -24,13 +24,16 @@ export interface BuildingProduction {
   outputs?: Partial<Record<ResourceKey, number>>;
 }
 
+/** The three critter sprites drawn in BootScene; matches every AnimalConfig.animalLabel in use. */
+export type AnimalKind = 'Chicken' | 'Pig' | 'Cow';
+
 /**
  * Livestock buildings own animals instead of producing a flat rate: output
  * per tick is `outputPerAnimal * animalCount`, so an empty building makes
  * nothing until the player buys stock (buyAnimal in gameState.ts).
  */
 export interface AnimalConfig {
-  animalLabel: string;
+  animalLabel: AnimalKind;
   costPerAnimal: number;
   maxAnimals: number;
   outputPerAnimal: Partial<Record<ResourceKey, number>>;
@@ -191,6 +194,16 @@ export const BUILDING_ATLAS_KEY = 'buildings-atlas';
 
 export function buildingTextureKey(type: BuildingType): string {
   return `building-${type}`;
+}
+
+/** Separate atlas from BUILDING_ATLAS_KEY: animals are a different asset class (small, per-instance, not per-tile). */
+export const ANIMALS_ATLAS_KEY = 'animals-atlas';
+
+/** On-screen size (px) of a single static animal sprite; smaller than TILE_SIZE so several fit around a footprint. */
+export const ANIMAL_SPRITE_SIZE = 12;
+
+export function animalTextureKey(animalLabel: AnimalKind): string {
+  return `animal-${animalLabel}`;
 }
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {

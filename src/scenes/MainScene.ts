@@ -14,10 +14,13 @@ import {
 import { generateTileMap, TILE_COLORS, TileType } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
 import {
+  ANIMALS_ATLAS_KEY,
+  ANIMAL_SPRITE_SIZE,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
+  animalTextureKey,
   buildingTextureKey,
 } from '../config/buildingConfig';
 import { playPlacementSound } from '../audio/sound';
@@ -47,10 +50,14 @@ const MINIMAP_BORDER_COLOR = 0xffffff;
 const MINIMAP_VIEWPORT_COLOR = 0xffee58;
 const MINIMAP_VIEWPORT_THROTTLE_MS = 50;
 const MINIMAP_BUILDING_DOT_SIZE = 3;
+const ANIMAL_SPRITE_DEPTH = 11;
+const ANIMAL_SLOT_GAP = 2;
+const ANIMAL_SLOT_STEP = ANIMAL_SPRITE_SIZE + ANIMAL_SLOT_GAP;
 
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
+  animalImages: Phaser.GameObjects.Image[];
 }
 
 export class MainScene extends Phaser.Scene {
@@ -93,6 +100,7 @@ export class MainScene extends Phaser.Scene {
     this.setupProductionTimer();
     this.setupConnectionVisuals();
     this.setupFenceVisuals();
+    this.setupAnimalVisuals();
     this.setupGameReset();
   }
 
@@ -456,11 +464,13 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    this.buildingVisuals.set(building.id, { building, image });
+    const visual: BuildingVisual = { building, image, animalImages: [] };
+    this.buildingVisuals.set(building.id, visual);
     if (building.type === BuildingType.Fence) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
+    this.redrawAnimalSprites(visual);
     playPlacementSound();
   }
 
@@ -517,13 +527,70 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
+  private setupAnimalVisuals(): void {
+    gameEvents.on('animal-bought', (building: PlacedBuilding) => {
+      const visual = this.buildingVisuals.get(building.id);
+      if (visual) {
+        this.redrawAnimalSprites(visual);
+      }
+    });
+  }
+
+  /** Only called on placement and 'animal-bought' (i.e. when animalCount actually changes), never per production tick. */
+  private redrawAnimalSprites(visual: BuildingVisual): void {
+    for (const animalImage of visual.animalImages) {
+      animalImage.destroy();
+    }
+    visual.animalImages = [];
+
+    const animalConfig = BUILDING_DEFINITIONS[visual.building.type].animal;
+    if (!animalConfig) {
+      return;
+    }
+
+    for (let index = 0; index < visual.building.animalCount; index++) {
+      const slot = this.getAnimalSlotPosition(visual.building, index);
+      const animalImage = this.add
+        .image(slot.x, slot.y, ANIMALS_ATLAS_KEY, animalTextureKey(animalConfig.animalLabel))
+        .setDepth(ANIMAL_SPRITE_DEPTH);
+      visual.animalImages.push(animalImage);
+    }
+  }
+
+  /**
+   * Deterministic per-index slot: a row of critters just beneath the
+   * building's footprint (its yard), wrapping into further rows once a row
+   * fills up, so slot N always lands in the same spot and never overlaps
+   * the building sprite itself.
+   */
+  private getAnimalSlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const footprintPxWidth = width * TILE_SIZE;
+    const columns = Math.max(1, Math.floor(footprintPxWidth / ANIMAL_SLOT_STEP));
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+
+    const rowPxWidth = columns * ANIMAL_SLOT_STEP - ANIMAL_SLOT_GAP;
+    const startX =
+      building.tileX * TILE_SIZE + (footprintPxWidth - rowPxWidth) / 2 + ANIMAL_SLOT_STEP / 2;
+    const startY = building.tileY * TILE_SIZE + height * TILE_SIZE + ANIMAL_SLOT_STEP / 2;
+
+    return {
+      x: startX + col * ANIMAL_SLOT_STEP,
+      y: startY + row * ANIMAL_SLOT_STEP,
+    };
+  }
+
   private setupGameReset(): void {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image } of this.buildingVisuals.values()) {
+      for (const { image, animalImages } of this.buildingVisuals.values()) {
         image.destroy();
+        for (const animalImage of animalImages) {
+          animalImage.destroy();
+        }
       }
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();

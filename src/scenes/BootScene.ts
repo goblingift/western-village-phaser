@@ -1,6 +1,15 @@
 import Phaser from 'phaser';
 import { TILE_SIZE } from '../config/constants';
-import { BUILDING_ATLAS_KEY, BUILDING_DEFINITIONS, BuildingType, buildingTextureKey } from '../config/buildingConfig';
+import {
+  ANIMALS_ATLAS_KEY,
+  ANIMAL_SPRITE_SIZE,
+  AnimalKind,
+  BUILDING_ATLAS_KEY,
+  BUILDING_DEFINITIONS,
+  BuildingType,
+  animalTextureKey,
+  buildingTextureKey,
+} from '../config/buildingConfig';
 
 export const TILESET_KEY = 'tiles-atlas';
 
@@ -13,6 +22,14 @@ export const TILESET_KEY = 'tiles-atlas';
  */
 const PIXEL_GRID = 8;
 const PIXEL_SIZE = TILE_SIZE / PIXEL_GRID;
+
+/**
+ * Animal critters are drawn on their own, much coarser logical grid (6x6)
+ * scaled down to ANIMAL_SPRITE_SIZE on screen, so they read as small static
+ * props next to a building rather than tile-sized sprites.
+ */
+const ANIMAL_PIXEL_GRID = 6;
+const ANIMAL_PIXEL_SIZE = ANIMAL_SPRITE_SIZE / ANIMAL_PIXEL_GRID;
 
 type PixelPalette = Record<string, number>;
 
@@ -311,11 +328,36 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
 };
 
+const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
+  // C is the comb, Y the beak/legs; W/B mix the white/brown feather look asked for.
+  palette: { C: 0xd32f2f, W: 0xfff8e1, B: 0x8d6e4a, Y: 0xffa000 },
+  pattern: ['..C...', '.WWBY.', 'WWWBWW', 'WBWWWW', '.W..W.', '.Y..Y.'],
+};
+
+const PIG_ANIMAL_SPRITE: PixelSprite = {
+  // S doubles as the snout nostrils (row 3) and the legs (row 5).
+  palette: { P: 0xe8a5b8, S: 0x8d5a68 },
+  pattern: ['.PPPP.', 'PPPPPP', 'PPPPPP', 'PPSSPP', '.PPPP.', '.S..S.'],
+};
+
+const COW_ANIMAL_SPRITE: PixelSprite = {
+  // H in row 0 corners hints at horns; B is the brown spot pattern, D the legs.
+  palette: { W: 0xfff8e1, B: 0x6d4c41, H: 0xf5f0e1, D: 0x5d4037 },
+  pattern: ['H....H', '.WWWW.', 'WBWWBW', 'WWWBWW', '.WWWW.', '.D..D.'],
+};
+
+const ANIMAL_SPRITES: Record<AnimalKind, PixelSprite> = {
+  Chicken: CHICKEN_ANIMAL_SPRITE,
+  Pig: PIG_ANIMAL_SPRITE,
+  Cow: COW_ANIMAL_SPRITE,
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
   originY: number,
   sprite: PixelSprite,
+  pixelSize: number = PIXEL_SIZE,
 ): void {
   sprite.pattern.forEach((row, rowIndex) => {
     for (let col = 0; col < row.length; col++) {
@@ -324,7 +366,7 @@ function drawPixelSprite(
         continue;
       }
       graphics.fillStyle(sprite.palette[key], 1);
-      graphics.fillRect(originX + col * PIXEL_SIZE, originY + rowIndex * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      graphics.fillRect(originX + col * pixelSize, originY + rowIndex * pixelSize, pixelSize, pixelSize);
     }
   });
 }
@@ -337,6 +379,7 @@ export class BootScene extends Phaser.Scene {
   preload(): void {
     this.generateTilesetTexture();
     this.generateBuildingAtlas();
+    this.generateAnimalAtlas();
   }
 
   create(): void {
@@ -382,6 +425,23 @@ export class BootScene extends Phaser.Scene {
     const texture = this.textures.get(BUILDING_ATLAS_KEY);
     layout.forEach(({ definition, width, height }, index) => {
       texture.add(buildingTextureKey(definition.type), 0, positions[index], 0, width, height);
+    });
+  }
+
+  private generateAnimalAtlas(): void {
+    const kinds = Object.keys(ANIMAL_SPRITES) as AnimalKind[];
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    kinds.forEach((kind, index) => {
+      drawPixelSprite(graphics, index * ANIMAL_SPRITE_SIZE, 0, ANIMAL_SPRITES[kind], ANIMAL_PIXEL_SIZE);
+    });
+
+    graphics.generateTexture(ANIMALS_ATLAS_KEY, kinds.length * ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(ANIMALS_ATLAS_KEY);
+    kinds.forEach((kind, index) => {
+      texture.add(animalTextureKey(kind), 0, index * ANIMAL_SPRITE_SIZE, 0, ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE);
     });
   }
 }
