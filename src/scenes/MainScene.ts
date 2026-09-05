@@ -140,12 +140,18 @@ const COWBOY_SHOT_DEPTH = 13.5;
 const COWBOY_SHOT_COLOR = 0xffee58;
 const COWBOY_SHOT_FADE_MS = 200;
 
+/** Phase 24: Cowboys are player-directed units, so their selection/movement constants live near the combat ones above. */
+const COWBOY_WALK_SPEED_PX_PER_SEC = 60;
+const COWBOY_SELECT_HIT_RADIUS_PX = 10;
+const COWBOY_SELECTION_RING_RADIUS_PX = 10;
+const COWBOY_SELECTION_RING_COLOR = 0x42a5f5;
+const COWBOY_SELECTION_RING_DEPTH = 13.6;
+
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
   animalImages: Phaser.GameObjects.Image[];
   accentObjects: Phaser.GameObjects.GameObject[];
-  cowboyImages: Phaser.GameObjects.Image[];
 }
 
 /**
@@ -167,6 +173,24 @@ interface Raider {
   arrived: boolean;
 }
 
+/**
+ * Phase 24: a Cowboy is now an independently-positioned, player-directed unit
+ * rather than a position purely derived from its Barracks + slot index (Phase
+ * 22). It still remembers which Barracks trained it and which cowboyHp slot
+ * is "its" HP (gameState.ts stays the single source of truth for HP, same
+ * pattern raiders use for building.hp), but its on-screen position is now its
+ * own live image.x/y, which can drift away from that slot via a move order.
+ * Tracked at scene level (mirroring Raider[] above) rather than inside
+ * BuildingVisual, since a Cowboy is no longer owned by its Barracks' visual
+ * once it can walk away from it.
+ */
+interface CowboyUnit {
+  image: Phaser.GameObjects.Image;
+  barracksId: string;
+  index: number;
+  moveTween: Phaser.Tweens.Tween | null;
+}
+
 export class MainScene extends Phaser.Scene {
   private infoText!: Phaser.GameObjects.Text;
   private resourceText!: Phaser.GameObjects.Text;
@@ -186,6 +210,10 @@ export class MainScene extends Phaser.Scene {
   private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
   private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
+  private cowboyUnits: CowboyUnit[] = [];
+  private selectedCowboyUnit: CowboyUnit | null = null;
+  private selectionRingGraphics!: Phaser.GameObjects.Graphics;
+  private cowboySelectionHintText!: Phaser.GameObjects.Text;
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private hpBarGraphics!: Phaser.GameObjects.Graphics;
@@ -217,9 +245,14 @@ export class MainScene extends Phaser.Scene {
     this.setupFenceVisuals();
     this.setupAnimalVisuals();
     this.setupCowboyVisuals();
+    this.setupCowboyControl();
     this.setupHpBarVisuals();
     this.setupRaidSystem();
     this.setupGameReset();
+  }
+
+  update(): void {
+    this.redrawSelectionRing();
   }
 
   private buildTilemap(): void {
@@ -592,14 +625,15 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [], cowboyImages: [] };
+    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [] };
     this.buildingVisuals.set(building.id, visual);
     if (building.type === BuildingType.Fence) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
     this.redrawAnimalSprites(visual);
-    this.redrawCowboySprites(visual);
+    // A freshly placed Barracks always starts with cowboyCount 0 (see gameState.ts), so there is
+    // nothing to spawn here - Cowboy units only ever appear via the 'cowboy-trained' event below.
     this.createBuildingAccents(visual);
     if (building.type === BuildingType.House) {
       this.spawnVillagersForHouse(building);
@@ -928,39 +962,25 @@ export class MainScene extends Phaser.Scene {
 
   private setupCowboyVisuals(): void {
     gameEvents.on('cowboy-trained', (building: PlacedBuilding) => {
-      const visual = this.buildingVisuals.get(building.id);
-      if (visual) {
-        this.redrawCowboySprites(visual);
-      }
+      // Phase 24: training used to destroy-and-recreate the Barracks' whole cowboy
+      // sprite set (redrawCowboySprites), which was harmless while position was
+      // purely derived from index. Now that a Cowboy can carry a live position and
+      // an in-flight move order, destroying siblings on every train would wipe
+      // that out - so this only ever ADDS the one newly trained unit (its slot is
+      // always cowboyHp.length - 1, the index gameState.trainCowboy just pushed).
+      this.spawnCowboyUnit(building, building.cowboyHp.length - 1);
     });
   }
 
-  /**
-   * Only called on placement and 'cowboy-trained' (i.e. when cowboyCount
-   * actually changes), same rule as redrawAnimalSprites. Unlike animals,
-   * Cowboys never wander - they're garrisoned defenders that hold a fixed
-   * slot, so no tween is started here.
-   */
-  private redrawCowboySprites(visual: BuildingVisual): void {
-    for (const cowboyImage of visual.cowboyImages) {
-      cowboyImage.destroy();
-    }
-    visual.cowboyImages = [];
-
-    if (visual.building.type !== BuildingType.Barracks) {
-      return;
-    }
-
-    for (let index = 0; index < visual.building.cowboyCount; index++) {
-      const slot = this.getCowboySlotPosition(visual.building, index);
-      const cowboyImage = this.add
-        .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
-        .setDepth(COWBOY_SPRITE_DEPTH);
-      visual.cowboyImages.push(cowboyImage);
-    }
+  private spawnCowboyUnit(building: PlacedBuilding, index: number): void {
+    const slot = this.getCowboySlotPosition(building, index);
+    const image = this.add
+      .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
+      .setDepth(COWBOY_SPRITE_DEPTH);
+    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null });
   }
 
-  /** Same deterministic row/column slot layout as getAnimalSlotPosition, kept separate since Cowboys are a distinct asset class from animals. */
+  /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
   private getCowboySlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
     const { width, height } = BUILDING_DEFINITIONS[building.type].size;
     const footprintPxWidth = width * TILE_SIZE;
@@ -977,6 +997,130 @@ export class MainScene extends Phaser.Scene {
       x: startX + col * COWBOY_SLOT_STEP,
       y: startY + row * COWBOY_SLOT_STEP,
     };
+  }
+
+  /** A Cowboy unit is combat-eligible/selectable only while both its Barracks and its own HP slot are alive - dead/destroyed either way, it no longer defends. */
+  private isCowboyUnitAlive(unit: CowboyUnit): boolean {
+    const building = getBuildingById(unit.barracksId);
+    if (!building || building.hp <= 0) {
+      return false;
+    }
+    return (building.cowboyHp[unit.index] ?? 0) > 0;
+  }
+
+  /**
+   * Registers Cowboy selection (pointerup) and move orders (pointerdown) as
+   * their own listeners rather than folding them into setupBuildingPlacement/
+   * setupBuildingSelection. Phaser fires every listener registered for the
+   * same event, in registration order, so this coexists safely with the
+   * existing handlers: emitting 'cancel-placement' while selectedType is
+   * already null (setupBuildingPlacement's rightButtonDown branch) is a
+   * verified no-op (see cancelPlacement), and the minimap guard here is
+   * re-checked directly via isPointerInMinimap(pointer) rather than trusting
+   * this.minimapPointerActive, since setupBuildingSelection's own pointerup
+   * handler (registered earlier) already resets that flag to false by the
+   * time this one runs.
+   *
+   * Left-click selection intentionally does NOT suppress the existing
+   * building-info-panel click handling - both fire on the same click. Picking
+   * a Cowboy is a separate, additive concern from building selection; a
+   * player clicking a Cowboy standing on/near a building plausibly wants to
+   * see both, and suppressing one would just be a surprising special case.
+   */
+  private setupCowboyControl(): void {
+    this.selectionRingGraphics = this.add.graphics().setDepth(COWBOY_SELECTION_RING_DEPTH);
+
+    this.cowboySelectionHintText = this.add
+      .text(VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT - 8, 'Cowboy selected - right-click to move', {
+        fontSize: '14px',
+        color: '#ffffff',
+        backgroundColor: '#2b1d12cc',
+        padding: { x: 6, y: 4 },
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(1000)
+      .setVisible(false);
+
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (this.selectedType !== null || this.isPointerInMinimap(pointer)) {
+        return;
+      }
+
+      const dx = pointer.x - this.pointerDownX;
+      const dy = pointer.y - this.pointerDownY;
+      if (Math.sqrt(dx * dx + dy * dy) > CLICK_MOVE_THRESHOLD) {
+        return;
+      }
+
+      this.selectCowboyAt(pointer);
+    });
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.rightButtonDown()) {
+        return;
+      }
+      if (this.selectedType !== null || this.selectedCowboyUnit === null || this.isPointerInMinimap(pointer)) {
+        return;
+      }
+      this.issueCowboyMoveOrder(this.selectedCowboyUnit, pointer);
+    });
+  }
+
+  private selectCowboyAt(pointer: Phaser.Input.Pointer): void {
+    let hit: CowboyUnit | null = null;
+    let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
+
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(pointer.worldX, pointer.worldY, unit.image.x, unit.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        hit = unit;
+      }
+    }
+
+    this.selectedCowboyUnit = hit;
+    this.cowboySelectionHintText.setVisible(hit !== null);
+  }
+
+  /** Same point-to-point tween technique as villagers/raiders (distance/speed -> duration, setFlipX for facing), clamped to map bounds. */
+  private issueCowboyMoveOrder(unit: CowboyUnit, pointer: Phaser.Input.Pointer): void {
+    const targetX = Phaser.Math.Clamp(pointer.worldX, 0, MAP_WIDTH_TILES * TILE_SIZE);
+    const targetY = Phaser.Math.Clamp(pointer.worldY, 0, MAP_HEIGHT_TILES * TILE_SIZE);
+
+    unit.moveTween?.stop();
+    unit.image.setFlipX(targetX < unit.image.x);
+
+    const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, targetX, targetY);
+    const duration = (distance / COWBOY_WALK_SPEED_PX_PER_SEC) * 1000;
+
+    unit.moveTween = this.tweens.add({
+      targets: unit.image,
+      x: targetX,
+      y: targetY,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        unit.moveTween = null;
+      },
+    });
+  }
+
+  /** Redrawn every frame (update()) rather than on an event, since it must visually track a unit mid-move-tween; cheap at single-selection scale. */
+  private redrawSelectionRing(): void {
+    this.selectionRingGraphics.clear();
+    if (!this.selectedCowboyUnit) {
+      return;
+    }
+    this.selectionRingGraphics.lineStyle(2, COWBOY_SELECTION_RING_COLOR, 1);
+    this.selectionRingGraphics.strokeCircle(
+      this.selectedCowboyUnit.image.x,
+      this.selectedCowboyUnit.image.y,
+      COWBOY_SELECTION_RING_RADIUS_PX,
+    );
   }
 
   /**
@@ -1047,7 +1191,7 @@ export class MainScene extends Phaser.Scene {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image, animalImages, accentObjects, cowboyImages } of this.buildingVisuals.values()) {
+      for (const { image, animalImages, accentObjects } of this.buildingVisuals.values()) {
         image.destroy();
         for (const animalImage of animalImages) {
           this.tweens.killTweensOf(animalImage);
@@ -1056,9 +1200,6 @@ export class MainScene extends Phaser.Scene {
         for (const accentObject of accentObjects) {
           this.tweens.killTweensOf(accentObject);
           accentObject.destroy();
-        }
-        for (const cowboyImage of cowboyImages) {
-          cowboyImage.destroy();
         }
       }
       this.buildingVisuals.clear();
@@ -1071,6 +1212,15 @@ export class MainScene extends Phaser.Scene {
         villager.destroy();
       }
       this.villagers = [];
+
+      for (const unit of this.cowboyUnits) {
+        unit.moveTween?.stop();
+        unit.image.destroy();
+      }
+      this.cowboyUnits = [];
+      this.selectedCowboyUnit = null;
+      this.selectionRingGraphics.clear();
+      this.cowboySelectionHintText.setVisible(false);
 
       this.resetRaidState();
     });
@@ -1290,26 +1440,26 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /** Every living Cowboy, in every Barracks, fires once per combat tick at its own nearest in-range raider - not shared/coordinated targeting. */
+  /**
+   * Every living Cowboy fires once per combat tick at its own nearest
+   * in-range raider - not shared/coordinated targeting. Phase 24: reads each
+   * unit's live image position instead of re-deriving a Barracks slot, so a
+   * Cowboy moved away from its Barracks still defends from where it stands.
+   */
   private resolveCowboyFire(): void {
     const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
 
-    for (const building of getPlacedBuildings()) {
-      if (building.type !== BuildingType.Barracks || building.hp <= 0) {
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
         continue;
       }
-      for (let index = 0; index < building.cowboyHp.length; index++) {
-        if (building.cowboyHp[index] <= 0) {
-          continue;
-        }
-        const slot = this.getCowboySlotPosition(building, index);
-        const target = this.findNearestRaider(slot.x, slot.y, rangePx);
-        if (!target) {
-          continue;
-        }
-        target.hp -= COWBOY_DAMAGE;
-        this.spawnCowboyShotVisual(slot, target.image);
+      const position = { x: unit.image.x, y: unit.image.y };
+      const target = this.findNearestRaider(position.x, position.y, rangePx);
+      if (!target) {
+        continue;
       }
+      target.hp -= COWBOY_DAMAGE;
+      this.spawnCowboyShotVisual(position, target.image);
     }
   }
 
