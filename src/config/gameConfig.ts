@@ -5,12 +5,14 @@ import { MainScene } from '../scenes/MainScene';
 export const TILE_SIZE = 32;
 export const MAP_WIDTH_TILES = 40;
 export const MAP_HEIGHT_TILES = 30;
+export const VIEWPORT_WIDTH = 960;
+export const VIEWPORT_HEIGHT = 640;
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'app',
-  width: MAP_WIDTH_TILES * TILE_SIZE,
-  height: MAP_HEIGHT_TILES * TILE_SIZE,
+  width: VIEWPORT_WIDTH,
+  height: VIEWPORT_HEIGHT,
   backgroundColor: '#2d2d2d',
   scene: [BootScene, MainScene],
   scale: {
