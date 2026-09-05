@@ -206,6 +206,15 @@ export function animalTextureKey(animalLabel: AnimalKind): string {
   return `animal-${animalLabel}`;
 }
 
+/** Small idle-animation accents (Phase 19), layered above a building's own image; a different asset class again, so its own atlas. */
+export const ACCENTS_ATLAS_KEY = 'accents-atlas';
+
+export type AccentKind = 'WellCrank' | 'WarehouseDoor' | 'SupermarketAwning' | 'ChickenDoor';
+
+export function accentTextureKey(kind: AccentKind): string {
+  return `accent-${kind}`;
+}
+
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',

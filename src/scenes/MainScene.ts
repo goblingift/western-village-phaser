@@ -14,12 +14,15 @@ import {
 import { generateTileMap, TILE_COLORS, TileType } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
 import {
+  ACCENTS_ATLAS_KEY,
+  AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
+  accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
 } from '../config/buildingConfig';
@@ -60,10 +63,39 @@ const ANIMAL_WANDER_DURATION_MIN_MS = 900;
 const ANIMAL_WANDER_DURATION_MAX_MS = 1600;
 const ANIMAL_WANDER_DELAY_MAX_MS = 1000;
 
+/** Idle-animation accents (Phase 19): layered just above a building's own image (depth 10) and below animal sprites (depth 11). */
+const ACCENT_DEPTH = 10.5;
+
+const WELL_CRANK_ANGLE_DEG = 15;
+const WELL_CRANK_TWEEN_MS = 1000;
+
+const WAREHOUSE_DOOR_SWING_ANGLE_DEG = 8;
+const WAREHOUSE_DOOR_TWEEN_MS = 1800;
+
+const SUPERMARKET_AWNING_SCALE_X_MIN = 0.95;
+const SUPERMARKET_AWNING_SCALE_X_MAX = 1.05;
+const SUPERMARKET_AWNING_TWEEN_MS = 1800;
+
+const CHICKEN_DOOR_SCALE_Y_CLOSED = 0.3;
+const CHICKEN_DOOR_DURATION_MIN_MS = 600;
+const CHICKEN_DOOR_DURATION_MAX_MS = 900;
+const CHICKEN_DOOR_REPEAT_DELAY_MIN_MS = 200;
+const CHICKEN_DOOR_REPEAT_DELAY_MAX_MS = 900;
+
+const HOUSE_SMOKE_PUFF_COUNT = 3;
+const HOUSE_SMOKE_PUFF_RADIUS = 3;
+const HOUSE_SMOKE_COLOR = 0xf5f5f5;
+const HOUSE_SMOKE_START_ALPHA = 0.6;
+const HOUSE_SMOKE_RISE_PX = 14;
+const HOUSE_SMOKE_DURATION_MIN_MS = 1200;
+const HOUSE_SMOKE_DURATION_MAX_MS = 1800;
+const HOUSE_SMOKE_STAGGER_MS = 500;
+
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
   animalImages: Phaser.GameObjects.Image[];
+  accentObjects: Phaser.GameObjects.GameObject[];
 }
 
 export class MainScene extends Phaser.Scene {
@@ -470,14 +502,160 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    const visual: BuildingVisual = { building, image, animalImages: [] };
+    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [] };
     this.buildingVisuals.set(building.id, visual);
     if (building.type === BuildingType.Fence) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
     this.redrawAnimalSprites(visual);
+    this.createBuildingAccents(visual);
     playPlacementSound();
+  }
+
+  /** Building-type-gated idle-animation accents (Phase 19); only these 5 types get one, everything else gets nothing. */
+  private createBuildingAccents(visual: BuildingVisual): void {
+    const { building } = visual;
+    const originX = building.tileX * TILE_SIZE;
+    const originY = building.tileY * TILE_SIZE;
+
+    switch (building.type) {
+      case BuildingType.Well:
+        visual.accentObjects.push(this.createWellCrankAccent(originX, originY));
+        break;
+      case BuildingType.Warehouse:
+        visual.accentObjects.push(this.createWarehouseDoorAccent(originX, originY));
+        break;
+      case BuildingType.Supermarket:
+        visual.accentObjects.push(this.createSupermarketAwningAccent(originX, originY));
+        break;
+      case BuildingType.ChickenFarm:
+        visual.accentObjects.push(this.createChickenDoorAccent(originX, originY));
+        break;
+      case BuildingType.House:
+        visual.accentObjects.push(...this.createHouseSmokeAccents(originX, originY));
+        break;
+      default:
+        break;
+    }
+  }
+
+  private createAccentImage(x: number, y: number, kind: AccentKind): Phaser.GameObjects.Image {
+    return this.add.image(x, y, ACCENTS_ATLAS_KEY, accentTextureKey(kind)).setDepth(ACCENT_DEPTH);
+  }
+
+  /** Crank bar pivots from its own center, between the well's support posts; starts at -15deg so the yoyo tween sweeps it through 0 up to +15deg. */
+  private createWellCrankAccent(originX: number, originY: number): Phaser.GameObjects.Image {
+    const crank = this.createAccentImage(originX + 16, originY + 2, 'WellCrank').setOrigin(0.5, 0.5);
+    crank.setAngle(-WELL_CRANK_ANGLE_DEG);
+
+    this.tweens.add({
+      targets: crank,
+      angle: WELL_CRANK_ANGLE_DEG,
+      duration: WELL_CRANK_TWEEN_MS,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    return crank;
+  }
+
+  /**
+   * Pivots from its top edge (hinge) rather than a symmetric center swing:
+   * a real hay-loft door only opens outward one way, and a top-hinged swing
+   * reads more clearly at this scale than the doc's suggested -8/+8 center
+   * rotation, which looked like the whole door wobbling in place.
+   */
+  private createWarehouseDoorAccent(originX: number, originY: number): Phaser.GameObjects.Image {
+    const door = this.createAccentImage(originX + 28, originY + 24, 'WarehouseDoor').setOrigin(0.5, 0);
+
+    this.tweens.add({
+      targets: door,
+      angle: WAREHOUSE_DOOR_SWING_ANGLE_DEG,
+      duration: WAREHOUSE_DOOR_TWEEN_MS,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    return door;
+  }
+
+  private createSupermarketAwningAccent(originX: number, originY: number): Phaser.GameObjects.Image {
+    const awning = this.createAccentImage(originX + 32, originY + 8, 'SupermarketAwning').setOrigin(0.5, 0.5);
+    awning.setScale(SUPERMARKET_AWNING_SCALE_X_MIN, 1);
+
+    this.tweens.add({
+      targets: awning,
+      scaleX: SUPERMARKET_AWNING_SCALE_X_MAX,
+      duration: SUPERMARKET_AWNING_TWEEN_MS,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    return awning;
+  }
+
+  /**
+   * Duration and repeatDelay are randomized once per building instance (not
+   * per repeat cycle - Phaser tween repeatDelay is fixed once the tween is
+   * created) so multiple chicken farms don't flap in lockstep; each single
+   * building's own cycle stays regular.
+   */
+  private createChickenDoorAccent(originX: number, originY: number): Phaser.GameObjects.Image {
+    const door = this.createAccentImage(originX + 16, originY + 28, 'ChickenDoor').setOrigin(0.5, 1);
+    const duration = Phaser.Math.Between(CHICKEN_DOOR_DURATION_MIN_MS, CHICKEN_DOOR_DURATION_MAX_MS);
+    const repeatDelay = Phaser.Math.Between(CHICKEN_DOOR_REPEAT_DELAY_MIN_MS, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
+    const delay = Phaser.Math.Between(0, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
+
+    this.tweens.add({
+      targets: door,
+      scaleY: CHICKEN_DOOR_SCALE_Y_CLOSED,
+      duration,
+      delay,
+      repeatDelay,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    return door;
+  }
+
+  /**
+   * Three plain circles rather than atlas sprites - a fading puff has no
+   * silhouette detail worth pixel-art treatment. Each tween's `repeat: -1`
+   * automatically snaps y/alpha back to their starting values before
+   * re-running, so no manual reset is needed; the staggered `delay` per
+   * puff is what keeps them from rising in sync.
+   */
+  private createHouseSmokeAccents(originX: number, originY: number): Phaser.GameObjects.Arc[] {
+    const startX = originX + 16;
+    const startY = originY + 2;
+    const puffs: Phaser.GameObjects.Arc[] = [];
+
+    for (let index = 0; index < HOUSE_SMOKE_PUFF_COUNT; index++) {
+      const puff = this.add
+        .circle(startX, startY, HOUSE_SMOKE_PUFF_RADIUS, HOUSE_SMOKE_COLOR, HOUSE_SMOKE_START_ALPHA)
+        .setDepth(ACCENT_DEPTH);
+      const duration = Phaser.Math.Between(HOUSE_SMOKE_DURATION_MIN_MS, HOUSE_SMOKE_DURATION_MAX_MS);
+
+      this.tweens.add({
+        targets: puff,
+        y: startY - HOUSE_SMOKE_RISE_PX,
+        alpha: 0,
+        duration,
+        delay: index * HOUSE_SMOKE_STAGGER_MS,
+        repeat: -1,
+        ease: 'Sine.easeOut',
+      });
+
+      puffs.push(puff);
+    }
+
+    return puffs;
   }
 
   private setupConnectionVisuals(): void {
@@ -628,11 +806,15 @@ export class MainScene extends Phaser.Scene {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image, animalImages } of this.buildingVisuals.values()) {
+      for (const { image, animalImages, accentObjects } of this.buildingVisuals.values()) {
         image.destroy();
         for (const animalImage of animalImages) {
           this.tweens.killTweensOf(animalImage);
           animalImage.destroy();
+        }
+        for (const accentObject of accentObjects) {
+          this.tweens.killTweensOf(accentObject);
+          accentObject.destroy();
         }
       }
       this.buildingVisuals.clear();

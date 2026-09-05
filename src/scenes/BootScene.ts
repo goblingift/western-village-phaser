@@ -1,12 +1,15 @@
 import Phaser from 'phaser';
 import { TILE_SIZE } from '../config/constants';
 import {
+  ACCENTS_ATLAS_KEY,
+  AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
   AnimalKind,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
+  accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
 } from '../config/buildingConfig';
@@ -134,11 +137,12 @@ const BUTCHER_SPRITE: PixelSprite = {
 };
 
 const WELL_SPRITE: PixelSprite = {
-  // Top row: P are the crank support posts, C is the horizontal crank bar
-  // between them, replacing part of the stone-ring's roofline.
+  // Top row: P are the crank support posts; the horizontal crank bar itself
+  // is carved out as a separate WELL_CRANK_ACCENT_SPRITE (Phase 19) so it
+  // can rotate independently instead of being baked into this flat texture.
   palette: { S: 0x616161, B: 0xbdbdbd, H: 0xeeeeee, D: 0x0d47a1, P: 0x5d4037, C: 0x424242 },
   pattern: [
-    '.P.CC.P.',
+    '.P....P.',
     '.SHBBHS.',
     'SBBDDBBS',
     'SBDDDDBS',
@@ -182,15 +186,18 @@ const ROAD_SPRITE: PixelSprite = {
 };
 
 const CHICKEN_FARM_SPRITE: PixelSprite = {
+  // The coop opening (C, rows 4-6) used to be baked in here; it's now
+  // carved out as its own CHICKEN_DOOR_ACCENT_SPRITE (Phase 19) layered on
+  // top so it can flap, leaving the wall (W) showing through underneath.
   palette: { S: 0x4e342e, D: 0x6d4c41, W: 0x8d6e4a, P: 0x7c5f3f, C: 0xfff8e1 },
   pattern: [
     '.SSSSSS.',
     'SDDDDDDS',
     'SDDDDDDS',
     'SSSSSSSS',
-    'SWPCCPWS',
-    'SWPCCPWS',
-    'SWCCCCWS',
+    'SWPWWPWS',
+    'SWPWWPWS',
+    'SWWWWWWS',
     'SSSSSSSS',
   ],
 };
@@ -253,8 +260,10 @@ const COW_RANCH_SPRITE: PixelSprite = {
 };
 
 const WAREHOUSE_SPRITE: PixelSprite = {
-  // P alternates with B for wall planking; L stays reserved for the
-  // hay-loft door frame so it keeps standing out against the planked wall.
+  // P alternates with B for wall planking. The hay-loft door (frame L,
+  // window H, base D) used to be baked in here; it's now carved out as its
+  // own WAREHOUSE_DOOR_ACCENT_SPRITE (Phase 19) layered on top so it can
+  // swing, leaving plain planking underneath.
   palette: { S: 0x3e2723, R: 0x7c5e3c, B: 0xa1887f, P: 0x8a7266, D: 0x5d4037, H: 0xe8ded1, L: 0x6d4c41 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
@@ -263,12 +272,12 @@ const WAREHOUSE_SPRITE: PixelSprite = {
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
     'SBPBPBPBPBPBPBPS',
-    'SBPBLLLLLLBPBPBS',
-    'SBPBLHHHHLBPBPBS',
-    'SBPBLHHHHLBPBPBS',
-    'SBPBLDDDDLBPBPBS',
-    'SBPBLDDDDLBPBPBS',
-    'SBPBLLLLLLBPBPBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
     'SBPBPBPBPBPBPBPS',
     'SBPBPBPBPBPBPBPS',
     'SDDDDDDDDDDDDDDS',
@@ -277,13 +286,15 @@ const WAREHOUSE_SPRITE: PixelSprite = {
 };
 
 const SUPERMARKET_SPRITE: PixelSprite = {
-  // Rows 1-2 alternate A/W for a classic candy-striped general-store
-  // awning; P alternates with B for planked walls below it.
+  // The candy-striped awning (rows 1-2, A/W) used to be baked in here; it's
+  // now carved out as its own SUPERMARKET_AWNING_ACCENT_SPRITE (Phase 19)
+  // layered on top so it can sway, leaving a plain roof band underneath.
+  // P alternates with B for planked walls below it.
   palette: { S: 0x3e2723, R: 0x8e24aa, A: 0xce93d8, B: 0xefebe9, P: 0xd8d0c8, D: 0x5d4037, W: 0xffffff, G: 0x2e7d32 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
-    '.AAWWAAWWAAWWAA.',
-    'AAWWAAWWAAWWAAWW',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
     'SSSSSSSSSSSSSSSS',
     'SBPBPBPBPBPBPBPS',
     'SBPWWWWWWWWWWPBS',
@@ -352,6 +363,40 @@ const ANIMAL_SPRITES: Record<AnimalKind, PixelSprite> = {
   Cow: COW_ANIMAL_SPRITE,
 };
 
+/**
+ * Phase 19 idle-animation accents: small pieces carved out of the building
+ * sprites above (well crank, warehouse door, supermarket awning, chicken
+ * coop opening) so MainScene can layer and tween them independently. Drawn
+ * at the same PIXEL_SIZE as buildings so they line up pixel-for-pixel with
+ * the spot they were cut from.
+ */
+const WELL_CRANK_ACCENT_SPRITE: PixelSprite = {
+  palette: { C: 0x424242 },
+  pattern: ['CCCC'],
+};
+
+const WAREHOUSE_DOOR_ACCENT_SPRITE: PixelSprite = {
+  palette: { L: 0x6d4c41, H: 0xe8ded1, D: 0x5d4037 },
+  pattern: ['LLLLLL', 'LHHHHL', 'LHHHHL', 'LDDDDL', 'LDDDDL', 'LLLLLL'],
+};
+
+const SUPERMARKET_AWNING_ACCENT_SPRITE: PixelSprite = {
+  palette: { A: 0xce93d8, W: 0xffffff },
+  pattern: ['.AAWWAAWWAAWWAA.', 'AAWWAAWWAAWWAAWW'],
+};
+
+const CHICKEN_DOOR_ACCENT_SPRITE: PixelSprite = {
+  palette: { C: 0xfff8e1 },
+  pattern: ['.CC.', '.CC.', 'CCCC'],
+};
+
+const ACCENT_SPRITES: Record<AccentKind, PixelSprite> = {
+  WellCrank: WELL_CRANK_ACCENT_SPRITE,
+  WarehouseDoor: WAREHOUSE_DOOR_ACCENT_SPRITE,
+  SupermarketAwning: SUPERMARKET_AWNING_ACCENT_SPRITE,
+  ChickenDoor: CHICKEN_DOOR_ACCENT_SPRITE,
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
@@ -380,6 +425,7 @@ export class BootScene extends Phaser.Scene {
     this.generateTilesetTexture();
     this.generateBuildingAtlas();
     this.generateAnimalAtlas();
+    this.generateAccentAtlas();
   }
 
   create(): void {
@@ -442,6 +488,41 @@ export class BootScene extends Phaser.Scene {
     const texture = this.textures.get(ANIMALS_ATLAS_KEY);
     kinds.forEach((kind, index) => {
       texture.add(animalTextureKey(kind), 0, index * ANIMAL_SPRITE_SIZE, 0, ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE);
+    });
+  }
+
+  /** Frames vary in size per accent (a thin crank bar vs. a wide awning strip), so this follows generateBuildingAtlas's side-by-side layout rather than the animal atlas's uniform grid. */
+  private generateAccentAtlas(): void {
+    const kinds = Object.keys(ACCENT_SPRITES) as AccentKind[];
+    const layout = kinds.map((kind) => {
+      const sprite = ACCENT_SPRITES[kind];
+      return {
+        kind,
+        width: sprite.pattern[0].length * PIXEL_SIZE,
+        height: sprite.pattern.length * PIXEL_SIZE,
+      };
+    });
+
+    let atlasWidth = 0;
+    let atlasHeight = 0;
+    const positions: number[] = [];
+    for (const { width, height } of layout) {
+      positions.push(atlasWidth);
+      atlasWidth += width;
+      atlasHeight = Math.max(atlasHeight, height);
+    }
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    layout.forEach(({ kind }, index) => {
+      drawPixelSprite(graphics, positions[index], 0, ACCENT_SPRITES[kind]);
+    });
+
+    graphics.generateTexture(ACCENTS_ATLAS_KEY, atlasWidth, atlasHeight);
+    graphics.destroy();
+
+    const texture = this.textures.get(ACCENTS_ATLAS_KEY);
+    layout.forEach(({ kind, width, height }, index) => {
+      texture.add(accentTextureKey(kind), 0, positions[index], 0, width, height);
     });
   }
 }
