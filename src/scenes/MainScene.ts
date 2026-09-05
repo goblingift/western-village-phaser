@@ -10,7 +10,14 @@ import {
 } from '../config/constants';
 import { generateTileMap } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
-import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, buildingTextureKey } from '../config/buildingConfig';
+import {
+  BUILDING_ATLAS_KEY,
+  BUILDING_DEFINITIONS,
+  BuildingType,
+  PlacedBuilding,
+  buildingTextureKey,
+} from '../config/buildingConfig';
+import { playPlacementSound } from '../audio/sound';
 import { gameEvents } from '../state/gameEvents';
 import {
   canPlaceBuilding,
@@ -30,7 +37,6 @@ const CLICK_MOVE_THRESHOLD = 6;
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
-  border: Phaser.GameObjects.Graphics | null;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -45,6 +51,9 @@ export class MainScene extends Phaser.Scene {
   private selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
   private buildingVisuals = new Map<string, BuildingVisual>();
+  private connectionGraphics!: Phaser.GameObjects.Graphics;
+  private lastInfoTileX: number | null = null;
+  private lastInfoTileY: number | null = null;
 
   constructor() {
     super('MainScene');
@@ -117,7 +126,7 @@ export class MainScene extends Phaser.Scene {
     this.infoText = this.add.text(8, VIEWPORT_HEIGHT - 8, 'tile: -, -', {
       fontSize: '14px',
       color: '#ffffff',
-      backgroundColor: '#000000aa',
+      backgroundColor: '#2b1d12cc',
       padding: { x: 6, y: 4 },
     });
     this.infoText.setOrigin(0, 1);
@@ -127,6 +136,11 @@ export class MainScene extends Phaser.Scene {
 
   private updateInfoText(pointer: Phaser.Input.Pointer): void {
     const { tileX, tileY } = this.pointerToTile(pointer);
+    if (tileX === this.lastInfoTileX && tileY === this.lastInfoTileY) {
+      return;
+    }
+    this.lastInfoTileX = tileX;
+    this.lastInfoTileY = tileY;
     this.infoText.setText(`tile: ${tileX}, ${tileY}`);
   }
 
@@ -134,7 +148,7 @@ export class MainScene extends Phaser.Scene {
     this.resourceText = this.add.text(8, 8, this.formatResourceText(), {
       fontSize: '14px',
       color: '#ffffff',
-      backgroundColor: '#000000aa',
+      backgroundColor: '#2b1d12cc',
       padding: { x: 6, y: 4 },
     });
     this.resourceText.setScrollFactor(0);
@@ -162,7 +176,7 @@ export class MainScene extends Phaser.Scene {
     this.timerText = this.add.text(VIEWPORT_WIDTH - 8, 8, this.formatTimerText(), {
       fontSize: '14px',
       color: '#ffffff',
-      backgroundColor: '#000000aa',
+      backgroundColor: '#2b1d12cc',
       padding: { x: 6, y: 4 },
       align: 'right',
     });
@@ -242,7 +256,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.previewImage?.destroy();
-    this.previewImage = this.add.image(0, 0, buildingTextureKey(this.selectedType));
+    this.previewImage = this.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(this.selectedType));
     this.previewImage.setOrigin(0, 0);
     this.previewImage.setAlpha(0.6);
     this.previewImage.setDepth(500);
@@ -278,21 +292,39 @@ export class MainScene extends Phaser.Scene {
     }
 
     const image = this.add
-      .image(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE, buildingTextureKey(building.type))
+      .image(
+        building.tileX * TILE_SIZE,
+        building.tileY * TILE_SIZE,
+        BUILDING_ATLAS_KEY,
+        buildingTextureKey(building.type),
+      )
       .setOrigin(0, 0)
       .setDepth(10);
 
-    const border = building.type !== BuildingType.Road ? this.createConnectionBorder(building) : null;
-
-    this.buildingVisuals.set(building.id, { building, image, border });
+    this.buildingVisuals.set(building.id, { building, image });
+    playPlacementSound();
   }
 
   private setupConnectionVisuals(): void {
-    gameEvents.on('connections-updated', () => {
-      for (const { building, border } of this.buildingVisuals.values()) {
-        border?.setVisible(building.connected);
+    this.connectionGraphics = this.add.graphics();
+    this.connectionGraphics.setDepth(20);
+
+    gameEvents.on('connections-updated', () => this.redrawConnectionOutlines());
+  }
+
+  private redrawConnectionOutlines(): void {
+    this.connectionGraphics.clear();
+    this.connectionGraphics.lineStyle(3, 0x00ff00, 1);
+
+    for (const { building } of this.buildingVisuals.values()) {
+      if (!building.connected) {
+        continue;
       }
-    });
+      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+      const px = building.tileX * TILE_SIZE;
+      const py = building.tileY * TILE_SIZE;
+      this.connectionGraphics.strokeRect(px + 1, py + 1, width * TILE_SIZE - 2, height * TILE_SIZE - 2);
+    }
   }
 
   private setupGameReset(): void {
@@ -300,27 +332,12 @@ export class MainScene extends Phaser.Scene {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image, border } of this.buildingVisuals.values()) {
+      for (const { image } of this.buildingVisuals.values()) {
         image.destroy();
-        border?.destroy();
       }
       this.buildingVisuals.clear();
+      this.connectionGraphics.clear();
     });
-  }
-
-  private createConnectionBorder(building: PlacedBuilding): Phaser.GameObjects.Graphics {
-    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-    const pixelWidth = width * TILE_SIZE;
-    const pixelHeight = height * TILE_SIZE;
-
-    const border = this.add.graphics();
-    border.lineStyle(3, 0x00ff00, 1);
-    border.strokeRect(1, 1, pixelWidth - 2, pixelHeight - 2);
-    border.setPosition(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE);
-    border.setDepth(20);
-    border.setVisible(building.connected);
-
-    return border;
   }
 
   private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {

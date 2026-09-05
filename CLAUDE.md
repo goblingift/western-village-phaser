@@ -68,6 +68,12 @@ Player places buildings (cattle farm, butcher, well, house, road) on a tilemap a
 | Date | Feature | Description |
 |------|---------|-------------|
 | 2026-09-05 | Project Setup | Initial Phaser 4 + TypeScript + Vite setup |
+| 2026-09-05 | Tilemap & Camera | Code-generated 40x30 tilemap (grass/water/sand), draggable camera, tile-coord readout |
+| 2026-09-05 | Building Placement | Building definitions, placement preview with validity check, DOM building bar, money deduction |
+| 2026-09-05 | Resources & Production | Global resource pools (raw meat/meat/water), 2s production tick per building, resource HUD, building info panel |
+| 2026-09-05 | Roads & Logistics | Road-network connectivity (BFS through road chains) grants +10% production output, green outline on connected buildings |
+| 2026-09-05 | Goal & Score | 5-minute countdown, cumulative meat score, game-over overlay with building counts, Play Again reset |
+| 2026-09-05 | Polish & Performance | Building sprites packed into one texture atlas, connection outlines merged into a single shared Graphics object, throttled tile-info HUD updates, Western color palette, tooltips, procedural placement sound |
 
 ## License & Repo Info
 

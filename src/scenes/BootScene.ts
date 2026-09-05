@@ -1,10 +1,10 @@
 import Phaser from 'phaser';
 import { TILE_SIZE } from '../config/constants';
-import { BUILDING_DEFINITIONS, buildingTextureKey } from '../config/buildingConfig';
+import { BUILDING_ATLAS_KEY, BUILDING_DEFINITIONS, buildingTextureKey } from '../config/buildingConfig';
 
 export const TILESET_KEY = 'tiles-atlas';
 
-const TILE_COLORS = [0x4caf50, 0x2196f3, 0xffeb3b];
+const TILE_COLORS = [0x4caf50, 0x2196f3, 0xd2b48c];
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -13,7 +13,7 @@ export class BootScene extends Phaser.Scene {
 
   preload(): void {
     this.generateTilesetTexture();
-    this.generateBuildingTextures();
+    this.generateBuildingAtlas();
   }
 
   create(): void {
@@ -32,21 +32,38 @@ export class BootScene extends Phaser.Scene {
     graphics.destroy();
   }
 
-  private generateBuildingTextures(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
+  private generateBuildingAtlas(): void {
+    const definitions = Object.values(BUILDING_DEFINITIONS);
+    const layout = definitions.map((definition) => ({
+      definition,
+      width: definition.size.width * TILE_SIZE,
+      height: definition.size.height * TILE_SIZE,
+    }));
 
-    for (const definition of Object.values(BUILDING_DEFINITIONS)) {
-      const width = definition.size.width * TILE_SIZE;
-      const height = definition.size.height * TILE_SIZE;
-
-      graphics.clear();
-      graphics.fillStyle(definition.color, 1);
-      graphics.fillRect(0, 0, width, height);
-      graphics.lineStyle(2, 0x000000, 0.4);
-      graphics.strokeRect(1, 1, width - 2, height - 2);
-      graphics.generateTexture(buildingTextureKey(definition.type), width, height);
+    let atlasWidth = 0;
+    let atlasHeight = 0;
+    const positions: number[] = [];
+    for (const { width, height } of layout) {
+      positions.push(atlasWidth);
+      atlasWidth += width;
+      atlasHeight = Math.max(atlasHeight, height);
     }
 
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    layout.forEach(({ definition, width, height }, index) => {
+      const x = positions[index];
+      graphics.fillStyle(definition.color, 1);
+      graphics.fillRect(x, 0, width, height);
+      graphics.lineStyle(2, 0x000000, 0.4);
+      graphics.strokeRect(x + 1, 1, width - 2, height - 2);
+    });
+
+    graphics.generateTexture(BUILDING_ATLAS_KEY, atlasWidth, atlasHeight);
     graphics.destroy();
+
+    const texture = this.textures.get(BUILDING_ATLAS_KEY);
+    layout.forEach(({ definition, width, height }, index) => {
+      texture.add(buildingTextureKey(definition.type), 0, positions[index], 0, width, height);
+    });
   }
 }

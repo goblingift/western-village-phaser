@@ -1,4 +1,4 @@
-import { BUILDING_DEFINITIONS, BuildingType } from '../config/buildingConfig';
+import { BUILDING_DEFINITIONS, BuildingType, describeBuilding } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
 import { getMoney } from '../state/gameState';
 
@@ -17,6 +17,7 @@ export class BuildingBar {
     for (const definition of Object.values(BUILDING_DEFINITIONS)) {
       const button = document.createElement('button');
       button.textContent = `${definition.label} ($${definition.cost})`;
+      button.title = `${definition.label} — ${describeBuilding(definition)}`;
       button.addEventListener('click', () => this.onButtonClick(definition.type));
       bar.appendChild(button);
       this.buttons.set(definition.type, button);

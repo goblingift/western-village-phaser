@@ -77,6 +77,34 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   },
 };
 
+export const BUILDING_ATLAS_KEY = 'buildings-atlas';
+
 export function buildingTextureKey(type: BuildingType): string {
   return `building-${type}`;
+}
+
+const RESOURCE_LABELS: Record<ResourceKey, string> = {
+  rawMeat: 'Raw Meat',
+  meat: 'Meat',
+  water: 'Water',
+};
+
+function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
+  return (Object.entries(map) as [ResourceKey, number][])
+    .map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]}`)
+    .join(', ');
+}
+
+export function describeBuilding(definition: BuildingDefinition): string {
+  const parts = [
+    `Cost: $${definition.cost}`,
+    `Size: ${definition.size.width}x${definition.size.height}`,
+  ];
+  if (definition.production?.inputs) {
+    parts.push(`Consumes: ${formatResourceMap(definition.production.inputs)}`);
+  }
+  if (definition.production?.outputs) {
+    parts.push(`Produces: ${formatResourceMap(definition.production.outputs)}`);
+  }
+  return parts.join(' | ');
 }

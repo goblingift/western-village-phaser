@@ -9,7 +9,7 @@
       body {
         margin: 0;
         padding: 0;
-        background: #1a1a1a;
+        background: #2b1d12;
       }
       #app {
         display: flex;
@@ -23,8 +23,8 @@
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
-        background: #111318;
-        border-top: 2px solid #333;
+        background: #3e2b1f;
+        border-top: 2px solid #8d6e4a;
         font-family: sans-serif;
       }
       #building-bar .money {
@@ -34,16 +34,18 @@
         min-width: 90px;
       }
       #building-bar button {
-        background: #2b2f38;
-        color: #fff;
-        border: 1px solid #444;
+        background: #5b3a29;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
         border-radius: 4px;
         padding: 6px 10px;
         font-size: 13px;
         cursor: pointer;
+        transition: background 0.15s ease, transform 0.1s ease;
       }
       #building-bar button:hover {
-        background: #3a3f4b;
+        background: #714a35;
+        transform: translateY(-1px);
       }
       #building-bar button.active {
         background: #4caf50;
@@ -53,9 +55,9 @@
         position: fixed;
         right: 16px;
         bottom: 88px;
-        background: #111318ee;
-        color: #fff;
-        border: 1px solid #444;
+        background: #2b1d12ee;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
         border-radius: 6px;
         padding: 10px 14px;
         font-family: sans-serif;
@@ -82,9 +84,9 @@
         display: none;
       }
       #game-over-panel {
-        background: #1c1f26;
-        color: #fff;
-        border: 1px solid #444;
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
         border-radius: 8px;
         padding: 24px 32px;
         min-width: 260px;
