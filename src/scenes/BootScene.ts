@@ -9,6 +9,9 @@ import {
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
+  VILLAGERS_ATLAS_KEY,
+  VILLAGER_SPRITE_SIZE,
+  VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
@@ -397,6 +400,16 @@ const ACCENT_SPRITES: Record<AccentKind, PixelSprite> = {
   ChickenDoor: CHICKEN_DOOR_ACCENT_SPRITE,
 };
 
+/**
+ * Phase 20 villager: a minimal human silhouette readable at animal-sprite
+ * scale - hat brim, face, vest/torso, two legs. No walk-cycle frames; facing
+ * is handled by flipping this single frame (MainScene.startVillagerWander).
+ */
+const VILLAGER_SPRITE: PixelSprite = {
+  palette: { H: 0x3e2723, F: 0xffcb8e, V: 0x6d4c41, L: 0x4e342e },
+  pattern: ['.HHHH.', '.FFFF.', 'VVVVVV', 'VVVVVV', '.L..L.', '.L..L.'],
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
@@ -426,6 +439,7 @@ export class BootScene extends Phaser.Scene {
     this.generateBuildingAtlas();
     this.generateAnimalAtlas();
     this.generateAccentAtlas();
+    this.generateVillagerAtlas();
   }
 
   create(): void {
@@ -524,5 +538,17 @@ export class BootScene extends Phaser.Scene {
     layout.forEach(({ kind, width, height }, index) => {
       texture.add(accentTextureKey(kind), 0, positions[index], 0, width, height);
     });
+  }
+
+  /** Single-frame atlas (only one villager look exists), drawn at the same coarse grid as animal critters. */
+  private generateVillagerAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, VILLAGER_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(VILLAGERS_ATLAS_KEY, VILLAGER_SPRITE_SIZE, VILLAGER_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(VILLAGERS_ATLAS_KEY);
+    texture.add(VILLAGER_TEXTURE_KEY, 0, 0, 0, VILLAGER_SPRITE_SIZE, VILLAGER_SPRITE_SIZE);
   }
 }

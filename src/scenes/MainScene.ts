@@ -6,6 +6,7 @@ import {
   MINIMAP_HEIGHT,
   MINIMAP_MARGIN,
   MINIMAP_WIDTH,
+  POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
   TILE_SIZE,
   VIEWPORT_HEIGHT,
@@ -22,6 +23,8 @@ import {
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
+  VILLAGERS_ATLAS_KEY,
+  VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
@@ -91,6 +94,14 @@ const HOUSE_SMOKE_DURATION_MIN_MS = 1200;
 const HOUSE_SMOKE_DURATION_MAX_MS = 1800;
 const HOUSE_SMOKE_STAGGER_MS = 500;
 
+/** Above buildings (10), accents (10.5) and animals (11); below the HUD (1000). */
+const VILLAGER_SPRITE_DEPTH = 12;
+/** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. */
+const VILLAGER_CAP = 30;
+const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
+const VILLAGER_PAUSE_MIN_MS = 500;
+const VILLAGER_PAUSE_MAX_MS = 2000;
+
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
@@ -110,6 +121,7 @@ export class MainScene extends Phaser.Scene {
   private selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
   private buildingVisuals = new Map<string, BuildingVisual>();
+  private villagers: Phaser.GameObjects.Image[] = [];
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
@@ -510,6 +522,9 @@ export class MainScene extends Phaser.Scene {
     }
     this.redrawAnimalSprites(visual);
     this.createBuildingAccents(visual);
+    if (building.type === BuildingType.House) {
+      this.spawnVillagersForHouse(building);
+    }
     playPlacementSound();
   }
 
@@ -801,6 +816,69 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
+  /**
+   * Spawns POPULATION_PER_HOUSE sprites per House placement (population
+   * capacity, not employment - employment is recomputed every tick and
+   * shouldn't churn sprites in/out). Capped at VILLAGER_CAP total for
+   * performance, so a later House may spawn fewer (or none).
+   */
+  private spawnVillagersForHouse(building: PlacedBuilding): void {
+    const spawnCount = Math.min(POPULATION_PER_HOUSE, VILLAGER_CAP - this.villagers.length);
+    const origin = this.tileCenter(building);
+
+    for (let index = 0; index < spawnCount; index++) {
+      const villager = this.add
+        .image(origin.x, origin.y, VILLAGERS_ATLAS_KEY, VILLAGER_TEXTURE_KEY)
+        .setDepth(VILLAGER_SPRITE_DEPTH);
+      this.villagers.push(villager);
+      this.startVillagerWander(villager);
+    }
+  }
+
+  /**
+   * Point-to-point wander, one leg at a time: each leg is its own tween,
+   * chained via onComplete rather than a single repeating/yoyo tween, since
+   * every leg goes to a fresh random target instead of bouncing between two
+   * fixed points. `villager.active` is checked on every (re-)entry so a
+   * pending post-reset callback (scheduled before game-reset destroyed this
+   * sprite) quietly stops the loop instead of animating a dead image.
+   */
+  private startVillagerWander(villager: Phaser.GameObjects.Image): void {
+    if (!villager.active) {
+      return;
+    }
+
+    const target = this.pickVillagerTarget();
+    const distance = Phaser.Math.Distance.Between(villager.x, villager.y, target.x, target.y);
+    const duration = (distance / VILLAGER_WALK_SPEED_PX_PER_SEC) * 1000;
+
+    villager.setFlipX(target.x < villager.x);
+
+    this.tweens.add({
+      targets: villager,
+      x: target.x,
+      y: target.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        const pause = Phaser.Math.Between(VILLAGER_PAUSE_MIN_MS, VILLAGER_PAUSE_MAX_MS);
+        this.time.delayedCall(pause, () => this.startVillagerWander(villager));
+      },
+    });
+  }
+
+  /** Random placed building's tile center; always at least the villager's own House, since it's placed before this is ever called. Clamped defensively in case a future building type ever sits outside map bounds. */
+  private pickVillagerTarget(): { x: number; y: number } {
+    const buildings = getPlacedBuildings();
+    const building = buildings[Phaser.Math.Between(0, buildings.length - 1)];
+    const center = this.tileCenter(building);
+
+    return {
+      x: Phaser.Math.Clamp(center.x, 0, MAP_WIDTH_TILES * TILE_SIZE),
+      y: Phaser.Math.Clamp(center.y, 0, MAP_HEIGHT_TILES * TILE_SIZE),
+    };
+  }
+
   private setupGameReset(): void {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
@@ -820,6 +898,12 @@ export class MainScene extends Phaser.Scene {
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();
       this.fenceLineGraphics.clear();
+
+      for (const villager of this.villagers) {
+        this.tweens.killTweensOf(villager);
+        villager.destroy();
+      }
+      this.villagers = [];
     });
   }
 

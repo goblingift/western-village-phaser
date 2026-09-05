@@ -215,6 +215,15 @@ export function accentTextureKey(kind: AccentKind): string {
   return `accent-${kind}`;
 }
 
+/** Distinct asset class again (Phase 20): decorative population sprites, unrelated to any single building footprint. */
+export const VILLAGERS_ATLAS_KEY = 'villagers-atlas';
+
+/** Same size class as animal sprites (Phase 18) so both read consistently at the same camera zoom. */
+export const VILLAGER_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
+
+/** Only one villager look exists, so a single fixed frame key (no per-kind lookup like animals/accents need). */
+export const VILLAGER_TEXTURE_KEY = 'villager';
+
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',
