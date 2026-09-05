@@ -55,10 +55,13 @@ export class BuildingInfoPanel {
     const saleText = isSupermarket ? this.formatSaleText(this.selected) : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
+    const isDisabled = this.selected.hp <= 0;
+    const hpText = `HP: ${this.selected.hp}/${definition.maxHp}${isDisabled ? ' (Disabled)' : ''}`;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
+      <div${isDisabled ? ' class="hp-disabled"' : ''}>${hpText}</div>
       ${statusText ? `<div>${statusText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}

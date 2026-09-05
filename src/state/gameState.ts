@@ -132,6 +132,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     assignedWorkers: 0,
     staffed: false,
     animalCount: 0,
+    hp: definition.maxHp,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -351,6 +352,14 @@ function assignWorkforce(): void {
   let employed = 0;
 
   for (const building of placedBuildings) {
+    // A 0 HP building has no one working in it; recomputed every tick, so this
+    // also covers a building that just dropped to 0 HP mid-game.
+    if (building.hp <= 0) {
+      building.assignedWorkers = 0;
+      building.staffed = false;
+      continue;
+    }
+
     const workersRequired = getWorkersRequired(building.type);
     if (workersRequired <= 0) {
       building.assignedWorkers = 0;
@@ -374,7 +383,7 @@ function assignWorkforce(): void {
 
 export function getStorageCap(): number {
   const staffedWarehouses = placedBuildings.filter(
-    (building) => building.type === BuildingType.Warehouse && building.staffed,
+    (building) => building.type === BuildingType.Warehouse && building.staffed && building.hp > 0,
   ).length;
   return BASE_STORAGE_CAP + WAREHOUSE_STORAGE_BONUS * staffedWarehouses;
 }
@@ -415,6 +424,20 @@ function runSupermarketSales(): void {
   }
 }
 
+const HP_REGEN_FRACTION = 0.02;
+
+/**
+ * Runs for every building regardless of active/staffed state, including
+ * currently-disabled (0 HP) ones - regen is the only way a disabled building
+ * recovers, so gating it behind staffing/production would make it permanent.
+ */
+function runHpRegen(): void {
+  for (const building of placedBuildings) {
+    const maxHp = BUILDING_DEFINITIONS[building.type].maxHp;
+    building.hp = Math.min(maxHp, building.hp + Math.ceil(maxHp * HP_REGEN_FRACTION));
+  }
+}
+
 function scaleByAnimalCount(
   outputPerAnimal: Partial<Record<ResourceKey, number>>,
   animalCount: number,
@@ -431,6 +454,7 @@ export function runProductionTick(): void {
     return;
   }
 
+  runHpRegen();
   assignWorkforce();
   const storageCap = getStorageCap();
 
@@ -438,6 +462,11 @@ export function runProductionTick(): void {
     const definition = BUILDING_DEFINITIONS[building.type];
     const production = definition.production;
     if (!production) {
+      building.active = false;
+      continue;
+    }
+
+    if (building.hp <= 0) {
       building.active = false;
       continue;
     }

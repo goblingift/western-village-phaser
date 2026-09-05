@@ -96,6 +96,13 @@ const HOUSE_SMOKE_STAGGER_MS = 500;
 
 /** Above buildings (10), accents (10.5) and animals (11); below the HUD (1000). */
 const VILLAGER_SPRITE_DEPTH = 12;
+/** Above villagers (12); HP bars sit topmost of the per-building layers so damage is always visible. */
+const HP_BAR_DEPTH = 13;
+const HP_BAR_HEIGHT = 4;
+const HP_BAR_MARGIN_ABOVE_BUILDING = 3;
+const HP_BAR_BG_COLOR = 0x2b1d12;
+const HP_BAR_FILL_COLOR = 0x4caf50;
+const HP_BAR_EMPTY_COLOR = 0xd32f2f;
 /** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. */
 const VILLAGER_CAP = 30;
 const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
@@ -124,6 +131,7 @@ export class MainScene extends Phaser.Scene {
   private villagers: Phaser.GameObjects.Image[] = [];
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
+  private hpBarGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
   private tileData: TileType[][] = [];
@@ -151,6 +159,7 @@ export class MainScene extends Phaser.Scene {
     this.setupConnectionVisuals();
     this.setupFenceVisuals();
     this.setupAnimalVisuals();
+    this.setupHpBarVisuals();
     this.setupGameReset();
   }
 
@@ -718,6 +727,37 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private setupHpBarVisuals(): void {
+    this.hpBarGraphics = this.add.graphics();
+    this.hpBarGraphics.setDepth(HP_BAR_DEPTH);
+
+    // Redrawn every tick (cheap at this building count) rather than only on
+    // damage events, since no damage source exists yet - this keeps the bars
+    // correct automatically once one is added later.
+    gameEvents.on('production-tick', () => this.redrawHpBars());
+  }
+
+  private redrawHpBars(): void {
+    this.hpBarGraphics.clear();
+
+    for (const { building } of this.buildingVisuals.values()) {
+      const { size, maxHp } = BUILDING_DEFINITIONS[building.type];
+      if (building.hp >= maxHp) {
+        continue;
+      }
+
+      const barWidth = size.width * TILE_SIZE - 4;
+      const px = building.tileX * TILE_SIZE + 2;
+      const py = building.tileY * TILE_SIZE - HP_BAR_HEIGHT - HP_BAR_MARGIN_ABOVE_BUILDING;
+      const ratio = Math.max(0, building.hp / maxHp);
+
+      this.hpBarGraphics.fillStyle(HP_BAR_BG_COLOR, 1);
+      this.hpBarGraphics.fillRect(px, py, barWidth, HP_BAR_HEIGHT);
+      this.hpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
+      this.hpBarGraphics.fillRect(px, py, barWidth * ratio, HP_BAR_HEIGHT);
+    }
+  }
+
   private tileCenter(building: PlacedBuilding): { x: number; y: number } {
     const { width, height } = BUILDING_DEFINITIONS[building.type].size;
     return {
@@ -898,6 +938,7 @@ export class MainScene extends Phaser.Scene {
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();
       this.fenceLineGraphics.clear();
+      this.hpBarGraphics.clear();
 
       for (const villager of this.villagers) {
         this.tweens.killTweensOf(villager);

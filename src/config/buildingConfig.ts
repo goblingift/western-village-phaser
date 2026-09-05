@@ -49,6 +49,8 @@ export interface BuildingDefinition {
   /** Marks a non-production building (e.g. Warehouse) as still needing staff to function. */
   requiresWorkers?: boolean;
   animal?: AnimalConfig;
+  /** Starting/full hit points (Phase 21); tiered roughly by cost/footprint. */
+  maxHp: number;
 }
 
 export interface SupermarketSale {
@@ -66,6 +68,8 @@ export interface PlacedBuilding {
   connected: boolean;
   assignedWorkers: number;
   staffed: boolean;
+  /** Starts at maxHp on placement; regenerates each tick, 0 = disabled (Phase 21). */
+  hp: number;
   /** Only meaningful for buildings with an AnimalConfig; owned livestock count, starts at 0. */
   animalCount: number;
   /** Only meaningful for Supermarket; last tick's autonomous sale, if any. */
@@ -81,6 +85,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0xa1887f,
     production: {},
     animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.2 } },
+    maxHp: 80,
   },
   [BuildingType.Butcher]: {
     type: BuildingType.Butcher,
@@ -89,6 +94,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 2, height: 2 },
     color: 0xc62828,
     production: { inputs: { rawMeat: 1, water: 1 }, outputs: { meat: 1 } },
+    maxHp: 80,
   },
   [BuildingType.Well]: {
     type: BuildingType.Well,
@@ -97,6 +103,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 1, height: 1 },
     color: 0x0288d1,
     production: { outputs: { water: 1 } },
+    maxHp: 45,
   },
   [BuildingType.House]: {
     type: BuildingType.House,
@@ -104,6 +111,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 80,
     size: { width: 1, height: 1 },
     color: 0xffa726,
+    maxHp: 50,
   },
   [BuildingType.Road]: {
     type: BuildingType.Road,
@@ -111,6 +119,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 10,
     size: { width: 1, height: 1 },
     color: 0x757575,
+    maxHp: 15,
   },
   [BuildingType.ChickenFarm]: {
     type: BuildingType.ChickenFarm,
@@ -120,6 +129,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0xfff8e1,
     production: {},
     animal: { animalLabel: 'Chicken', costPerAnimal: 5, maxAnimals: 4, outputPerAnimal: { eggs: 0.2 } },
+    maxHp: 45,
   },
   [BuildingType.PigFarm]: {
     type: BuildingType.PigFarm,
@@ -129,6 +139,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0xe8a5b8,
     production: {},
     animal: { animalLabel: 'Pig', costPerAnimal: 12, maxAnimals: 6, outputPerAnimal: { rawMeat: 0.25 } },
+    maxHp: 80,
   },
   [BuildingType.CowRanch]: {
     type: BuildingType.CowRanch,
@@ -138,6 +149,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0xbca88a,
     production: {},
     animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.5 } },
+    maxHp: 100,
   },
   [BuildingType.Fence]: {
     type: BuildingType.Fence,
@@ -145,6 +157,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 15,
     size: { width: 1, height: 1 },
     color: 0xc9a063,
+    maxHp: 20,
   },
   [BuildingType.Warehouse]: {
     type: BuildingType.Warehouse,
@@ -153,6 +166,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
     requiresWorkers: true,
+    maxHp: 100,
   },
   [BuildingType.Supermarket]: {
     type: BuildingType.Supermarket,
@@ -161,6 +175,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 2, height: 2 },
     color: 0x8e24aa,
     requiresWorkers: true,
+    maxHp: 90,
   },
 };
 
