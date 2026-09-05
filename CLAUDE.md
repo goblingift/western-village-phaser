@@ -74,6 +74,7 @@ Player places buildings (cattle farm, butcher, well, house, road) on a tilemap a
 | 2026-09-05 | Roads & Logistics | Road-network connectivity (BFS through road chains) grants +10% production output, green outline on connected buildings |
 | 2026-09-05 | Goal & Score | 5-minute countdown, cumulative meat score, game-over overlay with building counts, Play Again reset |
 | 2026-09-05 | Polish & Performance | Building sprites packed into one texture atlas, connection outlines merged into a single shared Graphics object, throttled tile-info HUD updates, Western color palette, tooltips, procedural placement sound |
+| 2026-09-05 | Visual Overhaul (Pixel Assets) | Replaced flat-color tiles/buildings with procedurally generated pixel-art textures: each tile/building is drawn on an 8x8-per-tile logical pixel grid (BootScene.ts `drawPixelSprite`) and scaled to TILE_SIZE, keeping the same TILESET_KEY/BUILDING_ATLAS_KEY contract |
 
 ## License & Repo Info
 
