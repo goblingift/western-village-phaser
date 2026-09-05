@@ -61,6 +61,7 @@ import {
   getPlacedBuildings,
   getResources,
   getStorageCap,
+  getTotalBankBalance,
   getTotalMeatProduced,
   getTotalPopulation,
   placeBuilding,
@@ -69,6 +70,14 @@ import {
 } from '../state/gameState';
 
 const FENCE_LINE_COLOR = 0x8d6748;
+
+/**
+ * Phase 29: once every placed Bank's combined balance reaches this, raids
+ * lean Outlaw and come faster - see pickRaidFaction/scheduleNextRaidCheck.
+ * Below it, both behave exactly as before Phase 29 (even 1/3 split, normal
+ * interval).
+ */
+const BANK_RISK_THRESHOLD = 200;
 
 const VALID_TINT = 0x00ff00;
 const INVALID_TINT = 0xff0000;
@@ -1432,7 +1441,13 @@ export class MainScene extends Phaser.Scene {
    * inside by simply skipping the spawn when one already is.
    */
   private scheduleNextRaidCheck(): void {
-    const delay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS, RAID_MAX_INTERVAL_MS);
+    // Below BANK_RISK_THRESHOLD this is byte-identical to the pre-Phase-29
+    // interval roll; at/above it both bounds are halved, so raids come
+    // roughly twice as often on top of the Outlaw-biased pick below.
+    const bankAtRisk = getTotalBankBalance() >= BANK_RISK_THRESHOLD;
+    const delay = bankAtRisk
+      ? Phaser.Math.Between(RAID_MIN_INTERVAL_MS / 2, RAID_MAX_INTERVAL_MS / 2)
+      : Phaser.Math.Between(RAID_MIN_INTERVAL_MS, RAID_MAX_INTERVAL_MS);
     this.raidCheckTimer = this.time.delayedCall(delay, () => {
       if (!this.raidActive) {
         this.startRaid();
@@ -1441,9 +1456,25 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  private startRaid(): void {
+  /**
+   * Below BANK_RISK_THRESHOLD: identical to the original even pick across
+   * Object.values(RaiderFaction). At/above it: a full bank draws outsized
+   * Outlaw attention (60% Outlaws / 20% Rustlers / 20% Coyotes).
+   */
+  private pickRaidFaction(): RaiderFaction {
     const factions = Object.values(RaiderFaction);
-    const faction = factions[Phaser.Math.Between(0, factions.length - 1)];
+    if (getTotalBankBalance() < BANK_RISK_THRESHOLD) {
+      return factions[Phaser.Math.Between(0, factions.length - 1)];
+    }
+    const roll = Math.random();
+    if (roll < 0.6) {
+      return RaiderFaction.Outlaws;
+    }
+    return roll < 0.8 ? RaiderFaction.Rustlers : RaiderFaction.Coyotes;
+  }
+
+  private startRaid(): void {
+    const faction = this.pickRaidFaction();
     const count = Phaser.Math.Between(RAID_MIN_UNITS, RAID_MAX_UNITS);
 
     this.raidActive = true;

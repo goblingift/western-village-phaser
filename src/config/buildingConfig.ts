@@ -1,4 +1,5 @@
 import {
+  BANK_INTEREST_RATE,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
@@ -25,6 +26,7 @@ export enum BuildingType {
   Liquor = 'Liquor',
   Saloon = 'Saloon',
   Horsery = 'Horsery',
+  Bank = 'Bank',
 }
 
 export interface BuildingSize {
@@ -134,6 +136,8 @@ export interface PlacedBuilding {
   mountedCowboyCount: number;
   /** Only meaningful for Horsery: one HP value per trained Cowboy-on-Horse, index-aligned with its spawn slot - same pattern as cowboyHp above. */
   mountedCowboyHp: number[];
+  /** Only meaningful for Bank; starts at 0, grows via compounding interest each production tick (runBankInterest) and moves with deposit/withdraw. */
+  bankBalance: number;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -316,6 +320,15 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 220,
     size: { width: 2, height: 2 },
     color: 0x795548,
+    requiresWorkers: true,
+    maxHp: 100,
+  },
+  [BuildingType.Bank]: {
+    type: BuildingType.Bank,
+    label: 'Bank',
+    cost: 200,
+    size: { width: 2, height: 2 },
+    color: 0x9e9e9e,
     requiresWorkers: true,
     maxHp: 100,
   },
@@ -533,6 +546,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Horsery) {
     parts.push(`Cowboys on Horse: $${MOUNTED_COWBOY_TRAIN_COST} each, up to ${MOUNTED_COWBOY_MAX_PER_HORSERY}`);
+  }
+  if (definition.type === BuildingType.Bank) {
+    parts.push(`Interest: ${BANK_INTEREST_RATE * 100}% per tick (compounding)`);
   }
   return parts.join(' | ');
 }

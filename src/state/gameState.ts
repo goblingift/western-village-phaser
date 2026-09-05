@@ -1,4 +1,6 @@
 import {
+  BANK_INTEREST_RATE,
+  BANK_TRANSACTION_AMOUNT,
   BASE_STORAGE_CAP,
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
@@ -163,6 +165,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     cowboyHp: [],
     mountedCowboyCount: 0,
     mountedCowboyHp: [],
+    bankBalance: 0,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -343,6 +346,55 @@ export function trainMountedCowboy(buildingId: string): boolean {
   return true;
 }
 
+/**
+ * Deposit/withdraw are a bidirectional pair of the same hard buy-gate shape
+ * as buyAnimal/trainCowboy: fixed $50 increment, blocked on wrong building
+ * type, a disabled (0 HP) Bank, or insufficient funds on the source side of
+ * the move (player money for deposit, bankBalance for withdraw).
+ */
+export function depositToBank(buildingId: string, amount: number = BANK_TRANSACTION_AMOUNT): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Bank) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (money < amount) {
+    return false;
+  }
+
+  money = Math.round((money - amount) * 100) / 100;
+  building.bankBalance = Math.round((building.bankBalance + amount) * 100) / 100;
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('bank-changed', building);
+
+  return true;
+}
+
+/** Mirrors depositToBank in the opposite direction; same hp/type gate, amount checked against bankBalance instead of money. */
+export function withdrawFromBank(buildingId: string, amount: number = BANK_TRANSACTION_AMOUNT): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Bank) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.bankBalance < amount) {
+    return false;
+  }
+
+  building.bankBalance = Math.round((building.bankBalance - amount) * 100) / 100;
+  money = Math.round((money + amount) * 100) / 100;
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('bank-changed', building);
+
+  return true;
+}
+
 export interface FenceLink {
   fromId: string;
   toId: string;
@@ -469,6 +521,13 @@ function assignWorkforce(): void {
   idlePopulation = available;
 }
 
+/** Phase 29: read by MainScene's raid scheduling to bias faction pick/interval once total deposits cross BANK_RISK_THRESHOLD. */
+export function getTotalBankBalance(): number {
+  return placedBuildings
+    .filter((building) => building.type === BuildingType.Bank)
+    .reduce((sum, building) => sum + building.bankBalance, 0);
+}
+
 export function getStorageCap(): number {
   const staffedWarehouses = placedBuildings.filter(
     (building) => building.type === BuildingType.Warehouse && building.staffed && building.hp > 0,
@@ -590,6 +649,23 @@ function runHpRegen(): void {
   }
 }
 
+/**
+ * Interest compounds every tick regardless of staffing - a Bank isn't a
+ * production building, money sitting in it grows whether or not anyone is
+ * currently working there. Gated on hp > 0 only (not staffed), matching
+ * Phase 21's "0 HP = disabled" rule: a wrecked Bank's balance stops growing,
+ * but that gate lives here rather than in withdrawFromBank, which has its
+ * own separate hp check for the transaction itself.
+ */
+function runBankInterest(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Bank || building.hp <= 0 || building.bankBalance <= 0) {
+      continue;
+    }
+    building.bankBalance = Math.round(building.bankBalance * (1 + BANK_INTEREST_RATE) * 100) / 100;
+  }
+}
+
 function scaleByAnimalCount(
   outputPerAnimal: Partial<Record<ResourceKey, number>>,
   animalCount: number,
@@ -607,6 +683,7 @@ export function runProductionTick(): void {
   }
 
   runHpRegen();
+  runBankInterest();
   assignWorkforce();
   const storageCap = getStorageCap();
 

@@ -551,6 +551,41 @@ const HORSERY_SPRITE: PixelSprite = {
   ],
 };
 
+const BANK_SPRITE: PixelSprite = {
+  // Cool stone-grey palette (rather than the warm wood-plank browns most
+  // buildings use) reads as brick/stone instead of timber. A colonnade of
+  // pale columns (C) over dark wall shadow (D) stands in for Warehouse's
+  // wood planking, and a brass-rimmed vault-door plate (O/V, dial H) sits
+  // where other buildings put a window or door - a "safe/secure" cue.
+  palette: {
+    S: 0x37474f,
+    R: 0x90a4ae,
+    C: 0xcfd8dc,
+    D: 0x607d8b,
+    O: 0xffb300,
+    V: 0x2b1d12,
+    H: 0xffd54f,
+  },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    '.SRRRRRRRRRRRRS.',
+    'SSRRRRRRRRRRRRSS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SCDCDCDCDCDCDCDS',
+    'SCDCDCDCDCDCDCDS',
+    'SCDCDCDCDCDCDCDS',
+    'SCDCDCDCDCDCDCDS',
+    'SCDCDCDCDCDCDCDS',
+    'SCDCDOVVVVOCDCDS',
+    'SCDCDOVHHVOCDCDS',
+    'SCDCDOVVVVOCDCDS',
+    'SCDCDCDCDCDCDCDS',
+    'SDDDDDDDDDDDDDDS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -571,6 +606,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Liquor]: LIQUOR_SPRITE,
   [BuildingType.Saloon]: SALOON_SPRITE,
   [BuildingType.Horsery]: HORSERY_SPRITE,
+  [BuildingType.Bank]: BANK_SPRITE,
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {

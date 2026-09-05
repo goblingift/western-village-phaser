@@ -8,13 +8,22 @@ import {
   getWorkersRequired,
 } from '../config/buildingConfig';
 import {
+  BANK_TRANSACTION_AMOUNT,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
 } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
-import { buyAnimal, getMoney, hasAdjacentFence, trainCowboy, trainMountedCowboy } from '../state/gameState';
+import {
+  buyAnimal,
+  depositToBank,
+  getMoney,
+  hasAdjacentFence,
+  trainCowboy,
+  trainMountedCowboy,
+  withdrawFromBank,
+} from '../state/gameState';
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
@@ -63,9 +72,10 @@ export class BuildingInfoPanel {
     const isSaloon = this.selected.type === BuildingType.Saloon;
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const isHorsery = this.selected.type === BuildingType.Horsery;
+    const isBank = this.selected.type === BuildingType.Bank;
     const statusText = production
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
-      : isBarracks || isHorsery
+      : isBarracks || isHorsery || isBank
         ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
         : definition.requiresWorkers && !isSupermarket && !isSaloon
           ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
@@ -81,6 +91,7 @@ export class BuildingInfoPanel {
     const mountedCowboyText = isHorsery
       ? `Cowboys on Horse: ${this.selected.mountedCowboyCount}/${MOUNTED_COWBOY_MAX_PER_HORSERY}`
       : null;
+    const balanceText = isBank ? `Balance: $${this.selected.bankBalance}` : null;
     const isDisabled = this.selected.hp <= 0;
     const hpText = `HP: ${this.selected.hp}/${definition.maxHp}${isDisabled ? ' (Disabled)' : ''}`;
 
@@ -96,6 +107,7 @@ export class BuildingInfoPanel {
       ${animalText ? `<div>${animalText}</div>` : ''}
       ${cowboyText ? `<div>${cowboyText}</div>` : ''}
       ${mountedCowboyText ? `<div>${mountedCowboyText}</div>` : ''}
+      ${balanceText ? `<div>${balanceText}</div>` : ''}
     `;
 
     if (animalConfig) {
@@ -106,6 +118,10 @@ export class BuildingInfoPanel {
     }
     if (isHorsery) {
       this.renderTrainMountedCowboyButton(this.selected);
+    }
+    if (isBank) {
+      this.renderDepositButton(this.selected);
+      this.renderWithdrawButton(this.selected);
     }
   }
 
@@ -178,6 +194,57 @@ export class BuildingInfoPanel {
     button.disabled = blockReason !== null;
     button.addEventListener('click', () => {
       trainMountedCowboy(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  private renderDepositButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0
+        ? 'disabled'
+        : getMoney() < BANK_TRANSACTION_AMOUNT
+          ? "can't afford"
+          : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Deposit $${BANK_TRANSACTION_AMOUNT}`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      depositToBank(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /** Mirrors renderDepositButton in the opposite direction: gated on the Bank's own bankBalance instead of the player's money. */
+  private renderWithdrawButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0
+        ? 'disabled'
+        : building.bankBalance < BANK_TRANSACTION_AMOUNT
+          ? 'nothing to withdraw'
+          : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Withdraw $${BANK_TRANSACTION_AMOUNT}`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      withdrawFromBank(building.id);
       this.render();
     });
     this.panel.appendChild(button);

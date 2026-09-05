@@ -45,3 +45,10 @@ export const MOUNTED_COWBOY_MAX_PER_HORSERY = 2;
 export const MOUNTED_COWBOY_MAX_HP = 40;
 // 3x MainScene's COWBOY_WALK_SPEED_PX_PER_SEC (60px/sec), reflecting the horse's speed advantage.
 export const MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC = 180;
+
+// Phase 29: Bank. Fixed per-click deposit/withdraw increment; interest is a
+// flat compounding rate applied to a Bank's own bankBalance each production
+// tick, independent of the RAID_* constants above (those are perturbed at
+// runtime by MainScene's bank-risk check, not redefined here).
+export const BANK_TRANSACTION_AMOUNT = 50;
+export const BANK_INTEREST_RATE = 0.005;
