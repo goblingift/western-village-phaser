@@ -162,9 +162,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private formatResourceText(): string {
-    const { rawMeat, meat, water } = getResources();
+    const { rawMeat, meat, water, eggs } = getResources();
     const fmt = (n: number) => Math.round(n * 10) / 10;
-    return `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)}`;
+    return `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)}`;
   }
 
   private setupProductionTimer(): void {

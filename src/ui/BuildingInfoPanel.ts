@@ -5,6 +5,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',
   water: 'Water',
+  eggs: 'Eggs',
 };
 
 export class BuildingInfoPanel {

@@ -4,6 +4,10 @@ export enum BuildingType {
   Well = 'Well',
   House = 'House',
   Road = 'Road',
+  ChickenFarm = 'ChickenFarm',
+  PigFarm = 'PigFarm',
+  CowRanch = 'CowRanch',
+  Fence = 'Fence',
 }
 
 export interface BuildingSize {
@@ -11,11 +15,13 @@ export interface BuildingSize {
   height: number;
 }
 
-export type ResourceKey = 'rawMeat' | 'meat' | 'water';
+export type ResourceKey = 'rawMeat' | 'meat' | 'water' | 'eggs';
 
 export interface BuildingProduction {
   inputs?: Partial<Record<ResourceKey, number>>;
   outputs?: Partial<Record<ResourceKey, number>>;
+  /** Full output rate needs an adjacent Fence building; otherwise output is halved. */
+  requiresFence?: boolean;
 }
 
 export interface BuildingDefinition {
@@ -77,6 +83,37 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 1, height: 1 },
     color: 0x757575,
   },
+  [BuildingType.ChickenFarm]: {
+    type: BuildingType.ChickenFarm,
+    label: 'Chicken Farm',
+    cost: 70,
+    size: { width: 1, height: 1 },
+    color: 0xfff8e1,
+    production: { outputs: { eggs: 0.8 } },
+  },
+  [BuildingType.PigFarm]: {
+    type: BuildingType.PigFarm,
+    label: 'Pig Farm',
+    cost: 120,
+    size: { width: 2, height: 2 },
+    color: 0xe8a5b8,
+    production: { outputs: { rawMeat: 1.5 } },
+  },
+  [BuildingType.CowRanch]: {
+    type: BuildingType.CowRanch,
+    label: 'Cow Ranch',
+    cost: 220,
+    size: { width: 2, height: 2 },
+    color: 0xbca88a,
+    production: { outputs: { rawMeat: 2.5 }, requiresFence: true },
+  },
+  [BuildingType.Fence]: {
+    type: BuildingType.Fence,
+    label: 'Fence',
+    cost: 15,
+    size: { width: 1, height: 1 },
+    color: 0xc9a063,
+  },
 };
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
@@ -89,6 +126,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',
   water: 'Water',
+  eggs: 'Eggs',
 };
 
 function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {

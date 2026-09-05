@@ -154,12 +154,88 @@ const ROAD_SPRITE: PixelSprite = {
   ],
 };
 
+const CHICKEN_FARM_SPRITE: PixelSprite = {
+  palette: { S: 0x4e342e, D: 0x6d4c41, W: 0x8d6e4a, C: 0xfff8e1 },
+  pattern: [
+    '.SSSSSS.',
+    'SDDDDDDS',
+    'SDDDDDDS',
+    'SSSSSSSS',
+    'SWWCCWWS',
+    'SWWCCWWS',
+    'SWCCCCWS',
+    'SSSSSSSS',
+  ],
+};
+
+const PIG_FARM_SPRITE: PixelSprite = {
+  palette: { S: 0x4e342e, R: 0xd08a9e, B: 0xe8a5b8, H: 0xfff0f3, D: 0x8d5a68, F: 0xc9a063 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBBBBBBBBBBBBBBS',
+    'SBBBBHHHHBBBBBBS',
+    'SBBBBHHHHBBBBBBS',
+    'SBBBBDDBBBBBBBBS',
+    'SBBBBDDBBBBBBBBS',
+    'SSSSSSSSSSSSSSSS',
+    'FF..FF..FF..FF..',
+    '................',
+    '................',
+    'FF..FF..FF..FF..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const COW_RANCH_SPRITE: PixelSprite = {
+  palette: { S: 0x6d4c41, R: 0x8d6e4a, B: 0xbca88a, H: 0xfff8e1, D: 0x5d4037, F: 0x7c5e3c },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBBBBBBBBBBBBBBS',
+    'SBBBBHHHHBBBBBBS',
+    'SBBBFFFFFFBBBBBS',
+    'SBBBBDDBBBBBBBBS',
+    'SBBBBDDBBBBBBBBS',
+    'SSSSSSSSSSSSSSSS',
+    'FF..FF..FF..FF..',
+    '................',
+    '................',
+    'FF..FF..FF..FF..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const FENCE_SPRITE: PixelSprite = {
+  palette: { F: 0xc9a063, D: 0x8d6748 },
+  pattern: [
+    '........',
+    'F..F..F.',
+    'F..F..F.',
+    'DDDDDDDD',
+    'F..F..F.',
+    'F..F..F.',
+    'DDDDDDDD',
+    '........',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
   [BuildingType.Well]: WELL_SPRITE,
   [BuildingType.House]: HOUSE_SPRITE,
   [BuildingType.Road]: ROAD_SPRITE,
+  [BuildingType.ChickenFarm]: CHICKEN_FARM_SPRITE,
+  [BuildingType.PigFarm]: PIG_FARM_SPRITE,
+  [BuildingType.CowRanch]: COW_RANCH_SPRITE,
+  [BuildingType.Fence]: FENCE_SPRITE,
 };
 
 function drawPixelSprite(

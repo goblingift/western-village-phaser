@@ -11,6 +11,7 @@ export interface Resources {
   rawMeat: number;
   meat: number;
   water: number;
+  eggs: number;
 }
 
 export interface GameOverSummary {
@@ -21,7 +22,7 @@ export interface GameOverSummary {
 const STARTING_MONEY = 500;
 
 let money = STARTING_MONEY;
-const resources: Resources = { rawMeat: 0, meat: 0, water: 0 };
+const resources: Resources = { rawMeat: 0, meat: 0, water: 0, eggs: 0 };
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
@@ -169,6 +170,31 @@ function collectAdjacentRoadIds(building: PlacedBuilding): Set<string> {
   return roadIds;
 }
 
+function hasAdjacentFence(building: PlacedBuilding): boolean {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+
+  const isFence = (nx: number, ny: number): boolean => {
+    if (!tileHasOtherBuilding(nx, ny, building.id)) {
+      return false;
+    }
+    const neighbor = buildingsById.get(occupancy[ny][nx]!);
+    return neighbor?.type === BuildingType.Fence;
+  };
+
+  for (let x = building.tileX; x < building.tileX + width; x++) {
+    if (isFence(x, building.tileY - 1) || isFence(x, building.tileY + height)) {
+      return true;
+    }
+  }
+  for (let y = building.tileY; y < building.tileY + height; y++) {
+    if (isFence(building.tileX - 1, y) || isFence(building.tileX + width, y)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isBuildingConnected(building: PlacedBuilding): boolean {
   const queue = [...collectAdjacentRoadIds(building)];
   const visited = new Set<string>(queue);
@@ -250,7 +276,9 @@ export function runProductionTick(): void {
     for (const [key, amount] of Object.entries(inputs) as [ResourceKey, number][]) {
       resources[key] -= amount;
     }
-    const bonus = building.connected ? 1.1 : 1;
+    // Cow Ranch needs an adjacent Fence tile to reach full output; without one it runs at half rate.
+    const fenceMultiplier = production.requiresFence && !hasAdjacentFence(building) ? 0.5 : 1;
+    const bonus = (building.connected ? 1.1 : 1) * fenceMultiplier;
     for (const [key, amount] of Object.entries(production.outputs ?? {}) as [ResourceKey, number][]) {
       const produced = amount * bonus;
       const cap = amount * bonus * HARVEST_BUFFER_CAP_MULTIPLIER;
@@ -337,6 +365,7 @@ export function resetGame(): void {
   resources.rawMeat = 0;
   resources.meat = 0;
   resources.water = 0;
+  resources.eggs = 0;
   totalMeatProduced = 0;
   remainingSeconds = GAME_DURATION_SECONDS;
   gameOver = false;
