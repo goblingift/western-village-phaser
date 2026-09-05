@@ -9,6 +9,9 @@ import {
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
+  COWBOYS_ATLAS_KEY,
+  COWBOY_SPRITE_SIZE,
+  COWBOY_TEXTURE_KEY,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_SPRITE_SIZE,
   VILLAGER_TEXTURE_KEY,
@@ -328,6 +331,31 @@ const FENCE_SPRITE: PixelSprite = {
   ],
 };
 
+const BARRACKS_SPRITE: PixelSprite = {
+  // Row 0's alternating S/gap crenellations give the roofline a small-fort
+  // parapet silhouette; the H pair (rows 6-7) reads as a sheriff's-office
+  // badge window between the wood-plank walls, F is a banner below the door.
+  palette: { S: 0x4e342e, R: 0x6d4c41, B: 0x8d6748, P: 0x7a5a3d, H: 0xffd54f, D: 0x2b1d12, F: 0xc62828 },
+  pattern: [
+    'S.S.S.S.S.S.S.S.',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBP.HH.BPBPBPS',
+    'SBPBP.HH.BPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPFFFFBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -340,6 +368,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Fence]: FENCE_SPRITE,
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
+  [BuildingType.Barracks]: BARRACKS_SPRITE,
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
@@ -410,6 +439,16 @@ const VILLAGER_SPRITE: PixelSprite = {
   pattern: ['.HHHH.', '.FFFF.', 'VVVVVV', 'VVVVVV', '.L..L.', '.L..L.'],
 };
 
+/**
+ * Phase 22 Cowboy: a wide brim (row 0) reads as a cowhand's hat rather than
+ * the Villager's rounder cap; G is a single holstered-gun pixel at the hip
+ * (row 3), the only silhouette hint this small a sprite can carry.
+ */
+const COWBOY_SPRITE: PixelSprite = {
+  palette: { H: 0x4e342e, F: 0xffcb8e, V: 0x8d6748, L: 0x3e2723, G: 0x212121 },
+  pattern: ['HHHHHH', '.FFFF.', 'VVVVVV', 'VVVVVG', '.L..L.', '.L..L.'],
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
@@ -440,6 +479,7 @@ export class BootScene extends Phaser.Scene {
     this.generateAnimalAtlas();
     this.generateAccentAtlas();
     this.generateVillagerAtlas();
+    this.generateCowboyAtlas();
   }
 
   create(): void {
@@ -550,5 +590,17 @@ export class BootScene extends Phaser.Scene {
 
     const texture = this.textures.get(VILLAGERS_ATLAS_KEY);
     texture.add(VILLAGER_TEXTURE_KEY, 0, 0, 0, VILLAGER_SPRITE_SIZE, VILLAGER_SPRITE_SIZE);
+  }
+
+  /** Single-frame atlas (only one Cowboy look exists), same coarse grid as animal/villager sprites. */
+  private generateCowboyAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, COWBOY_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(COWBOYS_ATLAS_KEY, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(COWBOYS_ATLAS_KEY);
+    texture.add(COWBOY_TEXTURE_KEY, 0, 0, 0, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
   }
 }

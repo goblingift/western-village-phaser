@@ -6,8 +6,9 @@ import {
   ResourceKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
+import { COWBOY_MAX_PER_BARRACKS, COWBOY_TRAIN_COST } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
-import { buyAnimal, getMoney, hasAdjacentFence } from '../state/gameState';
+import { buyAnimal, getMoney, hasAdjacentFence, trainCowboy } from '../state/gameState';
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
@@ -47,14 +48,18 @@ export class BuildingInfoPanel {
     const workersText =
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
     const isSupermarket = this.selected.type === BuildingType.Supermarket;
+    const isBarracks = this.selected.type === BuildingType.Barracks;
     const statusText = production
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
-      : definition.requiresWorkers && !isSupermarket
-        ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
-        : null;
+      : isBarracks
+        ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+        : definition.requiresWorkers && !isSupermarket
+          ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+          : null;
     const saleText = isSupermarket ? this.formatSaleText(this.selected) : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
+    const cowboyText = isBarracks ? `Cowboys: ${this.selected.cowboyCount}/${COWBOY_MAX_PER_BARRACKS}` : null;
     const isDisabled = this.selected.hp <= 0;
     const hpText = `HP: ${this.selected.hp}/${definition.maxHp}${isDisabled ? ' (Disabled)' : ''}`;
 
@@ -68,10 +73,14 @@ export class BuildingInfoPanel {
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
+      ${cowboyText ? `<div>${cowboyText}</div>` : ''}
     `;
 
     if (animalConfig) {
       this.renderBuyAnimalButton(this.selected, animalConfig);
+    }
+    if (isBarracks) {
+      this.renderTrainCowboyButton(this.selected);
     }
   }
 
@@ -89,6 +98,33 @@ export class BuildingInfoPanel {
     button.disabled = blockReason !== null;
     button.addEventListener('click', () => {
       buyAnimal(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  private renderTrainCowboyButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0
+        ? 'disabled'
+        : building.cowboyCount >= COWBOY_MAX_PER_BARRACKS
+          ? 'at max cowboys'
+          : getMoney() < COWBOY_TRAIN_COST
+            ? "can't afford"
+            : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Train Cowboy ($${COWBOY_TRAIN_COST})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      trainCowboy(building.id);
       this.render();
     });
     this.panel.appendChild(button);

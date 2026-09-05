@@ -1,3 +1,5 @@
+import { COWBOY_MAX_PER_BARRACKS, COWBOY_TRAIN_COST } from './constants';
+
 export enum BuildingType {
   CattleFarm = 'CattleFarm',
   Butcher = 'Butcher',
@@ -10,6 +12,7 @@ export enum BuildingType {
   Fence = 'Fence',
   Warehouse = 'Warehouse',
   Supermarket = 'Supermarket',
+  Barracks = 'Barracks',
 }
 
 export interface BuildingSize {
@@ -74,6 +77,17 @@ export interface PlacedBuilding {
   animalCount: number;
   /** Only meaningful for Supermarket; last tick's autonomous sale, if any. */
   lastSale?: SupermarketSale;
+  /** Only meaningful for Barracks; trained cowboy count, starts at 0, mirrors animalCount. */
+  cowboyCount: number;
+  /**
+   * Only meaningful for Barracks: one HP value per trained cowboy, index-
+   * aligned with that cowboy's garrisoned sprite slot (see
+   * MainScene.getCowboySlotPosition). A parallel array (rather than e.g. a
+   * Map<id, hp>) keeps "damage cowboy N" / "remove cowboy N at 0 HP" a plain
+   * index read + splice, and index-alignment with the sprite slot layout is
+   * exactly what Phase 23 needs to know which sprite to remove.
+   */
+  cowboyHp: number[];
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -177,6 +191,15 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     requiresWorkers: true,
     maxHp: 90,
   },
+  [BuildingType.Barracks]: {
+    type: BuildingType.Barracks,
+    label: 'Barracks',
+    cost: 180,
+    size: { width: 2, height: 2 },
+    color: 0x37474f,
+    requiresWorkers: true,
+    maxHp: 100,
+  },
 };
 
 /**
@@ -239,6 +262,15 @@ export const VILLAGER_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
 /** Only one villager look exists, so a single fixed frame key (no per-kind lookup like animals/accents need). */
 export const VILLAGER_TEXTURE_KEY = 'villager';
 
+/** Distinct asset class again (Phase 22): garrisoned Cowboy units, only ever owned by a Barracks. */
+export const COWBOYS_ATLAS_KEY = 'cowboys-atlas';
+
+/** Same size class as animal/villager sprites so all garrisoned/static props read consistently. */
+export const COWBOY_SPRITE_SIZE = ANIMAL_SPRITE_SIZE;
+
+/** Only one cowboy look exists, so a single fixed frame key (no per-kind lookup like animals/accents need). */
+export const COWBOY_TEXTURE_KEY = 'cowboy';
+
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',
@@ -273,6 +305,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
     parts.push(
       `Sells: ${meat.amount} Meat @$${meat.price}, ${eggs.amount} Eggs @$${eggs.price} per tick`,
     );
+  }
+  if (definition.type === BuildingType.Barracks) {
+    parts.push(`Cowboys: $${COWBOY_TRAIN_COST} each, up to ${COWBOY_MAX_PER_BARRACKS}`);
   }
   return parts.join(' | ');
 }

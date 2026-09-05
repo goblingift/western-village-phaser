@@ -14,3 +14,11 @@ export const WAREHOUSE_STORAGE_BONUS = 150;
 export const MINIMAP_WIDTH = 200;
 export const MINIMAP_HEIGHT = 150;
 export const MINIMAP_MARGIN = 8;
+// Phase 22: Barracks & Cowboy Units. Cowboys are bought like Phase 16's
+// animals (cost + per-Barracks cap) but aren't an AnimalConfig, since only
+// one building type ever has them and they carry their own HP, not output.
+export const COWBOY_TRAIN_COST = 40;
+export const COWBOY_MAX_PER_BARRACKS = 3;
+// Not read anywhere this phase; Phase 23's combat system consumes both.
+export const COWBOY_RANGE_TILES = 5;
+export const COWBOY_MAX_HP = 30;

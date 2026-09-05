@@ -22,6 +22,9 @@ import {
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
+  COWBOYS_ATLAS_KEY,
+  COWBOY_SPRITE_SIZE,
+  COWBOY_TEXTURE_KEY,
   PlacedBuilding,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_TEXTURE_KEY,
@@ -65,6 +68,11 @@ const ANIMAL_WANDER_BOB_PX = 4;
 const ANIMAL_WANDER_DURATION_MIN_MS = 900;
 const ANIMAL_WANDER_DURATION_MAX_MS = 1600;
 const ANIMAL_WANDER_DELAY_MAX_MS = 1000;
+
+/** Garrisoned Cowboys (Phase 22) share the animal sprites' depth/layer - both are static ground props next to a building. */
+const COWBOY_SPRITE_DEPTH = ANIMAL_SPRITE_DEPTH;
+const COWBOY_SLOT_GAP = 2;
+const COWBOY_SLOT_STEP = COWBOY_SPRITE_SIZE + COWBOY_SLOT_GAP;
 
 /** Idle-animation accents (Phase 19): layered just above a building's own image (depth 10) and below animal sprites (depth 11). */
 const ACCENT_DEPTH = 10.5;
@@ -114,6 +122,7 @@ interface BuildingVisual {
   image: Phaser.GameObjects.Image;
   animalImages: Phaser.GameObjects.Image[];
   accentObjects: Phaser.GameObjects.GameObject[];
+  cowboyImages: Phaser.GameObjects.Image[];
 }
 
 export class MainScene extends Phaser.Scene {
@@ -159,6 +168,7 @@ export class MainScene extends Phaser.Scene {
     this.setupConnectionVisuals();
     this.setupFenceVisuals();
     this.setupAnimalVisuals();
+    this.setupCowboyVisuals();
     this.setupHpBarVisuals();
     this.setupGameReset();
   }
@@ -523,13 +533,14 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [] };
+    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [], cowboyImages: [] };
     this.buildingVisuals.set(building.id, visual);
     if (building.type === BuildingType.Fence) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
     this.redrawAnimalSprites(visual);
+    this.redrawCowboySprites(visual);
     this.createBuildingAccents(visual);
     if (building.type === BuildingType.House) {
       this.spawnVillagersForHouse(building);
@@ -856,6 +867,59 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
+  private setupCowboyVisuals(): void {
+    gameEvents.on('cowboy-trained', (building: PlacedBuilding) => {
+      const visual = this.buildingVisuals.get(building.id);
+      if (visual) {
+        this.redrawCowboySprites(visual);
+      }
+    });
+  }
+
+  /**
+   * Only called on placement and 'cowboy-trained' (i.e. when cowboyCount
+   * actually changes), same rule as redrawAnimalSprites. Unlike animals,
+   * Cowboys never wander - they're garrisoned defenders that hold a fixed
+   * slot, so no tween is started here.
+   */
+  private redrawCowboySprites(visual: BuildingVisual): void {
+    for (const cowboyImage of visual.cowboyImages) {
+      cowboyImage.destroy();
+    }
+    visual.cowboyImages = [];
+
+    if (visual.building.type !== BuildingType.Barracks) {
+      return;
+    }
+
+    for (let index = 0; index < visual.building.cowboyCount; index++) {
+      const slot = this.getCowboySlotPosition(visual.building, index);
+      const cowboyImage = this.add
+        .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
+        .setDepth(COWBOY_SPRITE_DEPTH);
+      visual.cowboyImages.push(cowboyImage);
+    }
+  }
+
+  /** Same deterministic row/column slot layout as getAnimalSlotPosition, kept separate since Cowboys are a distinct asset class from animals. */
+  private getCowboySlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const footprintPxWidth = width * TILE_SIZE;
+    const columns = Math.max(1, Math.floor(footprintPxWidth / COWBOY_SLOT_STEP));
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+
+    const rowPxWidth = columns * COWBOY_SLOT_STEP - COWBOY_SLOT_GAP;
+    const startX =
+      building.tileX * TILE_SIZE + (footprintPxWidth - rowPxWidth) / 2 + COWBOY_SLOT_STEP / 2;
+    const startY = building.tileY * TILE_SIZE + height * TILE_SIZE + COWBOY_SLOT_STEP / 2;
+
+    return {
+      x: startX + col * COWBOY_SLOT_STEP,
+      y: startY + row * COWBOY_SLOT_STEP,
+    };
+  }
+
   /**
    * Spawns POPULATION_PER_HOUSE sprites per House placement (population
    * capacity, not employment - employment is recomputed every tick and
@@ -924,7 +988,7 @@ export class MainScene extends Phaser.Scene {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image, animalImages, accentObjects } of this.buildingVisuals.values()) {
+      for (const { image, animalImages, accentObjects, cowboyImages } of this.buildingVisuals.values()) {
         image.destroy();
         for (const animalImage of animalImages) {
           this.tweens.killTweensOf(animalImage);
@@ -933,6 +997,9 @@ export class MainScene extends Phaser.Scene {
         for (const accentObject of accentObjects) {
           this.tweens.killTweensOf(accentObject);
           accentObject.destroy();
+        }
+        for (const cowboyImage of cowboyImages) {
+          cowboyImage.destroy();
         }
       }
       this.buildingVisuals.clear();

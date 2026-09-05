@@ -1,5 +1,8 @@
 import {
   BASE_STORAGE_CAP,
+  COWBOY_MAX_HP,
+  COWBOY_MAX_PER_BARRACKS,
+  COWBOY_TRAIN_COST,
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -133,6 +136,8 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     staffed: false,
     animalCount: 0,
     hp: definition.maxHp,
+    cowboyCount: 0,
+    cowboyHp: [],
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -251,6 +256,38 @@ export function buyAnimal(buildingId: string): boolean {
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('animal-bought', building);
+
+  return true;
+}
+
+/**
+ * Training a Cowboy is a hard buy-gate like buyAnimal, but with no Fence
+ * requirement (that rule is animal-specific): just the per-Barracks cap,
+ * affordability, and (Phase 21) not training out of a disabled 0 HP
+ * Barracks. Not gated on staffing - staffing only gates production, and a
+ * Barracks has none of its own.
+ */
+export function trainCowboy(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Barracks) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.cowboyCount >= COWBOY_MAX_PER_BARRACKS) {
+    return false;
+  }
+  if (money < COWBOY_TRAIN_COST) {
+    return false;
+  }
+
+  money -= COWBOY_TRAIN_COST;
+  building.cowboyCount += 1;
+  building.cowboyHp.push(COWBOY_MAX_HP);
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('cowboy-trained', building);
 
   return true;
 }
@@ -435,6 +472,14 @@ function runHpRegen(): void {
   for (const building of placedBuildings) {
     const maxHp = BUILDING_DEFINITIONS[building.type].maxHp;
     building.hp = Math.min(maxHp, building.hp + Math.ceil(maxHp * HP_REGEN_FRACTION));
+
+    // Empty for every non-Barracks building, so this is a no-op for them.
+    for (let i = 0; i < building.cowboyHp.length; i++) {
+      building.cowboyHp[i] = Math.min(
+        COWBOY_MAX_HP,
+        building.cowboyHp[i] + Math.ceil(COWBOY_MAX_HP * HP_REGEN_FRACTION),
+      );
+    }
   }
 }
 
