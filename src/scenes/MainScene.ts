@@ -1,12 +1,20 @@
 import Phaser from 'phaser';
-import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES, TILE_SIZE } from '../config/gameConfig';
+import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES, TILE_SIZE } from '../config/constants';
 import { generateTileMap } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
+import { BuildingType, buildingTextureKey } from '../config/buildingConfig';
+import { gameEvents } from '../state/gameEvents';
+import { canPlaceBuilding, placeBuilding } from '../state/gameState';
+
+const VALID_TINT = 0x00ff00;
+const INVALID_TINT = 0xff0000;
 
 export class MainScene extends Phaser.Scene {
   private infoText!: Phaser.GameObjects.Text;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  private selectedType: BuildingType | null = null;
+  private previewImage: Phaser.GameObjects.Image | null = null;
 
   constructor() {
     super('MainScene');
@@ -16,6 +24,7 @@ export class MainScene extends Phaser.Scene {
     this.buildTilemap();
     this.setupCameraDrag();
     this.setupInfoText();
+    this.setupBuildingPlacement();
   }
 
   private buildTilemap(): void {
@@ -48,7 +57,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupCameraDrag(): void {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.isDown) {
+      if (pointer.isDown && this.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
         const dy = pointer.y - this.lastPointerY;
         this.cameras.main.scrollX -= dx;
@@ -57,6 +66,7 @@ export class MainScene extends Phaser.Scene {
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
       this.updateInfoText(pointer);
+      this.updatePreview(pointer);
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
@@ -80,5 +90,86 @@ export class MainScene extends Phaser.Scene {
     const tileX = Math.floor(pointer.worldX / TILE_SIZE);
     const tileY = Math.floor(pointer.worldY / TILE_SIZE);
     this.infoText.setText(`tile: ${tileX}, ${tileY}`);
+  }
+
+  private setupBuildingPlacement(): void {
+    this.input.mouse?.disableContextMenu();
+
+    gameEvents.on('select-building', (type: BuildingType) => {
+      this.selectedType = type;
+      this.refreshPreviewTexture();
+    });
+
+    gameEvents.on('cancel-placement', () => {
+      this.cancelPlacement();
+    });
+
+    this.input.keyboard?.on('keydown-ESC', () => {
+      gameEvents.emit('cancel-placement');
+    });
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) {
+        gameEvents.emit('cancel-placement');
+        return;
+      }
+      if (this.selectedType !== null && pointer.leftButtonDown()) {
+        this.tryPlaceAt(pointer);
+      }
+    });
+  }
+
+  private refreshPreviewTexture(): void {
+    if (this.selectedType === null) {
+      return;
+    }
+
+    this.previewImage?.destroy();
+    this.previewImage = this.add.image(0, 0, buildingTextureKey(this.selectedType));
+    this.previewImage.setOrigin(0, 0);
+    this.previewImage.setAlpha(0.6);
+    this.previewImage.setDepth(500);
+  }
+
+  private cancelPlacement(): void {
+    this.selectedType = null;
+    this.previewImage?.destroy();
+    this.previewImage = null;
+  }
+
+  private updatePreview(pointer: Phaser.Input.Pointer): void {
+    if (this.selectedType === null || !this.previewImage) {
+      return;
+    }
+
+    const { tileX, tileY } = this.pointerToTile(pointer);
+    this.previewImage.setPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
+
+    const valid = canPlaceBuilding(tileX, tileY, this.selectedType);
+    this.previewImage.setTint(valid ? VALID_TINT : INVALID_TINT);
+  }
+
+  private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
+    if (this.selectedType === null) {
+      return;
+    }
+
+    const { tileX, tileY } = this.pointerToTile(pointer);
+    const building = placeBuilding(tileX, tileY, this.selectedType);
+    if (!building) {
+      return;
+    }
+
+    this.add
+      .image(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE, buildingTextureKey(building.type))
+      .setOrigin(0, 0)
+      .setDepth(10);
+  }
+
+  private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {
+    return {
+      tileX: Math.floor(pointer.worldX / TILE_SIZE),
+      tileY: Math.floor(pointer.worldY / TILE_SIZE),
+    };
   }
 }

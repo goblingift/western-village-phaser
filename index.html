@@ -13,9 +13,41 @@
       }
       #app {
         display: flex;
-        justify-content: center;
+        flex-direction: column;
         align-items: center;
         min-height: 100vh;
+        justify-content: center;
+      }
+      #building-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #111318;
+        border-top: 2px solid #333;
+        font-family: sans-serif;
+      }
+      #building-bar .money {
+        color: #ffd54f;
+        font-weight: bold;
+        margin-right: 12px;
+        min-width: 90px;
+      }
+      #building-bar button {
+        background: #2b2f38;
+        color: #fff;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 6px 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #building-bar button:hover {
+        background: #3a3f4b;
+      }
+      #building-bar button.active {
+        background: #4caf50;
+        border-color: #4caf50;
       }
     </style>
   </head>

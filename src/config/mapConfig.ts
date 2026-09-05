@@ -1,4 +1,4 @@
-import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from './gameConfig';
+import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from './constants';
 
 export enum TileType {
   Grass = 0,
