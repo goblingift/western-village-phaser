@@ -369,9 +369,13 @@ function runSupermarketSales(): void {
     resources.eggs -= soldEggs;
 
     const revenue = soldMeat * SUPERMARKET_SELL_RATES.meat.price + soldEggs * SUPERMARKET_SELL_RATES.eggs.price;
-    money += revenue;
+    money = Math.round((money + revenue) * 100) / 100;
 
-    building.lastSale = { meat: soldMeat, eggs: soldEggs, revenue };
+    building.lastSale = {
+      meat: Math.round(soldMeat * 10) / 10,
+      eggs: Math.round(soldEggs * 10) / 10,
+      revenue: Math.round(revenue * 100) / 100,
+    };
     building.active = soldMeat > 0 || soldEggs > 0;
   }
 }

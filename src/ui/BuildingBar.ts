@@ -46,6 +46,6 @@ export class BuildingBar {
   }
 
   private updateMoney(money: number): void {
-    this.moneyLabel.textContent = `Money: $${money}`;
+    this.moneyLabel.textContent = `Money: $${Math.round(money * 10) / 10}`;
   }
 }

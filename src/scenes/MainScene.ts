@@ -203,7 +203,7 @@ export class MainScene extends Phaser.Scene {
     const { rawMeat, meat, water, eggs } = getResources();
     const fmt = (n: number) => Math.round(n * 10) / 10;
     return (
-      `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)}\n` +
+      `Money: $${fmt(getMoney())} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)}\n` +
       `Population: ${getEmployedPopulation()}/${getTotalPopulation()} | Storage cap: ${getStorageCap()}`
     );
   }
