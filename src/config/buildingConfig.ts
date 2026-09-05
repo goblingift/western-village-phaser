@@ -33,6 +33,7 @@ export interface PlacedBuilding {
   tileX: number;
   tileY: number;
   active: boolean;
+  connected: boolean;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {

@@ -10,6 +10,7 @@ export interface GameEventMap {
   'resources-changed': (resources: Resources) => void;
   'production-tick': () => void;
   'building-selected': (building: PlacedBuilding | null) => void;
+  'connections-updated': () => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

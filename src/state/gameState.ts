@@ -78,6 +78,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     tileX,
     tileY,
     active: false,
+    connected: false,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -93,7 +94,96 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   gameEvents.emit('money-changed', money);
   gameEvents.emit('building-placed', building);
 
+  updateConnections();
+
   return building;
+}
+
+function tileHasOtherBuilding(x: number, y: number, excludeId: string): boolean {
+  if (x < 0 || y < 0 || x >= MAP_WIDTH_TILES || y >= MAP_HEIGHT_TILES) {
+    return false;
+  }
+  const id = occupancy[y][x];
+  return id !== null && id !== excludeId;
+}
+
+function orthogonalNeighbors(tileX: number, tileY: number): [number, number][] {
+  return [
+    [tileX, tileY - 1],
+    [tileX, tileY + 1],
+    [tileX - 1, tileY],
+    [tileX + 1, tileY],
+  ];
+}
+
+function collectAdjacentRoadIds(building: PlacedBuilding): Set<string> {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+  const roadIds = new Set<string>();
+
+  const addIfRoad = (nx: number, ny: number) => {
+    if (!tileHasOtherBuilding(nx, ny, building.id)) {
+      return;
+    }
+    const neighbor = buildingsById.get(occupancy[ny][nx]!);
+    if (neighbor?.type === BuildingType.Road) {
+      roadIds.add(neighbor.id);
+    }
+  };
+
+  for (let x = building.tileX; x < building.tileX + width; x++) {
+    addIfRoad(x, building.tileY - 1);
+    addIfRoad(x, building.tileY + height);
+  }
+  for (let y = building.tileY; y < building.tileY + height; y++) {
+    addIfRoad(building.tileX - 1, y);
+    addIfRoad(building.tileX + width, y);
+  }
+
+  return roadIds;
+}
+
+function isBuildingConnected(building: PlacedBuilding): boolean {
+  const queue = [...collectAdjacentRoadIds(building)];
+  const visited = new Set<string>(queue);
+
+  while (queue.length > 0) {
+    const roadId = queue.shift()!;
+    const road = buildingsById.get(roadId);
+    if (!road) {
+      continue;
+    }
+
+    for (const [x, y] of orthogonalNeighbors(road.tileX, road.tileY)) {
+      if (x < 0 || y < 0 || x >= MAP_WIDTH_TILES || y >= MAP_HEIGHT_TILES) {
+        continue;
+      }
+      const id = occupancy[y][x];
+      if (!id || id === building.id) {
+        continue;
+      }
+      const neighbor = buildingsById.get(id);
+      if (!neighbor) {
+        continue;
+      }
+      if (neighbor.type === BuildingType.Road) {
+        if (!visited.has(neighbor.id)) {
+          visited.add(neighbor.id);
+          queue.push(neighbor.id);
+        }
+      } else {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function updateConnections(): void {
+  for (const building of placedBuildings) {
+    building.connected = building.type === BuildingType.Road ? false : isBuildingConnected(building);
+  }
+  gameEvents.emit('connections-updated');
 }
 
 export function getBuildingAtTile(tileX: number, tileY: number): PlacedBuilding | null {
@@ -129,8 +219,9 @@ export function runProductionTick(): void {
     for (const [key, amount] of Object.entries(inputs) as [ResourceKey, number][]) {
       resources[key] -= amount;
     }
+    const bonus = building.connected ? 1.1 : 1;
     for (const [key, amount] of Object.entries(production.outputs ?? {}) as [ResourceKey, number][]) {
-      resources[key] += amount;
+      resources[key] += amount * bonus;
     }
     building.active = true;
   }
@@ -139,5 +230,10 @@ export function runProductionTick(): void {
   gameEvents.emit('production-tick');
 
   const activeCount = placedBuildings.filter((b) => b.active).length;
-  console.log('[tick]', { money, ...resources }, `${activeCount}/${placedBuildings.length} buildings active`);
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+  console.log(
+    '[tick]',
+    { money, rawMeat: round1(resources.rawMeat), meat: round1(resources.meat), water: round1(resources.water) },
+    `${activeCount}/${placedBuildings.length} buildings active`,
+  );
 }

@@ -8,7 +8,7 @@ import {
 } from '../config/constants';
 import { generateTileMap } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
-import { BuildingType, buildingTextureKey } from '../config/buildingConfig';
+import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, buildingTextureKey } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
 import {
   canPlaceBuilding,
@@ -32,6 +32,10 @@ export class MainScene extends Phaser.Scene {
   private pointerDownY = 0;
   private selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
+  private buildingVisuals = new Map<
+    string,
+    { building: PlacedBuilding; border: Phaser.GameObjects.Graphics }
+  >();
 
   constructor() {
     super('MainScene');
@@ -45,6 +49,7 @@ export class MainScene extends Phaser.Scene {
     this.setupBuildingPlacement();
     this.setupBuildingSelection();
     this.setupProductionTimer();
+    this.setupConnectionVisuals();
   }
 
   private buildTilemap(): void {
@@ -130,7 +135,8 @@ export class MainScene extends Phaser.Scene {
 
   private formatResourceText(): string {
     const { rawMeat, meat, water } = getResources();
-    return `Money: $${getMoney()} | Raw Meat: ${rawMeat} | Meat: ${meat} | Water: ${water}`;
+    const fmt = (n: number) => Math.round(n * 10) / 10;
+    return `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)}`;
   }
 
   private setupProductionTimer(): void {
@@ -230,6 +236,33 @@ export class MainScene extends Phaser.Scene {
       .image(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE, buildingTextureKey(building.type))
       .setOrigin(0, 0)
       .setDepth(10);
+
+    if (building.type !== BuildingType.Road) {
+      this.createConnectionBorder(building);
+    }
+  }
+
+  private setupConnectionVisuals(): void {
+    gameEvents.on('connections-updated', () => {
+      for (const { building, border } of this.buildingVisuals.values()) {
+        border.setVisible(building.connected);
+      }
+    });
+  }
+
+  private createConnectionBorder(building: PlacedBuilding): void {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const pixelWidth = width * TILE_SIZE;
+    const pixelHeight = height * TILE_SIZE;
+
+    const border = this.add.graphics();
+    border.lineStyle(3, 0x00ff00, 1);
+    border.strokeRect(1, 1, pixelWidth - 2, pixelHeight - 2);
+    border.setPosition(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE);
+    border.setDepth(20);
+    border.setVisible(building.connected);
+
+    this.buildingVisuals.set(building.id, { building, border });
   }
 
   private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {
