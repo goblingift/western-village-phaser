@@ -1,11 +1,6 @@
 import Phaser from 'phaser';
-import type { BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
+import type { BuildingType, PlacedBuilding } from '../config/buildingConfig';
 import type { GameOverSummary, Resources } from './gameState';
-
-export interface BuildingHarvestedPayload {
-  building: PlacedBuilding;
-  collected: Partial<Record<ResourceKey, number>>;
-}
 
 export interface GameEventMap {
   'select-building': (type: BuildingType) => void;
@@ -15,7 +10,6 @@ export interface GameEventMap {
   'resources-changed': (resources: Resources) => void;
   'production-tick': () => void;
   'building-selected': (building: PlacedBuilding | null) => void;
-  'building-harvested': (payload: BuildingHarvestedPayload) => void;
   'connections-updated': () => void;
   'timer-changed': (remainingSeconds: number) => void;
   'game-over': (summary: GameOverSummary) => void;

@@ -24,7 +24,6 @@ export class BuildingInfoPanel {
       this.render();
     });
     gameEvents.on('production-tick', () => this.render());
-    gameEvents.on('building-harvested', () => this.render());
   }
 
   private render(): void {
@@ -37,29 +36,26 @@ export class BuildingInfoPanel {
     const production = definition.production;
     const inputText = production?.inputs ? this.formatResourceMap(production.inputs) : null;
     const outputText = production?.outputs ? this.formatResourceMap(production.outputs) : null;
-    const bufferEntries = (Object.entries(this.selected.buffer) as [ResourceKey, number][]).filter(
-      ([, amount]) => amount > 0,
-    );
-    const readyText =
-      bufferEntries.length > 0
-        ? `Ready to collect: ${this.formatResourceMap(Object.fromEntries(bufferEntries))}`
-        : null;
     const fencedText = production?.requiresFence
       ? `Fenced: ${hasAdjacentFence(this.selected) ? 'Yes (full output)' : 'No (half output)'}`
       : null;
     const workersRequired = getWorkersRequired(this.selected.type);
     const workersText =
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
+    const statusText = production
+      ? `Production: ${this.selected.active ? 'On' : 'Off'}`
+      : definition.requiresWorkers
+        ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+        : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
-      <div>Production: ${production ? (this.selected.active ? 'On' : 'Off') : '—'}</div>
+      ${statusText ? `<div>${statusText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${fencedText ? `<div>${fencedText}</div>` : ''}
-      ${readyText ? `<div>${readyText} (click to collect)</div>` : ''}
     `;
   }
 

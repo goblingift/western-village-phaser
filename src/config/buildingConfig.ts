@@ -8,6 +8,7 @@ export enum BuildingType {
   PigFarm = 'PigFarm',
   CowRanch = 'CowRanch',
   Fence = 'Fence',
+  Warehouse = 'Warehouse',
 }
 
 export interface BuildingSize {
@@ -31,6 +32,8 @@ export interface BuildingDefinition {
   size: BuildingSize;
   color: number;
   production?: BuildingProduction;
+  /** Marks a non-production building (e.g. Warehouse) as still needing staff to function. */
+  requiresWorkers?: boolean;
 }
 
 export interface PlacedBuilding {
@@ -40,8 +43,6 @@ export interface PlacedBuilding {
   tileY: number;
   active: boolean;
   connected: boolean;
-  buffer: Partial<Record<ResourceKey, number>>;
-  ready: boolean;
   assignedWorkers: number;
   staffed: boolean;
 }
@@ -116,17 +117,27 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 1, height: 1 },
     color: 0xc9a063,
   },
+  [BuildingType.Warehouse]: {
+    type: BuildingType.Warehouse,
+    label: 'Warehouse',
+    cost: 150,
+    size: { width: 2, height: 2 },
+    color: 0x6d4c41,
+    requiresWorkers: true,
+  },
 };
 
 /**
- * Only buildings with a production chain need staff; workforce demand scales
- * with footprint (tile count / 2, rounded up: 1 for 1x1, 2 for 2x2) rather
- * than a hand-picked number per type, so new building types stay staffed
- * correctly without touching this function.
+ * Buildings with a production chain, or explicitly flagged via
+ * `requiresWorkers` (e.g. Warehouse, which has no production of its own but
+ * still needs staff to operate), need workers. Demand scales with footprint
+ * (tile count / 2, rounded up: 1 for 1x1, 2 for 2x2) rather than a
+ * hand-picked number per type, so new building types stay staffed correctly
+ * without touching this function.
  */
 export function getWorkersRequired(type: BuildingType): number {
   const definition = BUILDING_DEFINITIONS[type];
-  if (!definition.production) {
+  if (!definition.production && !definition.requiresWorkers) {
     return 0;
   }
   return Math.ceil((definition.size.width * definition.size.height) / 2);
