@@ -26,11 +26,13 @@ import {
   canPlaceBuilding,
   collectBuilding,
   getBuildingAtTile,
+  getEmployedPopulation,
   getFenceLinks,
   getMoney,
   getPlacedBuildings,
   getResources,
   getTotalMeatProduced,
+  getTotalPopulation,
   placeBuilding,
   runProductionTick,
   tickTimer,
@@ -196,12 +198,13 @@ export class MainScene extends Phaser.Scene {
 
     gameEvents.on('money-changed', () => this.resourceText.setText(this.formatResourceText()));
     gameEvents.on('resources-changed', () => this.resourceText.setText(this.formatResourceText()));
+    gameEvents.on('production-tick', () => this.resourceText.setText(this.formatResourceText()));
   }
 
   private formatResourceText(): string {
     const { rawMeat, meat, water, eggs } = getResources();
     const fmt = (n: number) => Math.round(n * 10) / 10;
-    return `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)}`;
+    return `Money: $${getMoney()} | Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)} | Population: ${getEmployedPopulation()}/${getTotalPopulation()}`;
   }
 
   private setupProductionTimer(): void {

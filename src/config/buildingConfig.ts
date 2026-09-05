@@ -42,6 +42,8 @@ export interface PlacedBuilding {
   connected: boolean;
   buffer: Partial<Record<ResourceKey, number>>;
   ready: boolean;
+  assignedWorkers: number;
+  staffed: boolean;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -115,6 +117,20 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0xc9a063,
   },
 };
+
+/**
+ * Only buildings with a production chain need staff; workforce demand scales
+ * with footprint (tile count / 2, rounded up: 1 for 1x1, 2 for 2x2) rather
+ * than a hand-picked number per type, so new building types stay staffed
+ * correctly without touching this function.
+ */
+export function getWorkersRequired(type: BuildingType): number {
+  const definition = BUILDING_DEFINITIONS[type];
+  if (!definition.production) {
+    return 0;
+  }
+  return Math.ceil((definition.size.width * definition.size.height) / 2);
+}
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
 

@@ -1,4 +1,4 @@
-import { BUILDING_DEFINITIONS, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
+import { BUILDING_DEFINITIONS, PlacedBuilding, ResourceKey, getWorkersRequired } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
 import { hasAdjacentFence } from '../state/gameState';
 
@@ -47,6 +47,9 @@ export class BuildingInfoPanel {
     const fencedText = production?.requiresFence
       ? `Fenced: ${hasAdjacentFence(this.selected) ? 'Yes (full output)' : 'No (half output)'}`
       : null;
+    const workersRequired = getWorkersRequired(this.selected.type);
+    const workersText =
+      workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
@@ -54,6 +57,7 @@ export class BuildingInfoPanel {
       <div>Production: ${production ? (this.selected.active ? 'On' : 'Off') : '—'}</div>
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
+      ${workersText ? `<div>${workersText}</div>` : ''}
       ${fencedText ? `<div>${fencedText}</div>` : ''}
       ${readyText ? `<div>${readyText} (click to collect)</div>` : ''}
     `;

@@ -3,8 +3,15 @@ import {
   HARVEST_BUFFER_CAP_MULTIPLIER,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
+  POPULATION_PER_HOUSE,
 } from '../config/constants';
-import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
+import {
+  BUILDING_DEFINITIONS,
+  BuildingType,
+  PlacedBuilding,
+  ResourceKey,
+  getWorkersRequired,
+} from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 
 export interface Resources {
@@ -29,6 +36,9 @@ const occupancy: (string | null)[][] = createEmptyOccupancy();
 let totalMeatProduced = 0;
 let remainingSeconds = GAME_DURATION_SECONDS;
 let gameOver = false;
+let totalPopulation = 0;
+let employedPopulation = 0;
+let idlePopulation = 0;
 
 function createEmptyOccupancy(): (string | null)[][] {
   const grid: (string | null)[][] = [];
@@ -56,6 +66,18 @@ export function getTotalMeatProduced(): number {
 
 export function isGameOver(): boolean {
   return gameOver;
+}
+
+export function getTotalPopulation(): number {
+  return totalPopulation;
+}
+
+export function getEmployedPopulation(): number {
+  return employedPopulation;
+}
+
+export function getIdlePopulation(): number {
+  return idlePopulation;
 }
 
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
@@ -107,6 +129,8 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     connected: false,
     buffer: {},
     ready: false,
+    assignedWorkers: 0,
+    staffed: false,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -279,14 +303,55 @@ export function getPlacedBuildings(): readonly PlacedBuilding[] {
   return placedBuildings;
 }
 
+/**
+ * Recomputed from scratch every tick (not persisted on the building) so that
+ * placing/losing a House immediately affects staffing on the very next tick,
+ * with no stale "still employed" state to invalidate.
+ */
+function assignWorkforce(): void {
+  const houseCount = placedBuildings.filter((building) => building.type === BuildingType.House).length;
+  totalPopulation = houseCount * POPULATION_PER_HOUSE;
+
+  let available = totalPopulation;
+  let employed = 0;
+
+  for (const building of placedBuildings) {
+    const workersRequired = getWorkersRequired(building.type);
+    if (workersRequired <= 0) {
+      building.assignedWorkers = 0;
+      building.staffed = true;
+      continue;
+    }
+
+    // First-come-first-served in placement order: a building's assignment is
+    // capped at whatever population remains, so once the pool runs dry every
+    // later building in the list gets zero workers this tick.
+    const assigned = Math.min(available, workersRequired);
+    building.assignedWorkers = assigned;
+    building.staffed = assigned === workersRequired;
+    available -= assigned;
+    employed += assigned;
+  }
+
+  employedPopulation = employed;
+  idlePopulation = available;
+}
+
 export function runProductionTick(): void {
   if (gameOver) {
     return;
   }
 
+  assignWorkforce();
+
   for (const building of placedBuildings) {
     const production = BUILDING_DEFINITIONS[building.type].production;
     if (!production) {
+      building.active = false;
+      continue;
+    }
+
+    if (!building.staffed) {
       building.active = false;
       continue;
     }
@@ -397,6 +462,9 @@ export function resetGame(): void {
   totalMeatProduced = 0;
   remainingSeconds = GAME_DURATION_SECONDS;
   gameOver = false;
+  totalPopulation = 0;
+  employedPopulation = 0;
+  idlePopulation = 0;
 
   placedBuildings.length = 0;
   buildingsById.clear();
