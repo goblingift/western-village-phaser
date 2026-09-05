@@ -53,6 +53,12 @@ const MINIMAP_BUILDING_DOT_SIZE = 3;
 const ANIMAL_SPRITE_DEPTH = 11;
 const ANIMAL_SLOT_GAP = 2;
 const ANIMAL_SLOT_STEP = ANIMAL_SPRITE_SIZE + ANIMAL_SLOT_GAP;
+const ANIMAL_WANDER_RADIUS_MIN = 10;
+const ANIMAL_WANDER_RADIUS_MAX = 12;
+const ANIMAL_WANDER_BOB_PX = 4;
+const ANIMAL_WANDER_DURATION_MIN_MS = 900;
+const ANIMAL_WANDER_DURATION_MAX_MS = 1600;
+const ANIMAL_WANDER_DELAY_MAX_MS = 1000;
 
 interface BuildingVisual {
   building: PlacedBuilding;
@@ -539,6 +545,7 @@ export class MainScene extends Phaser.Scene {
   /** Only called on placement and 'animal-bought' (i.e. when animalCount actually changes), never per production tick. */
   private redrawAnimalSprites(visual: BuildingVisual): void {
     for (const animalImage of visual.animalImages) {
+      this.tweens.killTweensOf(animalImage);
       animalImage.destroy();
     }
     visual.animalImages = [];
@@ -554,7 +561,42 @@ export class MainScene extends Phaser.Scene {
         .image(slot.x, slot.y, ANIMALS_ATLAS_KEY, animalTextureKey(animalConfig.animalLabel))
         .setDepth(ANIMAL_SPRITE_DEPTH);
       visual.animalImages.push(animalImage);
+      this.startAnimalWander(animalImage, slot);
     }
+  }
+
+  /**
+   * Confined wander: a single yoyo-ing tween drifts the sprite between its
+   * slot anchor and a randomized offset point (+ a subtle vertical bob),
+   * looping forever. `direction` records which way the sprite faces during
+   * the outbound half of the cycle; `onYoyo` (outbound leg finished, tween
+   * reverses back toward the anchor) and `onRepeat` (return leg finished,
+   * tween restarts outbound) fire exactly at the two points the movement
+   * direction flips, so flipping the sprite there is enough to always face
+   * the way it's currently moving without tracking position every frame.
+   */
+  private startAnimalWander(animalImage: Phaser.GameObjects.Image, slot: { x: number; y: number }): void {
+    const radiusX = Phaser.Math.Between(ANIMAL_WANDER_RADIUS_MIN, ANIMAL_WANDER_RADIUS_MAX);
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const targetX = slot.x + radiusX * direction;
+    const targetY = slot.y + Phaser.Math.Between(-ANIMAL_WANDER_BOB_PX, ANIMAL_WANDER_BOB_PX);
+    const duration = Phaser.Math.Between(ANIMAL_WANDER_DURATION_MIN_MS, ANIMAL_WANDER_DURATION_MAX_MS);
+    const delay = Phaser.Math.Between(0, ANIMAL_WANDER_DELAY_MAX_MS);
+
+    animalImage.setFlipX(direction < 0);
+
+    this.tweens.add({
+      targets: animalImage,
+      x: targetX,
+      y: targetY,
+      duration,
+      delay,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+      onYoyo: () => animalImage.setFlipX(direction >= 0),
+      onRepeat: () => animalImage.setFlipX(direction < 0),
+    });
   }
 
   /**
@@ -589,6 +631,7 @@ export class MainScene extends Phaser.Scene {
       for (const { image, animalImages } of this.buildingVisuals.values()) {
         image.destroy();
         for (const animalImage of animalImages) {
+          this.tweens.killTweensOf(animalImage);
           animalImage.destroy();
         }
       }
