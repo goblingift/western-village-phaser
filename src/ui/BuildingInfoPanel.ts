@@ -1,4 +1,10 @@
-import { BUILDING_DEFINITIONS, PlacedBuilding, ResourceKey, getWorkersRequired } from '../config/buildingConfig';
+import {
+  BUILDING_DEFINITIONS,
+  BuildingType,
+  PlacedBuilding,
+  ResourceKey,
+  getWorkersRequired,
+} from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
 import { hasAdjacentFence } from '../state/gameState';
 
@@ -42,21 +48,42 @@ export class BuildingInfoPanel {
     const workersRequired = getWorkersRequired(this.selected.type);
     const workersText =
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
+    const isSupermarket = this.selected.type === BuildingType.Supermarket;
     const statusText = production
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
-      : definition.requiresWorkers
+      : definition.requiresWorkers && !isSupermarket
         ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
         : null;
+    const saleText = isSupermarket ? this.formatSaleText(this.selected) : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
       ${statusText ? `<div>${statusText}</div>` : ''}
+      ${saleText ? `<div>${saleText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${fencedText ? `<div>${fencedText}</div>` : ''}
     `;
+  }
+
+  private formatSaleText(building: PlacedBuilding): string {
+    const sale = building.lastSale;
+    if (sale && (sale.meat > 0 || sale.eggs > 0)) {
+      const parts: string[] = [];
+      if (sale.meat > 0) {
+        parts.push(`${sale.meat} Meat`);
+      }
+      if (sale.eggs > 0) {
+        parts.push(`${sale.eggs} ${sale.eggs === 1 ? 'Egg' : 'Eggs'}`);
+      }
+      return `Sold: ${parts.join(', ')} -> +$${sale.revenue}`;
+    }
+    if (!building.staffed) {
+      return 'Not selling (understaffed)';
+    }
+    return 'No stock to sell';
   }
 
   private formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {

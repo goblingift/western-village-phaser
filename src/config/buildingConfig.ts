@@ -9,6 +9,7 @@ export enum BuildingType {
   CowRanch = 'CowRanch',
   Fence = 'Fence',
   Warehouse = 'Warehouse',
+  Supermarket = 'Supermarket',
 }
 
 export interface BuildingSize {
@@ -36,6 +37,12 @@ export interface BuildingDefinition {
   requiresWorkers?: boolean;
 }
 
+export interface SupermarketSale {
+  meat: number;
+  eggs: number;
+  revenue: number;
+}
+
 export interface PlacedBuilding {
   id: string;
   type: BuildingType;
@@ -45,6 +52,8 @@ export interface PlacedBuilding {
   connected: boolean;
   assignedWorkers: number;
   staffed: boolean;
+  /** Only meaningful for Supermarket; last tick's autonomous sale, if any. */
+  lastSale?: SupermarketSale;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -125,6 +134,14 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0x6d4c41,
     requiresWorkers: true,
   },
+  [BuildingType.Supermarket]: {
+    type: BuildingType.Supermarket,
+    label: 'Supermarket',
+    cost: 200,
+    size: { width: 2, height: 2 },
+    color: 0x8e24aa,
+    requiresWorkers: true,
+  },
 };
 
 /**
@@ -142,6 +159,16 @@ export function getWorkersRequired(type: BuildingType): number {
   }
   return Math.ceil((definition.size.width * definition.size.height) / 2);
 }
+
+/**
+ * Per-tick sell allotment for a staffed+active Supermarket. Not part of
+ * BuildingProduction because selling reads/writes the resource pool and
+ * Money directly rather than following the input->output production shape.
+ */
+export const SUPERMARKET_SELL_RATES: Record<'meat' | 'eggs', { amount: number; price: number }> = {
+  meat: { amount: 2, price: 5 },
+  eggs: { amount: 2, price: 3 },
+};
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
 
@@ -172,6 +199,12 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.production?.outputs) {
     parts.push(`Produces: ${formatResourceMap(definition.production.outputs)}`);
+  }
+  if (definition.type === BuildingType.Supermarket) {
+    const { meat, eggs } = SUPERMARKET_SELL_RATES;
+    parts.push(
+      `Sells: ${meat.amount} Meat @$${meat.price}, ${eggs.amount} Eggs @$${eggs.price} per tick`,
+    );
   }
   return parts.join(' | ');
 }

@@ -11,6 +11,7 @@ import {
   BuildingType,
   PlacedBuilding,
   ResourceKey,
+  SUPERMARKET_SELL_RATES,
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
@@ -343,6 +344,38 @@ export function getStorageCap(): number {
   return BASE_STORAGE_CAP + WAREHOUSE_STORAGE_BONUS * staffedWarehouses;
 }
 
+/**
+ * Supermarkets don't fit the input->output production shape: they read/write
+ * the shared resource pool and Money directly, and "active" reflects whether
+ * a sale actually happened this tick rather than whether inputs were
+ * available. Run as a separate pass after normal production so a Supermarket
+ * can sell Meat/Eggs that other buildings produced earlier in the same tick.
+ */
+function runSupermarketSales(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Supermarket) {
+      continue;
+    }
+
+    if (!building.staffed) {
+      building.active = false;
+      building.lastSale = { meat: 0, eggs: 0, revenue: 0 };
+      continue;
+    }
+
+    const soldMeat = Math.min(SUPERMARKET_SELL_RATES.meat.amount, resources.meat);
+    const soldEggs = Math.min(SUPERMARKET_SELL_RATES.eggs.amount, resources.eggs);
+    resources.meat -= soldMeat;
+    resources.eggs -= soldEggs;
+
+    const revenue = soldMeat * SUPERMARKET_SELL_RATES.meat.price + soldEggs * SUPERMARKET_SELL_RATES.eggs.price;
+    money += revenue;
+
+    building.lastSale = { meat: soldMeat, eggs: soldEggs, revenue };
+    building.active = soldMeat > 0 || soldEggs > 0;
+  }
+}
+
 export function runProductionTick(): void {
   if (gameOver) {
     return;
@@ -392,6 +425,9 @@ export function runProductionTick(): void {
     building.active = true;
   }
 
+  runSupermarketSales();
+
+  gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
   gameEvents.emit('production-tick');
 

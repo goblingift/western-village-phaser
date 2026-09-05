@@ -234,6 +234,28 @@ const WAREHOUSE_SPRITE: PixelSprite = {
   ],
 };
 
+const SUPERMARKET_SPRITE: PixelSprite = {
+  palette: { S: 0x3e2723, R: 0x8e24aa, A: 0xce93d8, B: 0xefebe9, D: 0x5d4037, W: 0xffffff, G: 0x2e7d32 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    '.AAAAAAAAAAAAAA.',
+    'AAAAAAAAAAAAAAAA',
+    'SSSSSSSSSSSSSSSS',
+    'SBBBBBBBBBBBBBBS',
+    'SBBWWWWWWWWWWBBS',
+    'SBBWGGWWWWGGWBBS',
+    'SBBWWWWWWWWWWBBS',
+    'SBBBBBBBBBBBBBBS',
+    'SBBBBRRRRBBBBBBS',
+    'SBBBBRDDRBBBBBBS',
+    'SBBBBRDDRBBBBBBS',
+    'SBBBBBBBBBBBBBBS',
+    'SBBBBBBBBBBBBBBS',
+    'SDDDDDDDDDDDDDDS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const FENCE_SPRITE: PixelSprite = {
   palette: { F: 0xc9a063, D: 0x8d6748 },
   pattern: [
@@ -259,6 +281,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CowRanch]: COW_RANCH_SPRITE,
   [BuildingType.Fence]: FENCE_SPRITE,
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
+  [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
 };
 
 function drawPixelSprite(
