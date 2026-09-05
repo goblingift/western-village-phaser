@@ -1,4 +1,4 @@
-import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from '../config/constants';
+import { GAME_DURATION_SECONDS, MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from '../config/constants';
 import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 
@@ -8,6 +8,11 @@ export interface Resources {
   water: number;
 }
 
+export interface GameOverSummary {
+  totalMeatProduced: number;
+  buildingCounts: Record<BuildingType, number>;
+}
+
 const STARTING_MONEY = 500;
 
 let money = STARTING_MONEY;
@@ -15,6 +20,9 @@ const resources: Resources = { rawMeat: 0, meat: 0, water: 0 };
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
+let totalMeatProduced = 0;
+let remainingSeconds = GAME_DURATION_SECONDS;
+let gameOver = false;
 
 function createEmptyOccupancy(): (string | null)[][] {
   const grid: (string | null)[][] = [];
@@ -30,6 +38,18 @@ export function getMoney(): number {
 
 export function getResources(): Readonly<Resources> {
   return resources;
+}
+
+export function getRemainingSeconds(): number {
+  return remainingSeconds;
+}
+
+export function getTotalMeatProduced(): number {
+  return totalMeatProduced;
+}
+
+export function isGameOver(): boolean {
+  return gameOver;
 }
 
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
@@ -199,6 +219,10 @@ export function getBuildingById(id: string): PlacedBuilding | null {
 }
 
 export function runProductionTick(): void {
+  if (gameOver) {
+    return;
+  }
+
   for (const building of placedBuildings) {
     const production = BUILDING_DEFINITIONS[building.type].production;
     if (!production) {
@@ -221,7 +245,11 @@ export function runProductionTick(): void {
     }
     const bonus = building.connected ? 1.1 : 1;
     for (const [key, amount] of Object.entries(production.outputs ?? {}) as [ResourceKey, number][]) {
-      resources[key] += amount * bonus;
+      const produced = amount * bonus;
+      resources[key] += produced;
+      if (key === 'meat') {
+        totalMeatProduced += produced;
+      }
     }
     building.active = true;
   }
@@ -236,4 +264,58 @@ export function runProductionTick(): void {
     { money, rawMeat: round1(resources.rawMeat), meat: round1(resources.meat), water: round1(resources.water) },
     `${activeCount}/${placedBuildings.length} buildings active`,
   );
+}
+
+export function tickTimer(): void {
+  if (gameOver) {
+    return;
+  }
+
+  remainingSeconds -= 1;
+  gameEvents.emit('timer-changed', remainingSeconds);
+
+  if (remainingSeconds <= 0) {
+    endGame();
+  }
+}
+
+function countBuildingsByType(): Record<BuildingType, number> {
+  const counts = {} as Record<BuildingType, number>;
+  for (const type of Object.values(BuildingType)) {
+    counts[type] = 0;
+  }
+  for (const building of placedBuildings) {
+    counts[building.type] += 1;
+  }
+  return counts;
+}
+
+function endGame(): void {
+  gameOver = true;
+  gameEvents.emit('game-over', {
+    totalMeatProduced: Math.round(totalMeatProduced * 10) / 10,
+    buildingCounts: countBuildingsByType(),
+  });
+}
+
+export function resetGame(): void {
+  money = STARTING_MONEY;
+  resources.rawMeat = 0;
+  resources.meat = 0;
+  resources.water = 0;
+  totalMeatProduced = 0;
+  remainingSeconds = GAME_DURATION_SECONDS;
+  gameOver = false;
+
+  placedBuildings.length = 0;
+  buildingsById.clear();
+  for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
+    occupancy[y].fill(null);
+  }
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('resources-changed', { ...resources });
+  gameEvents.emit('timer-changed', remainingSeconds);
+  gameEvents.emit('connections-updated');
+  gameEvents.emit('game-reset');
 }

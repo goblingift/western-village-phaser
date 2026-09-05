@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { BuildingType, PlacedBuilding } from '../config/buildingConfig';
-import type { Resources } from './gameState';
+import type { GameOverSummary, Resources } from './gameState';
 
 export interface GameEventMap {
   'select-building': (type: BuildingType) => void;
@@ -11,6 +11,9 @@ export interface GameEventMap {
   'production-tick': () => void;
   'building-selected': (building: PlacedBuilding | null) => void;
   'connections-updated': () => void;
+  'timer-changed': (remainingSeconds: number) => void;
+  'game-over': (summary: GameOverSummary) => void;
+  'game-reset': () => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}
