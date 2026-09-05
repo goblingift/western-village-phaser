@@ -13,6 +13,10 @@ export enum BuildingType {
   Warehouse = 'Warehouse',
   Supermarket = 'Supermarket',
   Barracks = 'Barracks',
+  Sewery = 'Sewery',
+  Forestry = 'Forestry',
+  WoodCutter = 'WoodCutter',
+  PotatoField = 'PotatoField',
 }
 
 export interface BuildingSize {
@@ -20,7 +24,16 @@ export interface BuildingSize {
   height: number;
 }
 
-export type ResourceKey = 'rawMeat' | 'meat' | 'water' | 'eggs';
+export type ResourceKey =
+  | 'rawMeat'
+  | 'meat'
+  | 'water'
+  | 'eggs'
+  | 'leather'
+  | 'clothes'
+  | 'logs'
+  | 'wood'
+  | 'potatoes';
 
 export interface BuildingProduction {
   inputs?: Partial<Record<ResourceKey, number>>;
@@ -57,8 +70,7 @@ export interface BuildingDefinition {
 }
 
 export interface SupermarketSale {
-  meat: number;
-  eggs: number;
+  sold: Partial<Record<SupermarketSellableKey, number>>;
   revenue: number;
 }
 
@@ -98,7 +110,12 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 2, height: 2 },
     color: 0xa1887f,
     production: {},
-    animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.2 } },
+    animal: {
+      animalLabel: 'Cow',
+      costPerAnimal: 20,
+      maxAnimals: 5,
+      outputPerAnimal: { rawMeat: 0.2, leather: 0.05 },
+    },
     maxHp: 80,
   },
   [BuildingType.Butcher]: {
@@ -162,7 +179,12 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 2, height: 2 },
     color: 0xbca88a,
     production: {},
-    animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.5 } },
+    animal: {
+      animalLabel: 'Cow',
+      costPerAnimal: 20,
+      maxAnimals: 5,
+      outputPerAnimal: { rawMeat: 0.5, leather: 0.1 },
+    },
     maxHp: 100,
   },
   [BuildingType.Fence]: {
@@ -200,6 +222,42 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     requiresWorkers: true,
     maxHp: 100,
   },
+  [BuildingType.Sewery]: {
+    type: BuildingType.Sewery,
+    label: 'Sewery',
+    cost: 130,
+    size: { width: 2, height: 2 },
+    color: 0x8d6e4a,
+    production: { inputs: { leather: 1 }, outputs: { clothes: 1 } },
+    maxHp: 80,
+  },
+  [BuildingType.Forestry]: {
+    type: BuildingType.Forestry,
+    label: 'Forestry',
+    cost: 60,
+    size: { width: 2, height: 2 },
+    color: 0x2e7d32,
+    production: { outputs: { logs: 1.2 } },
+    maxHp: 45,
+  },
+  [BuildingType.WoodCutter]: {
+    type: BuildingType.WoodCutter,
+    label: 'Wood-cutter',
+    cost: 100,
+    size: { width: 2, height: 2 },
+    color: 0x6d4c41,
+    production: { inputs: { logs: 1 }, outputs: { wood: 1 } },
+    maxHp: 80,
+  },
+  [BuildingType.PotatoField]: {
+    type: BuildingType.PotatoField,
+    label: 'Potato Field',
+    cost: 90,
+    size: { width: 2, height: 2 },
+    color: 0xc9a063,
+    production: { outputs: { potatoes: 1.2 } },
+    maxHp: 45,
+  },
 };
 
 /**
@@ -223,9 +281,14 @@ export function getWorkersRequired(type: BuildingType): number {
  * BuildingProduction because selling reads/writes the resource pool and
  * Money directly rather than following the input->output production shape.
  */
-export const SUPERMARKET_SELL_RATES: Record<'meat' | 'eggs', { amount: number; price: number }> = {
+export type SupermarketSellableKey = 'meat' | 'eggs' | 'potatoes' | 'wood' | 'clothes';
+
+export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: number; price: number }> = {
   meat: { amount: 2, price: 5 },
   eggs: { amount: 2, price: 3 },
+  potatoes: { amount: 2, price: 2 },
+  wood: { amount: 2, price: 3 },
+  clothes: { amount: 2, price: 15 },
 };
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
@@ -340,6 +403,11 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   meat: 'Meat',
   water: 'Water',
   eggs: 'Eggs',
+  leather: 'Leather',
+  clothes: 'Clothes',
+  logs: 'Logs',
+  wood: 'Wood',
+  potatoes: 'Potatoes',
 };
 
 function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
@@ -365,10 +433,10 @@ export function describeBuilding(definition: BuildingDefinition): string {
     parts.push(`Produces per ${animalLabel}: ${formatResourceMap(outputPerAnimal)}`);
   }
   if (definition.type === BuildingType.Supermarket) {
-    const { meat, eggs } = SUPERMARKET_SELL_RATES;
-    parts.push(
-      `Sells: ${meat.amount} Meat @$${meat.price}, ${eggs.amount} Eggs @$${eggs.price} per tick`,
-    );
+    const sellText = (Object.entries(SUPERMARKET_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
+      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} @$${price}`)
+      .join(', ');
+    parts.push(`Sells: ${sellText} per tick`);
   }
   if (definition.type === BuildingType.Barracks) {
     parts.push(`Cowboys: $${COWBOY_TRAIN_COST} each, up to ${COWBOY_MAX_PER_BARRACKS}`);

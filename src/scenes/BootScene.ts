@@ -360,6 +360,106 @@ const BARRACKS_SPRITE: PixelSprite = {
   ],
 };
 
+const SEWERY_SPRITE: PixelSprite = {
+  // Cloth bolt (C/G striped bands) hangs in the window in place of Butcher's
+  // cleaver; the yard swaps its fence line for a tan hide stretched across a
+  // drying rack (H rows 12-13, P posts either side) - a tannery detail.
+  palette: { S: 0x3e2723, R: 0x6d4c41, B: 0x8d6748, P: 0x7a5a3d, C: 0xad1457, G: 0xf9a825, D: 0x4e342e, H: 0xc9a063 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPCCCCBPBPBPS',
+    'SBPBPGGGGBPBPBPS',
+    'SBPBPCCCCBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'PP..PP..PP..PP..',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'PP..PP..PP..PP..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const FORESTRY_SPRITE: PixelSprite = {
+  // No building walls at all - a dense stand of three pine trees (G/L
+  // canopy tiers, T trunks) over a log pile (K logs, E cut ends) instead of
+  // a facade, since Forestry is an outdoor gathering site like Well.
+  palette: { G: 0x1b5e20, L: 0x2e7d32, T: 0x4e342e, S: 0x6d4c41, K: 0x8d6748, E: 0xd7ccc8 },
+  pattern: [
+    '..G.....G....G..',
+    '..G.....G....G..',
+    '.GGG...GGG..GGG.',
+    '.LLL...LLL..LLL.',
+    '.GGG...GGG..GGG.',
+    'LLLLL.LLLLLLLLLL',
+    'GGGGG.GGGGGGGGGG',
+    'LLLLL.LLLLLLLLLL',
+    '..T.....T....T..',
+    '..T.....T....T..',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSEKKKKKKKKESSS',
+    'SSEKKKKKKKKKKESS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const WOOD_CUTTER_SPRITE: PixelSprite = {
+  // Grey tin roof (sawmill, not a farm's red barn roof) and a circular saw
+  // blade (W ring, D axle) set in the wall in place of Butcher's cleaver;
+  // the yard swaps the fence line for stacked logs (K) instead.
+  palette: { S: 0x3e2723, R: 0x757575, B: 0xa1887f, P: 0x8a7266, W: 0xb0bec5, D: 0x5d4037, K: 0x8d6748 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPWWWWBPBPBPS',
+    'SBPBPWDDWBPBPBPS',
+    'SBPBPWDDWBPBPBPS',
+    'SBPBPWWWWBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'KK..KK..KK..KK..',
+    '................',
+    '................',
+    'KK..KK..KK..KK..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const POTATO_FIELD_SPRITE: PixelSprite = {
+  // No walls, like Forestry: tilled soil ridges (D) alternate with troughs
+  // (L), green sprigs (G) dot every ridge, and a row of exposed tan tubers
+  // (T) near the bottom reads as harvest-ready potatoes.
+  palette: { D: 0x4e342e, L: 0x6d4c41, G: 0x4caf50, T: 0xc9a063 },
+  pattern: [
+    'DDDDDDDDDDDDDDDD',
+    'DG..DG..DG..DG..',
+    'LLLLLLLLLLLLLLLL',
+    'DDDDDDDDDDDDDDDD',
+    'DG..DG..DG..DG..',
+    'LLLLLLLLLLLLLLLL',
+    'DDDDDDDDDDDDDDDD',
+    'DG..DG..DG..DG..',
+    'LLLLLLLLLLLLLLLL',
+    'DDDDDDDDDDDDDDDD',
+    'DG..DG..DG..DG..',
+    'LLLLLLLLLLLLLLLL',
+    'DDDDDDDDDDDDDDDD',
+    'DDDTTDDDDTTDDDTT',
+    'LLLLLLLLLLLLLLLL',
+    'DDDDDDDDDDDDDDDD',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -373,6 +473,10 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
   [BuildingType.Barracks]: BARRACKS_SPRITE,
+  [BuildingType.Sewery]: SEWERY_SPRITE,
+  [BuildingType.Forestry]: FORESTRY_SPRITE,
+  [BuildingType.WoodCutter]: WOOD_CUTTER_SPRITE,
+  [BuildingType.PotatoField]: POTATO_FIELD_SPRITE,
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {

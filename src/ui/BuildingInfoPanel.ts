@@ -15,6 +15,11 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   meat: 'Meat',
   water: 'Water',
   eggs: 'Eggs',
+  leather: 'Leather',
+  clothes: 'Clothes',
+  logs: 'Logs',
+  wood: 'Wood',
+  potatoes: 'Potatoes',
 };
 
 export class BuildingInfoPanel {
@@ -139,14 +144,11 @@ export class BuildingInfoPanel {
 
   private formatSaleText(building: PlacedBuilding): string {
     const sale = building.lastSale;
-    if (sale && (sale.meat > 0 || sale.eggs > 0)) {
-      const parts: string[] = [];
-      if (sale.meat > 0) {
-        parts.push(`${sale.meat} Meat`);
-      }
-      if (sale.eggs > 0) {
-        parts.push(`${sale.eggs} ${sale.eggs === 1 ? 'Egg' : 'Eggs'}`);
-      }
+    const soldEntries = sale
+      ? (Object.entries(sale.sold) as [ResourceKey, number][]).filter(([, amount]) => amount > 0)
+      : [];
+    if (sale && soldEntries.length > 0) {
+      const parts = soldEntries.map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]}`);
       return `Sold: ${parts.join(', ')} -> +$${sale.revenue}`;
     }
     if (!building.staffed) {

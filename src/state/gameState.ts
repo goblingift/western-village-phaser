@@ -15,6 +15,7 @@ import {
   PlacedBuilding,
   ResourceKey,
   SUPERMARKET_SELL_RATES,
+  SupermarketSellableKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
@@ -24,6 +25,11 @@ export interface Resources {
   meat: number;
   water: number;
   eggs: number;
+  leather: number;
+  clothes: number;
+  logs: number;
+  wood: number;
+  potatoes: number;
 }
 
 export interface GameOverSummary {
@@ -34,7 +40,17 @@ export interface GameOverSummary {
 const STARTING_MONEY = 500;
 
 let money = STARTING_MONEY;
-const resources: Resources = { rawMeat: 0, meat: 0, water: 0, eggs: 0 };
+const resources: Resources = {
+  rawMeat: 0,
+  meat: 0,
+  water: 0,
+  eggs: 0,
+  leather: 0,
+  clothes: 0,
+  logs: 0,
+  wood: 0,
+  potatoes: 0,
+};
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
@@ -440,24 +456,31 @@ function runSupermarketSales(): void {
 
     if (!building.staffed) {
       building.active = false;
-      building.lastSale = { meat: 0, eggs: 0, revenue: 0 };
+      building.lastSale = { sold: {}, revenue: 0 };
       continue;
     }
 
-    const soldMeat = Math.min(SUPERMARKET_SELL_RATES.meat.amount, resources.meat);
-    const soldEggs = Math.min(SUPERMARKET_SELL_RATES.eggs.amount, resources.eggs);
-    resources.meat -= soldMeat;
-    resources.eggs -= soldEggs;
+    const sold: Partial<Record<SupermarketSellableKey, number>> = {};
+    let revenue = 0;
+    let anySold = false;
 
-    const revenue = soldMeat * SUPERMARKET_SELL_RATES.meat.price + soldEggs * SUPERMARKET_SELL_RATES.eggs.price;
+    for (const [key, rate] of Object.entries(SUPERMARKET_SELL_RATES) as [SupermarketSellableKey, { amount: number; price: number }][]) {
+      const soldAmount = Math.min(rate.amount, resources[key]);
+      resources[key] -= soldAmount;
+      revenue += soldAmount * rate.price;
+      sold[key] = Math.round(soldAmount * 10) / 10;
+      if (soldAmount > 0) {
+        anySold = true;
+      }
+    }
+
     money = Math.round((money + revenue) * 100) / 100;
 
     building.lastSale = {
-      meat: Math.round(soldMeat * 10) / 10,
-      eggs: Math.round(soldEggs * 10) / 10,
+      sold,
       revenue: Math.round(revenue * 100) / 100,
     };
-    building.active = soldMeat > 0 || soldEggs > 0;
+    building.active = anySold;
   }
 }
 
@@ -613,6 +636,11 @@ export function resetGame(): void {
   resources.meat = 0;
   resources.water = 0;
   resources.eggs = 0;
+  resources.leather = 0;
+  resources.clothes = 0;
+  resources.logs = 0;
+  resources.wood = 0;
+  resources.potatoes = 0;
   totalMeatProduced = 0;
   remainingSeconds = GAME_DURATION_SECONDS;
   gameOver = false;
