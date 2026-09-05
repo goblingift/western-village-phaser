@@ -14,7 +14,9 @@ import {
   BuildingType,
   PlacedBuilding,
   ResourceKey,
+  SALOON_SELL_RATES,
   SUPERMARKET_SELL_RATES,
+  SaloonSellableKey,
   SupermarketSellableKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -30,6 +32,7 @@ export interface Resources {
   logs: number;
   wood: number;
   potatoes: number;
+  liquor: number;
 }
 
 export interface GameOverSummary {
@@ -50,6 +53,7 @@ const resources: Resources = {
   logs: 0,
   wood: 0,
   potatoes: 0,
+  liquor: 0,
 };
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
@@ -484,6 +488,47 @@ function runSupermarketSales(): void {
   }
 }
 
+/**
+ * Mirrors runSupermarketSales but reads/writes Saloon's own saloonSale field
+ * against SALOON_SELL_RATES - a separate pass rather than a shared loop so
+ * Supermarket's rate table/sale field stay untouched by this addition.
+ */
+function runSaloonSales(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Saloon) {
+      continue;
+    }
+
+    if (!building.staffed) {
+      building.active = false;
+      building.saloonSale = { sold: {}, revenue: 0 };
+      continue;
+    }
+
+    const sold: Partial<Record<SaloonSellableKey, number>> = {};
+    let revenue = 0;
+    let anySold = false;
+
+    for (const [key, rate] of Object.entries(SALOON_SELL_RATES) as [SaloonSellableKey, { amount: number; price: number }][]) {
+      const soldAmount = Math.min(rate.amount, resources[key]);
+      resources[key] -= soldAmount;
+      revenue += soldAmount * rate.price;
+      sold[key] = Math.round(soldAmount * 10) / 10;
+      if (soldAmount > 0) {
+        anySold = true;
+      }
+    }
+
+    money = Math.round((money + revenue) * 100) / 100;
+
+    building.saloonSale = {
+      sold,
+      revenue: Math.round(revenue * 100) / 100,
+    };
+    building.active = anySold;
+  }
+}
+
 const HP_REGEN_FRACTION = 0.02;
 
 /**
@@ -584,6 +629,7 @@ export function runProductionTick(): void {
   }
 
   runSupermarketSales();
+  runSaloonSales();
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
@@ -641,6 +687,7 @@ export function resetGame(): void {
   resources.logs = 0;
   resources.wood = 0;
   resources.potatoes = 0;
+  resources.liquor = 0;
   totalMeatProduced = 0;
   remainingSeconds = GAME_DURATION_SECONDS;
   gameOver = false;

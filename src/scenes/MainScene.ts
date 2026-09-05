@@ -410,12 +410,12 @@ export class MainScene extends Phaser.Scene {
   }
 
   private formatResourceText(): string {
-    const { rawMeat, meat, water, eggs, leather, clothes, logs, wood, potatoes } = getResources();
+    const { rawMeat, meat, water, eggs, leather, clothes, logs, wood, potatoes, liquor } = getResources();
     const fmt = (n: number) => Math.round(n * 10) / 10;
     return (
       `Money: $${fmt(getMoney())} | Population: ${getEmployedPopulation()}/${getTotalPopulation()} | Storage cap: ${getStorageCap()}\n` +
       `Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)} | Leather: ${fmt(leather)}\n` +
-      `Clothes: ${fmt(clothes)} | Logs: ${fmt(logs)} | Wood: ${fmt(wood)} | Potatoes: ${fmt(potatoes)}`
+      `Clothes: ${fmt(clothes)} | Logs: ${fmt(logs)} | Wood: ${fmt(wood)} | Potatoes: ${fmt(potatoes)} | Liquor: ${fmt(liquor)}`
     );
   }
 

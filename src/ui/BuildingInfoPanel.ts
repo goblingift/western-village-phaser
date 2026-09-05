@@ -1,5 +1,6 @@
 import {
   AnimalConfig,
+  AutoSale,
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
@@ -20,6 +21,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   logs: 'Logs',
   wood: 'Wood',
   potatoes: 'Potatoes',
+  liquor: 'Liquor',
 };
 
 export class BuildingInfoPanel {
@@ -53,15 +55,20 @@ export class BuildingInfoPanel {
     const workersText =
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
     const isSupermarket = this.selected.type === BuildingType.Supermarket;
+    const isSaloon = this.selected.type === BuildingType.Saloon;
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const statusText = production
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
       : isBarracks
         ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
-        : definition.requiresWorkers && !isSupermarket
+        : definition.requiresWorkers && !isSupermarket && !isSaloon
           ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
           : null;
-    const saleText = isSupermarket ? this.formatSaleText(this.selected) : null;
+    const saleText = isSupermarket
+      ? this.formatSaleText(this.selected.lastSale, this.selected.staffed)
+      : isSaloon
+        ? this.formatSaleText(this.selected.saloonSale, this.selected.staffed)
+        : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
     const cowboyText = isBarracks ? `Cowboys: ${this.selected.cowboyCount}/${COWBOY_MAX_PER_BARRACKS}` : null;
@@ -142,16 +149,15 @@ export class BuildingInfoPanel {
     }
   }
 
-  private formatSaleText(building: PlacedBuilding): string {
-    const sale = building.lastSale;
+  private formatSaleText<K extends ResourceKey>(sale: AutoSale<K> | undefined, staffed: boolean): string {
     const soldEntries = sale
-      ? (Object.entries(sale.sold) as [ResourceKey, number][]).filter(([, amount]) => amount > 0)
+      ? (Object.entries(sale.sold) as [K, number][]).filter(([, amount]) => amount > 0)
       : [];
     if (sale && soldEntries.length > 0) {
       const parts = soldEntries.map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]}`);
       return `Sold: ${parts.join(', ')} -> +$${sale.revenue}`;
     }
-    if (!building.staffed) {
+    if (!staffed) {
       return 'Not selling (understaffed)';
     }
     return 'No stock to sell';

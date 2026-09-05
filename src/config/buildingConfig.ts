@@ -17,6 +17,8 @@ export enum BuildingType {
   Forestry = 'Forestry',
   WoodCutter = 'WoodCutter',
   PotatoField = 'PotatoField',
+  Liquor = 'Liquor',
+  Saloon = 'Saloon',
 }
 
 export interface BuildingSize {
@@ -33,7 +35,8 @@ export type ResourceKey =
   | 'clothes'
   | 'logs'
   | 'wood'
-  | 'potatoes';
+  | 'potatoes'
+  | 'liquor';
 
 export interface BuildingProduction {
   inputs?: Partial<Record<ResourceKey, number>>;
@@ -69,10 +72,19 @@ export interface BuildingDefinition {
   maxHp: number;
 }
 
-export interface SupermarketSale {
-  sold: Partial<Record<SupermarketSellableKey, number>>;
+/**
+ * Shared shape for an autonomous-sell building's last-tick result (Phase 14
+ * Supermarket, Phase 27 Saloon): what got sold and the money it brought in.
+ * Kept as one generic instead of two structurally-identical interfaces so
+ * BuildingInfoPanel can render both with a single formatter.
+ */
+export interface AutoSale<K extends ResourceKey> {
+  sold: Partial<Record<K, number>>;
   revenue: number;
 }
+
+export type SupermarketSale = AutoSale<SupermarketSellableKey>;
+export type SaloonSale = AutoSale<SaloonSellableKey>;
 
 export interface PlacedBuilding {
   id: string;
@@ -89,6 +101,13 @@ export interface PlacedBuilding {
   animalCount: number;
   /** Only meaningful for Supermarket; last tick's autonomous sale, if any. */
   lastSale?: SupermarketSale;
+  /**
+   * Only meaningful for Saloon; last tick's autonomous liquor sale, if any.
+   * Kept as its own field/pass (runSaloonSales) rather than folded into
+   * lastSale/runSupermarketSales - the two buildings sell different resource
+   * sets and a future change to one rate table shouldn't risk the other.
+   */
+  saloonSale?: SaloonSale;
   /** Only meaningful for Barracks; trained cowboy count, starts at 0, mirrors animalCount. */
   cowboyCount: number;
   /**
@@ -258,6 +277,24 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     production: { outputs: { potatoes: 1.2 } },
     maxHp: 45,
   },
+  [BuildingType.Liquor]: {
+    type: BuildingType.Liquor,
+    label: 'Liquor Still',
+    cost: 140,
+    size: { width: 2, height: 2 },
+    color: 0xb87333,
+    production: { inputs: { potatoes: 2 }, outputs: { liquor: 1 } },
+    maxHp: 80,
+  },
+  [BuildingType.Saloon]: {
+    type: BuildingType.Saloon,
+    label: 'Saloon',
+    cost: 200,
+    size: { width: 2, height: 2 },
+    color: 0xefebe9,
+    requiresWorkers: true,
+    maxHp: 90,
+  },
 };
 
 /**
@@ -289,6 +326,13 @@ export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: nu
   potatoes: { amount: 2, price: 2 },
   wood: { amount: 2, price: 3 },
   clothes: { amount: 2, price: 15 },
+};
+
+/** Same idea as SUPERMARKET_SELL_RATES, but Saloon only ever sells Liquor. */
+export type SaloonSellableKey = 'liquor';
+
+export const SALOON_SELL_RATES: Record<SaloonSellableKey, { amount: number; price: number }> = {
+  liquor: { amount: 2, price: 12 },
 };
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
@@ -408,6 +452,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   logs: 'Logs',
   wood: 'Wood',
   potatoes: 'Potatoes',
+  liquor: 'Liquor',
 };
 
 function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
@@ -434,6 +479,12 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Supermarket) {
     const sellText = (Object.entries(SUPERMARKET_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
+      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} @$${price}`)
+      .join(', ');
+    parts.push(`Sells: ${sellText} per tick`);
+  }
+  if (definition.type === BuildingType.Saloon) {
+    const sellText = (Object.entries(SALOON_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
       .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} @$${price}`)
       .join(', ');
     parts.push(`Sells: ${sellText} per tick`);

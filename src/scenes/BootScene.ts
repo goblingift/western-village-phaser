@@ -460,6 +460,67 @@ const POTATO_FIELD_SPRITE: PixelSprite = {
   ],
 };
 
+const LIQUOR_SPRITE: PixelSprite = {
+  // A copper pot still (W body, D shading, narrow W neck) in place of
+  // Butcher's cleaver window; the yard swaps the fence/log line for stacked
+  // barrels (H bands, K staves) instead.
+  palette: { S: 0x3e2723, R: 0xb87333, B: 0xa1887f, P: 0x8a7266, W: 0xd2823a, D: 0x5d4037, H: 0xc9a063, K: 0x6d4c41 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBWWPBPBPBPS',
+    'SBPBPWWWWBPBPBPS',
+    'SBPBPWDDWBPBPBPS',
+    'SBPBPWDDWBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'HH..HH..HH..HH..',
+    'KK..KK..KK..KK..',
+    'KK..KK..KK..KK..',
+    'HH..HH..HH..HH..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const SALOON_SPRITE: PixelSprite = {
+  // Stepped false-front parapet (rows 0-1) over a hanging sign band (H),
+  // a second-story window row (W) with a balcony rail underneath (G/D
+  // ticks), then batwing doors on the ground floor - the dark K gap
+  // between the D door panels reads as the swinging doors' open middle.
+  palette: {
+    S: 0x4e342e,
+    R: 0x8d6e4a,
+    H: 0xffd54f,
+    B: 0xefebe9,
+    P: 0xd8d0c8,
+    W: 0x90caf9,
+    G: 0x8d6748,
+    D: 0x5d4037,
+    K: 0x2b1d12,
+  },
+  pattern: [
+    '..SSSSSSSSSSSS..',
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRHHHHRRRRRS',
+    'SBPBWWBPPBWWBPBS',
+    'SBPBWWBPPBWWBPBS',
+    'SGDGDGDGDGDGDGDS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPDDKKDDBPBPS',
+    'SBPBPDDKKDDBPBPS',
+    'SBPBPDDDDDDBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'G..............G',
+    'G..............G',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -477,6 +538,8 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Forestry]: FORESTRY_SPRITE,
   [BuildingType.WoodCutter]: WOOD_CUTTER_SPRITE,
   [BuildingType.PotatoField]: POTATO_FIELD_SPRITE,
+  [BuildingType.Liquor]: LIQUOR_SPRITE,
+  [BuildingType.Saloon]: SALOON_SPRITE,
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
