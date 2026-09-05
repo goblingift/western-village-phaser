@@ -22,8 +22,18 @@ export type ResourceKey = 'rawMeat' | 'meat' | 'water' | 'eggs';
 export interface BuildingProduction {
   inputs?: Partial<Record<ResourceKey, number>>;
   outputs?: Partial<Record<ResourceKey, number>>;
-  /** Full output rate needs an adjacent Fence building; otherwise output is halved. */
-  requiresFence?: boolean;
+}
+
+/**
+ * Livestock buildings own animals instead of producing a flat rate: output
+ * per tick is `outputPerAnimal * animalCount`, so an empty building makes
+ * nothing until the player buys stock (buyAnimal in gameState.ts).
+ */
+export interface AnimalConfig {
+  animalLabel: string;
+  costPerAnimal: number;
+  maxAnimals: number;
+  outputPerAnimal: Partial<Record<ResourceKey, number>>;
 }
 
 export interface BuildingDefinition {
@@ -35,6 +45,7 @@ export interface BuildingDefinition {
   production?: BuildingProduction;
   /** Marks a non-production building (e.g. Warehouse) as still needing staff to function. */
   requiresWorkers?: boolean;
+  animal?: AnimalConfig;
 }
 
 export interface SupermarketSale {
@@ -52,6 +63,8 @@ export interface PlacedBuilding {
   connected: boolean;
   assignedWorkers: number;
   staffed: boolean;
+  /** Only meaningful for buildings with an AnimalConfig; owned livestock count, starts at 0. */
+  animalCount: number;
   /** Only meaningful for Supermarket; last tick's autonomous sale, if any. */
   lastSale?: SupermarketSale;
 }
@@ -63,7 +76,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 100,
     size: { width: 2, height: 2 },
     color: 0xa1887f,
-    production: { outputs: { rawMeat: 1 } },
+    production: {},
+    animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.2 } },
   },
   [BuildingType.Butcher]: {
     type: BuildingType.Butcher,
@@ -101,7 +115,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 70,
     size: { width: 1, height: 1 },
     color: 0xfff8e1,
-    production: { outputs: { eggs: 0.8 } },
+    production: {},
+    animal: { animalLabel: 'Chicken', costPerAnimal: 5, maxAnimals: 4, outputPerAnimal: { eggs: 0.2 } },
   },
   [BuildingType.PigFarm]: {
     type: BuildingType.PigFarm,
@@ -109,7 +124,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 120,
     size: { width: 2, height: 2 },
     color: 0xe8a5b8,
-    production: { outputs: { rawMeat: 1.5 } },
+    production: {},
+    animal: { animalLabel: 'Pig', costPerAnimal: 12, maxAnimals: 6, outputPerAnimal: { rawMeat: 0.25 } },
   },
   [BuildingType.CowRanch]: {
     type: BuildingType.CowRanch,
@@ -117,7 +133,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 220,
     size: { width: 2, height: 2 },
     color: 0xbca88a,
-    production: { outputs: { rawMeat: 2.5 }, requiresFence: true },
+    production: {},
+    animal: { animalLabel: 'Cow', costPerAnimal: 20, maxAnimals: 5, outputPerAnimal: { rawMeat: 0.5 } },
   },
   [BuildingType.Fence]: {
     type: BuildingType.Fence,
@@ -199,6 +216,11 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.production?.outputs) {
     parts.push(`Produces: ${formatResourceMap(definition.production.outputs)}`);
+  }
+  if (definition.animal) {
+    const { animalLabel, costPerAnimal, maxAnimals, outputPerAnimal } = definition.animal;
+    parts.push(`${animalLabel}s: $${costPerAnimal} each, up to ${maxAnimals}`);
+    parts.push(`Produces per ${animalLabel}: ${formatResourceMap(outputPerAnimal)}`);
   }
   if (definition.type === BuildingType.Supermarket) {
     const { meat, eggs } = SUPERMARKET_SELL_RATES;

@@ -131,6 +131,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     connected: false,
     assignedWorkers: 0,
     staffed: false,
+    animalCount: 0,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -217,6 +218,40 @@ export function hasAdjacentFence(building: PlacedBuilding): boolean {
   }
 
   return false;
+}
+
+/**
+ * Buying an animal is a hard buy-gate, not a soft output multiplier: it
+ * fails outright (no partial/half-output fallback) without an adjacent
+ * Fence, at the per-building animal cap, or without enough money.
+ */
+export function buyAnimal(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return false;
+  }
+
+  const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
+  if (!animalConfig) {
+    return false;
+  }
+  if (building.animalCount >= animalConfig.maxAnimals) {
+    return false;
+  }
+  if (!hasAdjacentFence(building)) {
+    return false;
+  }
+  if (money < animalConfig.costPerAnimal) {
+    return false;
+  }
+
+  money -= animalConfig.costPerAnimal;
+  building.animalCount += 1;
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('animal-bought', building);
+
+  return true;
 }
 
 export interface FenceLink {
@@ -380,6 +415,17 @@ function runSupermarketSales(): void {
   }
 }
 
+function scaleByAnimalCount(
+  outputPerAnimal: Partial<Record<ResourceKey, number>>,
+  animalCount: number,
+): Partial<Record<ResourceKey, number>> {
+  const scaled: Partial<Record<ResourceKey, number>> = {};
+  for (const [key, amount] of Object.entries(outputPerAnimal) as [ResourceKey, number][]) {
+    scaled[key] = amount * animalCount;
+  }
+  return scaled;
+}
+
 export function runProductionTick(): void {
   if (gameOver) {
     return;
@@ -389,13 +435,22 @@ export function runProductionTick(): void {
   const storageCap = getStorageCap();
 
   for (const building of placedBuildings) {
-    const production = BUILDING_DEFINITIONS[building.type].production;
+    const definition = BUILDING_DEFINITIONS[building.type];
+    const production = definition.production;
     if (!production) {
       building.active = false;
       continue;
     }
 
     if (!building.staffed) {
+      building.active = false;
+      continue;
+    }
+
+    // Animal-owning buildings (Chicken/Pig/Cattle Farm, Cow Ranch) produce
+    // nothing until stocked, regardless of staffing/inputs being satisfied.
+    const animalConfig = definition.animal;
+    if (animalConfig && building.animalCount === 0) {
       building.active = false;
       continue;
     }
@@ -413,10 +468,12 @@ export function runProductionTick(): void {
     for (const [key, amount] of Object.entries(inputs) as [ResourceKey, number][]) {
       resources[key] -= amount;
     }
-    // Cow Ranch needs an adjacent Fence tile to reach full output; without one it runs at half rate.
-    const fenceMultiplier = production.requiresFence && !hasAdjacentFence(building) ? 0.5 : 1;
-    const bonus = (building.connected ? 1.1 : 1) * fenceMultiplier;
-    for (const [key, amount] of Object.entries(production.outputs ?? {}) as [ResourceKey, number][]) {
+    const bonus = building.connected ? 1.1 : 1;
+    // Animal buildings scale their per-animal rate by how many animals are owned instead of using a flat production.outputs amount.
+    const outputs = animalConfig
+      ? scaleByAnimalCount(animalConfig.outputPerAnimal, building.animalCount)
+      : (production.outputs ?? {});
+    for (const [key, amount] of Object.entries(outputs) as [ResourceKey, number][]) {
       const produced = amount * bonus;
       const before = resources[key];
       const after = Math.min(before + produced, storageCap);

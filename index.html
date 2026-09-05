@@ -74,6 +74,29 @@
       #building-info-panel div {
         margin-top: 4px;
       }
+      #building-info-panel button {
+        margin-top: 6px;
+        background: #4caf50;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 6px 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #building-info-panel button:hover:not(:disabled) {
+        background: #5cbf60;
+      }
+      #building-info-panel button:disabled {
+        background: #5b3a29;
+        color: #a99;
+        cursor: not-allowed;
+      }
+      #building-info-panel .hint {
+        color: #d08a6a;
+        font-size: 12px;
+        margin-top: 2px;
+      }
       #game-over-overlay {
         position: fixed;
         inset: 0;

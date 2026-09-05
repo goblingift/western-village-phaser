@@ -1,4 +1,5 @@
 import {
+  AnimalConfig,
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
@@ -6,7 +7,7 @@ import {
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { gameEvents } from '../state/gameEvents';
-import { hasAdjacentFence } from '../state/gameState';
+import { buyAnimal, getMoney, hasAdjacentFence } from '../state/gameState';
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
@@ -42,9 +43,6 @@ export class BuildingInfoPanel {
     const production = definition.production;
     const inputText = production?.inputs ? this.formatResourceMap(production.inputs) : null;
     const outputText = production?.outputs ? this.formatResourceMap(production.outputs) : null;
-    const fencedText = production?.requiresFence
-      ? `Fenced: ${hasAdjacentFence(this.selected) ? 'Yes (full output)' : 'No (half output)'}`
-      : null;
     const workersRequired = getWorkersRequired(this.selected.type);
     const workersText =
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
@@ -55,6 +53,8 @@ export class BuildingInfoPanel {
         ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
         : null;
     const saleText = isSupermarket ? this.formatSaleText(this.selected) : null;
+    const animalConfig = definition.animal;
+    const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
@@ -64,8 +64,38 @@ export class BuildingInfoPanel {
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
-      ${fencedText ? `<div>${fencedText}</div>` : ''}
+      ${animalText ? `<div>${animalText}</div>` : ''}
     `;
+
+    if (animalConfig) {
+      this.renderBuyAnimalButton(this.selected, animalConfig);
+    }
+  }
+
+  private renderBuyAnimalButton(building: PlacedBuilding, animalConfig: AnimalConfig): void {
+    const blockReason = !hasAdjacentFence(building)
+      ? 'requires an adjacent Fence'
+      : building.animalCount >= animalConfig.maxAnimals
+        ? 'at max animals'
+        : getMoney() < animalConfig.costPerAnimal
+          ? "can't afford"
+          : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Buy ${animalConfig.animalLabel} ($${animalConfig.costPerAnimal})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      buyAnimal(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
   }
 
   private formatSaleText(building: PlacedBuilding): string {
