@@ -28,7 +28,7 @@ const GRASS_SPRITE: PixelSprite = {
     'GGGGGGGG',
     'GGDGGGGG',
     'GGGGGHGG',
-    'GGGGGGGG',
+    'GGGDDGGG',
     'GDGGGGGG',
     'GGGGGHGG',
     'GGGGGGGD',
@@ -51,15 +51,18 @@ const WATER_SPRITE: PixelSprite = {
 };
 
 const SAND_SPRITE: PixelSprite = {
-  palette: { S: 0xd2b48c, D: 0xb08968, H: 0xe8d0a9 },
+  // C forms a two-pixel stub hinting at a small cactus/scrub silhouette;
+  // K forms a short cracked-earth fissure. Both kept to a subtle 2px line
+  // since this tile is rendered 40x30 times across the map.
+  palette: { S: 0xd2b48c, D: 0xb08968, H: 0xe8d0a9, C: 0x8c9a6b, K: 0x9c7b52 },
   pattern: [
     'SSSSSSSS',
     'SSDSSSSS',
     'SSSSSSHS',
     'SSSSDSSS',
     'SSSSSSSS',
-    'SHSSSSDS',
-    'SSSSSSSS',
+    'SSCSSKSS',
+    'SSCSSKSS',
     'SSSSSSSS',
   ],
 };
@@ -69,18 +72,19 @@ const SAND_SPRITE: PixelSprite = {
 const TILE_SPRITES: PixelSprite[] = [GRASS_SPRITE, WATER_SPRITE, SAND_SPRITE];
 
 const CATTLE_FARM_SPRITE: PixelSprite = {
-  palette: { S: 0x4e342e, R: 0x6d4c41, B: 0x8d6748, H: 0xd7ccc8, D: 0x3e2723, F: 0xc9a063 },
+  // P alternates with B across wall columns to read as vertical wood planks.
+  palette: { S: 0x4e342e, R: 0x6d4c41, B: 0x8d6748, P: 0x7a5a3d, H: 0xd7ccc8, D: 0x3e2723, F: 0xc9a063 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBDDBBBBBBBBS',
-    'SBBBBDDBBBBBBBBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPDDBPBPBPBPS',
+    'SBPBPDDBPBPBPBPS',
     'SSSSSSSSSSSSSSSS',
     'FF..FF..FF..FF..',
     '................',
@@ -91,7 +95,7 @@ const CATTLE_FARM_SPRITE: PixelSprite = {
 };
 
 const BUTCHER_SPRITE: PixelSprite = {
-  palette: { S: 0x3e2723, R: 0xb71c1c, B: 0xe8ded1, H: 0xffffff, D: 0x4e342e, C: 0x8d0000 },
+  palette: { S: 0x3e2723, R: 0xb71c1c, B: 0xe8ded1, P: 0xd2c3ae, H: 0xffffff, D: 0x4e342e, C: 0x8d0000 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
     'SRRRRRRRRRRRRRRS',
@@ -99,23 +103,25 @@ const BUTCHER_SPRITE: PixelSprite = {
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBBCCBBBBBBBS',
-    'SBBBBCCCCBBBBBBS',
-    'SBBBBBCCBBBBBBBS',
-    'SBBBBBCCBBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBDDDDBBBBBBS',
-    'SBBBBDDDDBBBBBBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBCCBPBPBPBS',
+    'SBPBPCCCCBPBPBPS',
+    'SBPBPBCCBPBPBPBS',
+    'SBPBPBCCBPBPBPBS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
     'SSSSSSSSSSSSSSSS',
   ],
 };
 
 const WELL_SPRITE: PixelSprite = {
-  palette: { S: 0x616161, B: 0xbdbdbd, H: 0xeeeeee, D: 0x0d47a1 },
+  // Top row: P are the crank support posts, C is the horizontal crank bar
+  // between them, replacing part of the stone-ring's roofline.
+  palette: { S: 0x616161, B: 0xbdbdbd, H: 0xeeeeee, D: 0x0d47a1, P: 0x5d4037, C: 0x424242 },
   pattern: [
-    '..SSSS..',
+    '.P.CC.P.',
     '.SHBBHS.',
     'SBBDDBBS',
     'SBDDDDBS',
@@ -127,60 +133,64 @@ const WELL_SPRITE: PixelSprite = {
 };
 
 const HOUSE_SPRITE: PixelSprite = {
-  palette: { R: 0xa1442e, S: 0x4e342e, B: 0xffcb8e, W: 0x90caf9, D: 0x5d4037 },
+  // Narrowed top cap (row 0) reads as a raised saloon-style false-front
+  // parapet rather than a gable peak.
+  palette: { R: 0xa1442e, S: 0x4e342e, B: 0xffcb8e, P: 0xe0a968, W: 0x90caf9, D: 0x5d4037 },
   pattern: [
-    '.SSSSSS.',
+    '..SSSS..',
     'SRRRRRRS',
     'SRRRRRRS',
     'SSSSSSSS',
-    'SBBWWBBS',
-    'SBBWWBBS',
-    'SBBDDBBS',
+    'SBPWWPBS',
+    'SBPWWPBS',
+    'SBPDDPBS',
     'SSSSSSSS',
   ],
 };
 
 const ROAD_SPRITE: PixelSprite = {
+  // Columns 2 and 5 stay D on every row, forming two continuous wagon-wheel
+  // ruts that line up across adjacent road tiles; H are sparse dirt flecks.
   palette: { B: 0x8d6e63, D: 0x6d4c41, H: 0xa1887f },
   pattern: [
-    'BBBBBBBB',
-    'BBDBBBBB',
-    'BBBBBHBB',
-    'BDBBBBBB',
-    'BBBBBBDB',
-    'BHBBBBBB',
-    'BBBBDBBB',
-    'BBBBBBBB',
+    'BBDBBDBB',
+    'BHDBBDBB',
+    'BBDBBDHB',
+    'HBDBBDBB',
+    'BBDHBDBB',
+    'BBDBBDBH',
+    'BBDBHDBB',
+    'BBDBBDBB',
   ],
 };
 
 const CHICKEN_FARM_SPRITE: PixelSprite = {
-  palette: { S: 0x4e342e, D: 0x6d4c41, W: 0x8d6e4a, C: 0xfff8e1 },
+  palette: { S: 0x4e342e, D: 0x6d4c41, W: 0x8d6e4a, P: 0x7c5f3f, C: 0xfff8e1 },
   pattern: [
     '.SSSSSS.',
     'SDDDDDDS',
     'SDDDDDDS',
     'SSSSSSSS',
-    'SWWCCWWS',
-    'SWWCCWWS',
+    'SWPCCPWS',
+    'SWPCCPWS',
     'SWCCCCWS',
     'SSSSSSSS',
   ],
 };
 
 const PIG_FARM_SPRITE: PixelSprite = {
-  palette: { S: 0x4e342e, R: 0xd08a9e, B: 0xe8a5b8, H: 0xfff0f3, D: 0x8d5a68, F: 0xc9a063 },
+  palette: { S: 0x4e342e, R: 0xd08a9e, B: 0xe8a5b8, P: 0xd48ea0, H: 0xfff0f3, D: 0x8d5a68, F: 0xc9a063 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBBDDBBBBBBBBS',
-    'SBBBBDDBBBBBBBBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPHHHHBPBPBPS',
+    'SBPBPDDBPBPBPBPS',
+    'SBPBPDDBPBPBPBPS',
     'SSSSSSSSSSSSSSSS',
     'FF..FF..FF..FF..',
     '................',
@@ -191,21 +201,34 @@ const PIG_FARM_SPRITE: PixelSprite = {
 };
 
 const COW_RANCH_SPRITE: PixelSprite = {
-  palette: { S: 0x6d4c41, R: 0x8d6e4a, B: 0xbca88a, H: 0xfff8e1, D: 0x5d4037, F: 0x7c5e3c },
+  // Row 0: N pixels form a longhorn-skull silhouette mounted on the roof
+  // ridge. L is a lighter plank shade than CattleFarm/PigFarm's, giving
+  // the "premium" ranch a whitewashed wood look. T is the hitching rail.
+  palette: {
+    S: 0x6d4c41,
+    R: 0x8d6e4a,
+    B: 0xbca88a,
+    L: 0xd4c3a3,
+    H: 0xfff8e1,
+    D: 0x5d4037,
+    F: 0x7c5e3c,
+    N: 0xf5f0e1,
+    T: 0x9c7b52,
+  },
   pattern: [
-    'SSSSSSSSSSSSSSSS',
+    'SSSSSN.NN.NSSSSS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBHHHHBBBBBBS',
-    'SBBBFFFFFFBBBBBS',
-    'SBBBBDDBBBBBBBBS',
-    'SBBBBDDBBBBBBBBS',
+    'SBLBLBLBLBLBLBLS',
+    'SBLBLHHHHBLBLBLS',
+    'SBLBFFFFFFBLBLBS',
+    'SBLBLDDBLBLBLBLS',
+    'SBLBLDDBLBLBLBLS',
     'SSSSSSSSSSSSSSSS',
     'FF..FF..FF..FF..',
-    '................',
+    'TTTTTTTTTTTTTTTT',
     '................',
     'FF..FF..FF..FF..',
     'SSSSSSSSSSSSSSSS',
@@ -213,44 +236,48 @@ const COW_RANCH_SPRITE: PixelSprite = {
 };
 
 const WAREHOUSE_SPRITE: PixelSprite = {
-  palette: { S: 0x3e2723, R: 0x7c5e3c, B: 0xa1887f, D: 0x5d4037, H: 0xe8ded1, L: 0x6d4c41 },
+  // P alternates with B for wall planking; L stays reserved for the
+  // hay-loft door frame so it keeps standing out against the planked wall.
+  palette: { S: 0x3e2723, R: 0x7c5e3c, B: 0xa1887f, P: 0x8a7266, D: 0x5d4037, H: 0xe8ded1, L: 0x6d4c41 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
     '.SRRRRRRRRRRRRS.',
     'SSRRRRRRRRRRRRSS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBLLLLLLBBBBBS',
-    'SBBBLHHHHLBBBBBS',
-    'SBBBLHHHHLBBBBBS',
-    'SBBBLDDDDLBBBBBS',
-    'SBBBLDDDDLBBBBBS',
-    'SBBBLLLLLLBBBBBS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBBBBBBBBBBBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBLLLLLLBPBPBS',
+    'SBPBLHHHHLBPBPBS',
+    'SBPBLHHHHLBPBPBS',
+    'SBPBLDDDDLBPBPBS',
+    'SBPBLDDDDLBPBPBS',
+    'SBPBLLLLLLBPBPBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
     'SDDDDDDDDDDDDDDS',
     'SSSSSSSSSSSSSSSS',
   ],
 };
 
 const SUPERMARKET_SPRITE: PixelSprite = {
-  palette: { S: 0x3e2723, R: 0x8e24aa, A: 0xce93d8, B: 0xefebe9, D: 0x5d4037, W: 0xffffff, G: 0x2e7d32 },
+  // Rows 1-2 alternate A/W for a classic candy-striped general-store
+  // awning; P alternates with B for planked walls below it.
+  palette: { S: 0x3e2723, R: 0x8e24aa, A: 0xce93d8, B: 0xefebe9, P: 0xd8d0c8, D: 0x5d4037, W: 0xffffff, G: 0x2e7d32 },
   pattern: [
     'SSSSSSSSSSSSSSSS',
-    '.AAAAAAAAAAAAAA.',
-    'AAAAAAAAAAAAAAAA',
+    '.AAWWAAWWAAWWAA.',
+    'AAWWAAWWAAWWAAWW',
     'SSSSSSSSSSSSSSSS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBWWWWWWWWWWBBS',
-    'SBBWGGWWWWGGWBBS',
-    'SBBWWWWWWWWWWBBS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBRRRRBBBBBBS',
-    'SBBBBRDDRBBBBBBS',
-    'SBBBBRDDRBBBBBBS',
-    'SBBBBBBBBBBBBBBS',
-    'SBBBBBBBBBBBBBBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPWWWWWWWWWWPBS',
+    'SBPWGGWWWWGGWPBS',
+    'SBPWWWWWWWWWWPBS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPRRRRBPBPBPS',
+    'SBPBPRDDRBPBPBPS',
+    'SBPBPRDDRBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBPBPBPBPBPS',
     'SDDDDDDDDDDDDDDS',
     'SSSSSSSSSSSSSSSS',
   ],
