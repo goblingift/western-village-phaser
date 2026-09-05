@@ -76,6 +76,7 @@ Player places buildings (cattle farm, butcher, well, house, road) on a tilemap a
 | 2026-09-05 | Polish & Performance | Building sprites packed into one texture atlas, connection outlines merged into a single shared Graphics object, throttled tile-info HUD updates, Western color palette, tooltips, procedural placement sound |
 | 2026-09-05 | Fences for Cattle | Adjacent Fence tiles now render as a connected fence line (dedicated Graphics layer, right/down adjacency check in gameState's `getFenceLinks`); Cow Ranch's fenced state (full vs half output) is surfaced in the building info panel via `hasAdjacentFence` |
 | 2026-09-05 | Visual Overhaul (Pixel Assets) | Replaced flat-color tiles/buildings with procedurally generated pixel-art textures: each tile/building is drawn on an 8x8-per-tile logical pixel grid (BootScene.ts `drawPixelSprite`) and scaled to TILE_SIZE, keeping the same TILESET_KEY/BUILDING_ATLAS_KEY contract |
+| 2026-09-05 | Minimap | Fixed 200x150px minimap (5px/tile) below the resource HUD, top-left; flat-color terrain + per-building-type colored dots redrawn on `building-placed`/`game-reset`, a separately throttled camera-viewport rectangle updated on drag/click, and click-or-drag-to-navigate scoped to the minimap's screen rect via `isPointerInMinimap`/`minimapPointerActive` guards in the existing pointer handlers |
 
 ## License & Repo Info
 

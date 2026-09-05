@@ -3,12 +3,15 @@ import {
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
+  MINIMAP_HEIGHT,
+  MINIMAP_MARGIN,
+  MINIMAP_WIDTH,
   PRODUCTION_TICK_MS,
   TILE_SIZE,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../config/constants';
-import { generateTileMap } from '../config/mapConfig';
+import { generateTileMap, TILE_COLORS, TileType } from '../config/mapConfig';
 import { TILESET_KEY } from './BootScene';
 import {
   BUILDING_ATLAS_KEY,
@@ -25,6 +28,7 @@ import {
   getBuildingAtTile,
   getFenceLinks,
   getMoney,
+  getPlacedBuildings,
   getResources,
   getTotalMeatProduced,
   placeBuilding,
@@ -37,6 +41,10 @@ const FENCE_LINE_COLOR = 0x8d6748;
 const VALID_TINT = 0x00ff00;
 const INVALID_TINT = 0xff0000;
 const CLICK_MOVE_THRESHOLD = 6;
+const MINIMAP_BORDER_COLOR = 0xffffff;
+const MINIMAP_VIEWPORT_COLOR = 0xffee58;
+const MINIMAP_VIEWPORT_THROTTLE_MS = 50;
+const MINIMAP_BUILDING_DOT_SIZE = 3;
 
 interface BuildingVisual {
   building: PlacedBuilding;
@@ -60,6 +68,13 @@ export class MainScene extends Phaser.Scene {
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
+  private tileData: TileType[][] = [];
+  private minimapX = 0;
+  private minimapY = 0;
+  private minimapGraphics!: Phaser.GameObjects.Graphics;
+  private minimapViewportGraphics!: Phaser.GameObjects.Graphics;
+  private minimapPointerActive = false;
+  private lastMinimapViewportRedraw = 0;
 
   constructor() {
     super('MainScene');
@@ -71,6 +86,7 @@ export class MainScene extends Phaser.Scene {
     this.setupInfoText();
     this.setupResourceHud();
     this.setupTimerHud();
+    this.setupMinimap();
     this.setupBuildingPlacement();
     this.setupBuildingSelection();
     this.setupProductionTimer();
@@ -99,6 +115,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     const tileData = generateTileMap();
+    this.tileData = tileData;
     for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
       for (let x = 0; x < MAP_WIDTH_TILES; x++) {
         layer.putTileAt(tileData[y][x], x, y);
@@ -110,11 +127,21 @@ export class MainScene extends Phaser.Scene {
 
   private setupCameraDrag(): void {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (this.minimapPointerActive) {
+        if (pointer.isDown) {
+          this.navigateMinimapTo(pointer);
+        }
+        this.lastPointerX = pointer.x;
+        this.lastPointerY = pointer.y;
+        return;
+      }
+
       if (pointer.isDown && this.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
         const dy = pointer.y - this.lastPointerY;
         this.cameras.main.scrollX -= dx;
         this.cameras.main.scrollY -= dy;
+        this.redrawMinimapViewportThrottled();
       }
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
@@ -127,6 +154,11 @@ export class MainScene extends Phaser.Scene {
       this.lastPointerY = pointer.y;
       this.pointerDownX = pointer.x;
       this.pointerDownY = pointer.y;
+
+      this.minimapPointerActive = this.isPointerInMinimap(pointer);
+      if (this.minimapPointerActive) {
+        this.navigateMinimapTo(pointer);
+      }
     });
   }
 
@@ -214,6 +246,106 @@ export class MainScene extends Phaser.Scene {
     return `Time: ${time} | Meat score: ${Math.round(getTotalMeatProduced() * 10) / 10}`;
   }
 
+  private setupMinimap(): void {
+    this.minimapX = MINIMAP_MARGIN;
+    this.minimapY = this.resourceText.y + this.resourceText.height + MINIMAP_MARGIN;
+
+    this.minimapGraphics = this.add.graphics();
+    this.minimapGraphics.setScrollFactor(0);
+    this.minimapGraphics.setDepth(1000);
+
+    this.minimapViewportGraphics = this.add.graphics();
+    this.minimapViewportGraphics.setScrollFactor(0);
+    this.minimapViewportGraphics.setDepth(1001);
+
+    this.redrawMinimap();
+
+    gameEvents.on('building-placed', () => this.redrawMinimap());
+    gameEvents.on('game-reset', () => this.redrawMinimap());
+  }
+
+  private redrawMinimap(): void {
+    this.minimapGraphics.clear();
+
+    const tileWidth = MINIMAP_WIDTH / MAP_WIDTH_TILES;
+    const tileHeight = MINIMAP_HEIGHT / MAP_HEIGHT_TILES;
+
+    for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
+      for (let x = 0; x < MAP_WIDTH_TILES; x++) {
+        const tileType = this.tileData[y]?.[x] ?? TileType.Grass;
+        this.minimapGraphics.fillStyle(TILE_COLORS[tileType], 1);
+        this.minimapGraphics.fillRect(
+          this.minimapX + x * tileWidth,
+          this.minimapY + y * tileHeight,
+          tileWidth,
+          tileHeight,
+        );
+      }
+    }
+
+    for (const building of getPlacedBuildings()) {
+      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+      const centerTileX = building.tileX + width / 2;
+      const centerTileY = building.tileY + height / 2;
+      this.minimapGraphics.fillStyle(BUILDING_DEFINITIONS[building.type].color, 1);
+      this.minimapGraphics.fillRect(
+        this.minimapX + centerTileX * tileWidth - MINIMAP_BUILDING_DOT_SIZE / 2,
+        this.minimapY + centerTileY * tileHeight - MINIMAP_BUILDING_DOT_SIZE / 2,
+        MINIMAP_BUILDING_DOT_SIZE,
+        MINIMAP_BUILDING_DOT_SIZE,
+      );
+    }
+
+    this.minimapGraphics.lineStyle(1, MINIMAP_BORDER_COLOR, 0.8);
+    this.minimapGraphics.strokeRect(this.minimapX, this.minimapY, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+
+    this.redrawMinimapViewport();
+  }
+
+  private redrawMinimapViewportThrottled(): void {
+    const now = this.time.now;
+    if (now - this.lastMinimapViewportRedraw < MINIMAP_VIEWPORT_THROTTLE_MS) {
+      return;
+    }
+    this.lastMinimapViewportRedraw = now;
+    this.redrawMinimapViewport();
+  }
+
+  private redrawMinimapViewport(): void {
+    this.minimapViewportGraphics.clear();
+
+    const worldView = this.cameras.main.worldView;
+    const mapPixelWidth = MAP_WIDTH_TILES * TILE_SIZE;
+    const mapPixelHeight = MAP_HEIGHT_TILES * TILE_SIZE;
+
+    const rectX = this.minimapX + (worldView.x / mapPixelWidth) * MINIMAP_WIDTH;
+    const rectY = this.minimapY + (worldView.y / mapPixelHeight) * MINIMAP_HEIGHT;
+    const rectW = (worldView.width / mapPixelWidth) * MINIMAP_WIDTH;
+    const rectH = (worldView.height / mapPixelHeight) * MINIMAP_HEIGHT;
+
+    this.minimapViewportGraphics.lineStyle(2, MINIMAP_VIEWPORT_COLOR, 1);
+    this.minimapViewportGraphics.strokeRect(rectX, rectY, rectW, rectH);
+  }
+
+  private isPointerInMinimap(pointer: Phaser.Input.Pointer): boolean {
+    return (
+      pointer.x >= this.minimapX &&
+      pointer.x <= this.minimapX + MINIMAP_WIDTH &&
+      pointer.y >= this.minimapY &&
+      pointer.y <= this.minimapY + MINIMAP_HEIGHT
+    );
+  }
+
+  private navigateMinimapTo(pointer: Phaser.Input.Pointer): void {
+    const relX = Phaser.Math.Clamp(pointer.x - this.minimapX, 0, MINIMAP_WIDTH);
+    const relY = Phaser.Math.Clamp(pointer.y - this.minimapY, 0, MINIMAP_HEIGHT);
+    const worldX = (relX / MINIMAP_WIDTH) * MAP_WIDTH_TILES * TILE_SIZE;
+    const worldY = (relY / MINIMAP_HEIGHT) * MAP_HEIGHT_TILES * TILE_SIZE;
+    // Camera bounds set in buildTilemap() clamp the scroll automatically.
+    this.cameras.main.centerOn(worldX, worldY);
+    this.redrawMinimapViewportThrottled();
+  }
+
   private setupBuildingPlacement(): void {
     this.input.mouse?.disableContextMenu();
 
@@ -231,6 +363,9 @@ export class MainScene extends Phaser.Scene {
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.isPointerInMinimap(pointer)) {
+        return;
+      }
       if (pointer.rightButtonDown()) {
         gameEvents.emit('cancel-placement');
         return;
@@ -243,6 +378,12 @@ export class MainScene extends Phaser.Scene {
 
   private setupBuildingSelection(): void {
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      const wasMinimapClick = this.minimapPointerActive;
+      this.minimapPointerActive = false;
+      if (wasMinimapClick) {
+        return;
+      }
+
       if (this.selectedType !== null) {
         return;
       }

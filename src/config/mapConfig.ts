@@ -6,6 +6,14 @@ export enum TileType {
   Sand = 2,
 }
 
+// Base colors matching the pixel-art tile sprites generated in BootScene, used
+// for flat-color rendering where per-pixel detail isn't needed (e.g. minimap).
+export const TILE_COLORS: Record<TileType, number> = {
+  [TileType.Grass]: 0x4caf50,
+  [TileType.Water]: 0x2196f3,
+  [TileType.Sand]: 0xd2b48c,
+};
+
 const WATER_CHANCE = 0.12;
 const SAND_CHANCE = 0.1;
 

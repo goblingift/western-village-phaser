@@ -8,3 +8,7 @@ export const GAME_DURATION_SECONDS = 300;
 // Caps a building's uncollected output buffer at N ticks worth of production,
 // so an idle/forgotten building loses future output instead of stockpiling forever.
 export const HARVEST_BUFFER_CAP_MULTIPLIER = 5;
+// Minimap dims match the 40x30 tile map's 4:3 aspect ratio (5px per tile).
+export const MINIMAP_WIDTH = 200;
+export const MINIMAP_HEIGHT = 150;
+export const MINIMAP_MARGIN = 8;

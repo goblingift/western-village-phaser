@@ -275,6 +275,10 @@ export function getBuildingById(id: string): PlacedBuilding | null {
   return buildingsById.get(id) ?? null;
 }
 
+export function getPlacedBuildings(): readonly PlacedBuilding[] {
+  return placedBuildings;
+}
+
 export function runProductionTick(): void {
   if (gameOver) {
     return;
