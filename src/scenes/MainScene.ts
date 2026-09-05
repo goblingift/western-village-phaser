@@ -146,6 +146,12 @@ const COWBOY_SELECT_HIT_RADIUS_PX = 10;
 const COWBOY_SELECTION_RING_RADIUS_PX = 10;
 const COWBOY_SELECTION_RING_COLOR = 0x42a5f5;
 const COWBOY_SELECTION_RING_DEPTH = 13.6;
+/** Phase 25: per-unit random offset applied to a multi-unit move order's target point so units don't all walk to the exact same pixel and stack. */
+const UNIT_MOVE_ORDER_JITTER_PX = 12;
+/** Phase 25: drag-rectangle multi-select box; reuses the selection ring's blue so both read as "the same selection concept". */
+const SELECTION_RECT_COLOR = 0x42a5f5;
+const SELECTION_RECT_FILL_ALPHA = 0.15;
+const SELECTION_RECT_DEPTH = 13.4;
 
 interface BuildingVisual {
   building: PlacedBuilding;
@@ -183,8 +189,13 @@ interface Raider {
  * Tracked at scene level (mirroring Raider[] above) rather than inside
  * BuildingVisual, since a Cowboy is no longer owned by its Barracks' visual
  * once it can walk away from it.
+ *
+ * Named generically (Phase 25) rather than `CowboyUnit`: selection and
+ * movement no longer assume a single unit kind, since Phase 28 adds a second
+ * player-directed unit (Cowboy on Horse) that plugs into this same
+ * selection/move system without needing its own parallel type.
  */
-interface CowboyUnit {
+interface CombatUnit {
   image: Phaser.GameObjects.Image;
   barracksId: string;
   index: number;
@@ -210,9 +221,12 @@ export class MainScene extends Phaser.Scene {
   private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
   private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
-  private cowboyUnits: CowboyUnit[] = [];
-  private selectedCowboyUnit: CowboyUnit | null = null;
+  private cowboyUnits: CombatUnit[] = [];
+  private selectedUnits: CombatUnit[] = [];
   private selectionRingGraphics!: Phaser.GameObjects.Graphics;
+  private selectionRectGraphics!: Phaser.GameObjects.Graphics;
+  private dragStartWorldX = 0;
+  private dragStartWorldY = 0;
   private cowboySelectionHintText!: Phaser.GameObjects.Text;
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
@@ -245,7 +259,7 @@ export class MainScene extends Phaser.Scene {
     this.setupFenceVisuals();
     this.setupAnimalVisuals();
     this.setupCowboyVisuals();
-    this.setupCowboyControl();
+    this.setupUnitControl();
     this.setupHpBarVisuals();
     this.setupRaidSystem();
     this.setupGameReset();
@@ -295,12 +309,20 @@ export class MainScene extends Phaser.Scene {
         return;
       }
 
-      if (pointer.isDown && this.selectedType === null) {
+      // Phase 25: camera-pan moved from left-drag to right-drag so left-drag is
+      // free for the unit selection rectangle. `pointer.isDown` (used here
+      // pre-Phase-25) is true for ANY held button - see Phaser's Pointer.isDown
+      // doc ("is _any_ button... considered as being down"), so panning now
+      // needs the same explicit rightButtonDown()/leftButtonDown() checks the
+      // rest of this file already uses elsewhere (e.g. setupBuildingPlacement).
+      if (pointer.rightButtonDown() && this.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
         const dy = pointer.y - this.lastPointerY;
         this.cameras.main.scrollX -= dx;
         this.cameras.main.scrollY -= dy;
         this.redrawMinimapViewportThrottled();
+      } else if (pointer.leftButtonDown() && this.selectedType === null) {
+        this.updateSelectionRectangle(pointer);
       }
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
@@ -313,12 +335,41 @@ export class MainScene extends Phaser.Scene {
       this.lastPointerY = pointer.y;
       this.pointerDownX = pointer.x;
       this.pointerDownY = pointer.y;
+      this.dragStartWorldX = pointer.worldX;
+      this.dragStartWorldY = pointer.worldY;
 
       this.minimapPointerActive = this.isPointerInMinimap(pointer);
       if (this.minimapPointerActive) {
         this.navigateMinimapTo(pointer);
       }
     });
+  }
+
+  /**
+   * World-space rectangle (no setScrollFactor(0), same as
+   * redrawConnectionOutlines/redrawFenceLines/redrawSelectionRing) drawn
+   * between the drag-start point and the current pointer, both captured as
+   * world coordinates - not screen coordinates - so the box stays correctly
+   * anchored over the ground/units even if the camera scrolls mid-drag.
+   */
+  private updateSelectionRectangle(pointer: Phaser.Input.Pointer): void {
+    this.selectionRectGraphics.clear();
+
+    const dx = pointer.x - this.pointerDownX;
+    const dy = pointer.y - this.pointerDownY;
+    if (Math.sqrt(dx * dx + dy * dy) <= CLICK_MOVE_THRESHOLD) {
+      return;
+    }
+
+    const minX = Math.min(this.dragStartWorldX, pointer.worldX);
+    const minY = Math.min(this.dragStartWorldY, pointer.worldY);
+    const width = Math.abs(pointer.worldX - this.dragStartWorldX);
+    const height = Math.abs(pointer.worldY - this.dragStartWorldY);
+
+    this.selectionRectGraphics.fillStyle(SELECTION_RECT_COLOR, SELECTION_RECT_FILL_ALPHA);
+    this.selectionRectGraphics.fillRect(minX, minY, width, height);
+    this.selectionRectGraphics.lineStyle(1, SELECTION_RECT_COLOR, 1);
+    this.selectionRectGraphics.strokeRect(minX, minY, width, height);
   }
 
   private setupInfoText(): void {
@@ -1000,7 +1051,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   /** A Cowboy unit is combat-eligible/selectable only while both its Barracks and its own HP slot are alive - dead/destroyed either way, it no longer defends. */
-  private isCowboyUnitAlive(unit: CowboyUnit): boolean {
+  private isCowboyUnitAlive(unit: CombatUnit): boolean {
     const building = getBuildingById(unit.barracksId);
     if (!building || building.hp <= 0) {
       return false;
@@ -1009,11 +1060,12 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Registers Cowboy selection (pointerup) and move orders (pointerdown) as
-   * their own listeners rather than folding them into setupBuildingPlacement/
-   * setupBuildingSelection. Phaser fires every listener registered for the
-   * same event, in registration order, so this coexists safely with the
-   * existing handlers: emitting 'cancel-placement' while selectedType is
+   * Registers unit selection and move orders (both on pointerup - Phase 25
+   * moved move orders off pointerdown, see below) as their own listener
+   * rather than folding them into setupBuildingPlacement/setupBuildingSelection.
+   * Phaser fires every listener registered for the same event, in
+   * registration order, so this coexists safely with the existing handlers:
+   * emitting 'cancel-placement' on right pointerdown while selectedType is
    * already null (setupBuildingPlacement's rightButtonDown branch) is a
    * verified no-op (see cancelPlacement), and the minimap guard here is
    * re-checked directly via isPointerInMinimap(pointer) rather than trusting
@@ -1021,17 +1073,26 @@ export class MainScene extends Phaser.Scene {
    * handler (registered earlier) already resets that flag to false by the
    * time this one runs.
    *
+   * Phase 24 issued the move order on pointerdown (right button), which
+   * worked for single-click-to-move but can't distinguish a right-click from
+   * the start of a right-drag-to-pan (Phase 25). Both selection and move
+   * orders now resolve on pointerup, gated on which button was just released
+   * (leftButtonReleased()/rightButtonReleased()) and on the same
+   * click-vs-drag distance threshold used everywhere else in this file - a
+   * right release past the threshold was a pan, not a command.
+   *
    * Left-click selection intentionally does NOT suppress the existing
    * building-info-panel click handling - both fire on the same click. Picking
-   * a Cowboy is a separate, additive concern from building selection; a
-   * player clicking a Cowboy standing on/near a building plausibly wants to
-   * see both, and suppressing one would just be a surprising special case.
+   * a unit is a separate, additive concern from building selection; a player
+   * clicking a unit standing on/near a building plausibly wants to see both,
+   * and suppressing one would just be a surprising special case.
    */
-  private setupCowboyControl(): void {
+  private setupUnitControl(): void {
     this.selectionRingGraphics = this.add.graphics().setDepth(COWBOY_SELECTION_RING_DEPTH);
+    this.selectionRectGraphics = this.add.graphics().setDepth(SELECTION_RECT_DEPTH);
 
     this.cowboySelectionHintText = this.add
-      .text(VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT - 8, 'Cowboy selected - right-click to move', {
+      .text(VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT - 8, 'Unit(s) selected - right-click to move', {
         fontSize: '14px',
         color: '#ffffff',
         backgroundColor: '#2b1d12cc',
@@ -1043,32 +1104,40 @@ export class MainScene extends Phaser.Scene {
       .setVisible(false);
 
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      // The drag rectangle (if any) always ends here, regardless of which
+      // guard below fires next, so no stray box can ever outlive its drag.
+      this.selectionRectGraphics.clear();
+
       if (this.selectedType !== null || this.isPointerInMinimap(pointer)) {
         return;
       }
 
       const dx = pointer.x - this.pointerDownX;
       const dy = pointer.y - this.pointerDownY;
-      if (Math.sqrt(dx * dx + dy * dy) > CLICK_MOVE_THRESHOLD) {
+      const dragDistance = Math.sqrt(dx * dx + dy * dy);
+
+      if (pointer.rightButtonReleased()) {
+        if (dragDistance > CLICK_MOVE_THRESHOLD || this.selectedUnits.length === 0) {
+          return;
+        }
+        this.issueUnitMoveOrders(pointer);
         return;
       }
 
-      this.selectCowboyAt(pointer);
-    });
+      if (!pointer.leftButtonReleased()) {
+        return;
+      }
 
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (!pointer.rightButtonDown()) {
-        return;
+      if (dragDistance <= CLICK_MOVE_THRESHOLD) {
+        this.selectUnitAt(pointer);
+      } else {
+        this.selectUnitsInRect(this.dragStartWorldX, this.dragStartWorldY, pointer.worldX, pointer.worldY);
       }
-      if (this.selectedType !== null || this.selectedCowboyUnit === null || this.isPointerInMinimap(pointer)) {
-        return;
-      }
-      this.issueCowboyMoveOrder(this.selectedCowboyUnit, pointer);
     });
   }
 
-  private selectCowboyAt(pointer: Phaser.Input.Pointer): void {
-    let hit: CowboyUnit | null = null;
+  private selectUnitAt(pointer: Phaser.Input.Pointer): void {
+    let hit: CombatUnit | null = null;
     let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
 
     for (const unit of this.cowboyUnits) {
@@ -1082,14 +1151,41 @@ export class MainScene extends Phaser.Scene {
       }
     }
 
-    this.selectedCowboyUnit = hit;
-    this.cowboySelectionHintText.setVisible(hit !== null);
+    this.selectedUnits = hit ? [hit] : [];
+    this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
+  }
+
+  /** Every living unit whose position falls within the released drag rectangle (world-space corners, order-independent). */
+  private selectUnitsInRect(x1: number, y1: number, x2: number, y2: number): void {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2);
+    const maxY = Math.max(y1, y2);
+
+    this.selectedUnits = this.cowboyUnits.filter(
+      (unit) =>
+        this.isCowboyUnitAlive(unit) &&
+        unit.image.x >= minX &&
+        unit.image.x <= maxX &&
+        unit.image.y >= minY &&
+        unit.image.y <= maxY,
+    );
+    this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
+  }
+
+  /** One move order per selected unit, each aimed at the click point plus a small random offset so a multi-unit order doesn't stack every unit on one pixel. */
+  private issueUnitMoveOrders(pointer: Phaser.Input.Pointer): void {
+    for (const unit of this.selectedUnits) {
+      const jitterX = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
+      const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
+      this.issueUnitMoveOrder(unit, pointer.worldX + jitterX, pointer.worldY + jitterY);
+    }
   }
 
   /** Same point-to-point tween technique as villagers/raiders (distance/speed -> duration, setFlipX for facing), clamped to map bounds. */
-  private issueCowboyMoveOrder(unit: CowboyUnit, pointer: Phaser.Input.Pointer): void {
-    const targetX = Phaser.Math.Clamp(pointer.worldX, 0, MAP_WIDTH_TILES * TILE_SIZE);
-    const targetY = Phaser.Math.Clamp(pointer.worldY, 0, MAP_HEIGHT_TILES * TILE_SIZE);
+  private issueUnitMoveOrder(unit: CombatUnit, targetWorldX: number, targetWorldY: number): void {
+    const targetX = Phaser.Math.Clamp(targetWorldX, 0, MAP_WIDTH_TILES * TILE_SIZE);
+    const targetY = Phaser.Math.Clamp(targetWorldY, 0, MAP_HEIGHT_TILES * TILE_SIZE);
 
     unit.moveTween?.stop();
     unit.image.setFlipX(targetX < unit.image.x);
@@ -1109,18 +1205,16 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  /** Redrawn every frame (update()) rather than on an event, since it must visually track a unit mid-move-tween; cheap at single-selection scale. */
+  /** Redrawn every frame (update()) rather than on an event, since it must visually track units mid-move-tween; cheap at this unit count. One ring per selected unit (Phase 25). */
   private redrawSelectionRing(): void {
     this.selectionRingGraphics.clear();
-    if (!this.selectedCowboyUnit) {
+    if (this.selectedUnits.length === 0) {
       return;
     }
     this.selectionRingGraphics.lineStyle(2, COWBOY_SELECTION_RING_COLOR, 1);
-    this.selectionRingGraphics.strokeCircle(
-      this.selectedCowboyUnit.image.x,
-      this.selectedCowboyUnit.image.y,
-      COWBOY_SELECTION_RING_RADIUS_PX,
-    );
+    for (const unit of this.selectedUnits) {
+      this.selectionRingGraphics.strokeCircle(unit.image.x, unit.image.y, COWBOY_SELECTION_RING_RADIUS_PX);
+    }
   }
 
   /**
@@ -1218,8 +1312,9 @@ export class MainScene extends Phaser.Scene {
         unit.image.destroy();
       }
       this.cowboyUnits = [];
-      this.selectedCowboyUnit = null;
+      this.selectedUnits = [];
       this.selectionRingGraphics.clear();
+      this.selectionRectGraphics.clear();
       this.cowboySelectionHintText.setVisible(false);
 
       this.resetRaidState();
