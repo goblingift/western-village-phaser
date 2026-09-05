@@ -17,10 +17,11 @@ import {
   PlacedBuilding,
   buildingTextureKey,
 } from '../config/buildingConfig';
-import { playPlacementSound } from '../audio/sound';
+import { playCollectSound, playPlacementSound } from '../audio/sound';
 import { gameEvents } from '../state/gameEvents';
 import {
   canPlaceBuilding,
+  collectBuilding,
   getBuildingAtTile,
   getMoney,
   getResources,
@@ -37,6 +38,7 @@ const CLICK_MOVE_THRESHOLD = 6;
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
+  readyIndicator: Phaser.GameObjects.Text;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -69,6 +71,7 @@ export class MainScene extends Phaser.Scene {
     this.setupBuildingSelection();
     this.setupProductionTimer();
     this.setupConnectionVisuals();
+    this.setupHarvestIndicators();
     this.setupGameReset();
   }
 
@@ -246,7 +249,17 @@ export class MainScene extends Phaser.Scene {
       }
 
       const { tileX, tileY } = this.pointerToTile(pointer);
-      gameEvents.emit('building-selected', getBuildingAtTile(tileX, tileY));
+      const building = getBuildingAtTile(tileX, tileY);
+
+      if (building) {
+        const collected = collectBuilding(building.id);
+        if (collected) {
+          this.buildingVisuals.get(building.id)?.readyIndicator.setVisible(false);
+          playCollectSound();
+        }
+      }
+
+      gameEvents.emit('building-selected', building);
     });
   }
 
@@ -301,8 +314,47 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    this.buildingVisuals.set(building.id, { building, image });
+    const readyIndicator = this.createReadyIndicator(building);
+
+    this.buildingVisuals.set(building.id, { building, image, readyIndicator });
     playPlacementSound();
+  }
+
+  private createReadyIndicator(building: PlacedBuilding): Phaser.GameObjects.Text {
+    const { width } = BUILDING_DEFINITIONS[building.type].size;
+    const centerX = building.tileX * TILE_SIZE + (width * TILE_SIZE) / 2;
+    const topY = building.tileY * TILE_SIZE;
+
+    const indicator = this.add
+      .text(centerX, topY - 4, '$', {
+        fontSize: '18px',
+        color: '#ffee58',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(30)
+      .setVisible(false);
+
+    this.tweens.add({
+      targets: indicator,
+      y: topY - 10,
+      duration: 400,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    return indicator;
+  }
+
+  private setupHarvestIndicators(): void {
+    gameEvents.on('production-tick', () => this.refreshReadyIndicators());
+  }
+
+  private refreshReadyIndicators(): void {
+    for (const { building, readyIndicator } of this.buildingVisuals.values()) {
+      readyIndicator.setVisible(building.ready);
+    }
   }
 
   private setupConnectionVisuals(): void {
@@ -332,8 +384,9 @@ export class MainScene extends Phaser.Scene {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
 
-      for (const { image } of this.buildingVisuals.values()) {
+      for (const { image, readyIndicator } of this.buildingVisuals.values()) {
         image.destroy();
+        readyIndicator.destroy();
       }
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();

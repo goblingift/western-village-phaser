@@ -34,6 +34,8 @@ export interface PlacedBuilding {
   tileY: number;
   active: boolean;
   connected: boolean;
+  buffer: Partial<Record<ResourceKey, number>>;
+  ready: boolean;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {

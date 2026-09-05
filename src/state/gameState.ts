@@ -1,4 +1,9 @@
-import { GAME_DURATION_SECONDS, MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from '../config/constants';
+import {
+  GAME_DURATION_SECONDS,
+  HARVEST_BUFFER_CAP_MULTIPLIER,
+  MAP_HEIGHT_TILES,
+  MAP_WIDTH_TILES,
+} from '../config/constants';
 import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 
@@ -99,6 +104,8 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     tileY,
     active: false,
     connected: false,
+    buffer: {},
+    ready: false,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -246,12 +253,17 @@ export function runProductionTick(): void {
     const bonus = building.connected ? 1.1 : 1;
     for (const [key, amount] of Object.entries(production.outputs ?? {}) as [ResourceKey, number][]) {
       const produced = amount * bonus;
-      resources[key] += produced;
+      const cap = amount * bonus * HARVEST_BUFFER_CAP_MULTIPLIER;
+      const before = building.buffer[key] ?? 0;
+      const after = Math.min(before + produced, cap);
+      building.buffer[key] = after;
+      // Only score the amount that actually fit in the buffer; overflow is wasted output.
       if (key === 'meat') {
-        totalMeatProduced += produced;
+        totalMeatProduced += after - before;
       }
     }
     building.active = true;
+    building.ready = Object.values(building.buffer).some((amount) => (amount ?? 0) > 0);
   }
 
   gameEvents.emit('resources-changed', { ...resources });
@@ -264,6 +276,28 @@ export function runProductionTick(): void {
     { money, rawMeat: round1(resources.rawMeat), meat: round1(resources.meat), water: round1(resources.water) },
     `${activeCount}/${placedBuildings.length} buildings active`,
   );
+}
+
+export function collectBuilding(id: string): Partial<Record<ResourceKey, number>> | null {
+  const building = buildingsById.get(id);
+  if (!building || !building.ready) {
+    return null;
+  }
+
+  const collected: Partial<Record<ResourceKey, number>> = {};
+  for (const [key, amount] of Object.entries(building.buffer) as [ResourceKey, number][]) {
+    if (amount > 0) {
+      collected[key] = amount;
+      resources[key] += amount;
+      building.buffer[key] = 0;
+    }
+  }
+  building.ready = false;
+
+  gameEvents.emit('resources-changed', { ...resources });
+  gameEvents.emit('building-harvested', { building, collected });
+
+  return collected;
 }
 
 export function tickTimer(): void {
