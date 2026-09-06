@@ -17,6 +17,7 @@ import {
   RAID_MAX_HP_MULTIPLIER,
   RAID_MAX_INTERVAL_MS,
   RAID_MAX_INTERVAL_SQUEEZE,
+  RAID_EARLIEST_ELAPSED_MS,
   RAID_MAX_UNITS_ESCALATED,
   RAID_MIN_INTERVAL_MS,
   RAID_MIN_UNITS,
@@ -77,9 +78,12 @@ import {
   getBuildingById,
   getDayNumber,
   getDayPhase,
+  getElapsedSeconds,
   getFenceLinks,
+  getPhaseAtElapsed,
   getPlacedBuildings,
   getPlacementRejection,
+  getPlacementWarning,
   getThreatLevel,
   placeBuilding,
   runProductionTick,
@@ -944,13 +948,20 @@ export class MainScene extends Phaser.Scene {
     const rejection = getPlacementRejection(tileX, tileY, this.selectedType);
     this.previewImage.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
 
-    if (rejection === null) {
+    // Phase 34: a legal-but-unwise placement gets a warning rather than a
+    // block. The tint stays green (it IS placeable) and only the hint text
+    // changes colour, so the two signals can't be confused with each other.
+    const warning = rejection === null ? getPlacementWarning(tileX, tileY, this.selectedType) : null;
+    const message = rejection ?? warning;
+
+    if (message === null) {
       this.placementHintText.setVisible(false);
       return;
     }
 
     const { height } = BUILDING_DEFINITIONS[this.selectedType].size;
-    this.placementHintText.setText(rejection);
+    this.placementHintText.setText(message);
+    this.placementHintText.setBackgroundColor(rejection === null ? '#8d6e00dd' : '#c62828dd');
     this.placementHintText.setPosition(
       tileX * TILE_SIZE,
       (tileY + height) * TILE_SIZE + 4,
@@ -2027,19 +2038,54 @@ export class MainScene extends Phaser.Scene {
    * the player gets a chance to reposition defenders rather than discovering
    * the raid by finding a crater.
    */
+  /**
+   * Phase 34 adds the grace period. Raids previously could - and routinely
+   * did - land 41-83 seconds into a run, because getThreatLevel already reads
+   * ~0.15 from the starting purse alone at t=0 and nothing else gated the
+   * spawn. That is well before a player can afford a Barracks and a cowboy to
+   * put in it, so the first raid was decided by the map, not by play.
+   *
+   * Two combined gates now apply, both checked at fire time (not just at
+   * schedule time, since the timer's delay can span a phase boundary):
+   *  - hard elapsed-time floor of RAID_EARLIEST_ELAPSED_MS,
+   *  - night only.
+   * A check that fires while ineligible simply reschedules; it does not
+   * "bank" a raid to fire the instant the gate opens, which would just move
+   * the ambush to a predictable moment.
+   */
   private scheduleNextRaidCheck(): void {
     const threat = getThreatLevel();
     const squeeze = 1 - RAID_MAX_INTERVAL_SQUEEZE * threat;
     const delay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS * squeeze, RAID_MAX_INTERVAL_MS * squeeze);
 
-    this.scheduleRaidWarning(delay);
+    // Only warn about a raid that will actually be allowed to happen. The
+    // phase at fire time is predicted from elapsed seconds (a pure derivation
+    // in gameState) rather than assumed to equal the current phase.
+    if (this.willRaidBeEligibleIn(delay)) {
+      this.scheduleRaidWarning(delay);
+    }
 
     this.raidCheckTimer = this.time.delayedCall(delay, () => {
-      if (!this.raidActive) {
+      if (!this.raidActive && this.canRaidSpawnNow()) {
         this.startRaid();
       }
       this.scheduleNextRaidCheck();
     });
+  }
+
+  private canRaidSpawnNow(): boolean {
+    return getElapsedSeconds() * 1000 >= RAID_EARLIEST_ELAPSED_MS && getDayPhase() === 'night';
+  }
+
+  private willRaidBeEligibleIn(delayMs: number): boolean {
+    // No timeScale conversion needed: this timer and the 1s clock that drives
+    // getElapsedSeconds both run on this.time, so they are scaled identically
+    // and `delayMs` is already denominated in game time.
+    const elapsedAtFire = getElapsedSeconds() + delayMs / 1000;
+    return (
+      elapsedAtFire * 1000 >= RAID_EARLIEST_ELAPSED_MS &&
+      getPhaseAtElapsed(Math.floor(elapsedAtFire)) === 'night'
+    );
   }
 
   /**

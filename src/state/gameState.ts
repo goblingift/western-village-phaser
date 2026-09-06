@@ -37,7 +37,9 @@ import {
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
+import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import {
+  countVegetationInRadius,
   findNearestVegetation,
   harvestVegetation,
   isTileBlockedByVegetation,
@@ -304,6 +306,47 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
 
 export function canPlaceBuilding(tileX: number, tileY: number, type: BuildingType): boolean {
   return getPlacementRejection(tileX, tileY, type) === null;
+}
+
+/**
+ * The tile a harvesting building measures its radius from. Shared by
+ * runHarvest and the info panel/placement preview so "what the building can
+ * actually reach" and "what the UI says it can reach" are the same query -
+ * they were previously two different code paths, and only one of them existed.
+ */
+export function getHarvestCenterTile(
+  tileX: number,
+  tileY: number,
+  type: BuildingType,
+): { tileX: number; tileY: number } {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  return { tileX: tileX + Math.floor(width / 2), tileY: tileY + Math.floor(height / 2) };
+}
+
+/**
+ * Phase 34: a *soft* advisory shown alongside a legal placement, not a
+ * rejection. Placing a Forestry or Cactus Milker on a bald plain is allowed
+ * (vegetation regrows, and a player may be planning ahead), but doing it
+ * blind used to be one of the most common ways to waste 60-150 dollars with
+ * no feedback whatsoever - the building simply never produced and the info
+ * panel misreported why (see BuildingInfoPanel's harvest status).
+ */
+export function getPlacementWarning(tileX: number, tileY: number, type: BuildingType): string | null {
+  const { harvest } = BUILDING_DEFINITIONS[type];
+  if (!harvest) {
+    return null;
+  }
+
+  const center = getHarvestCenterTile(tileX, tileY, type);
+  const count = countVegetationInRadius(harvest.kind, center.tileX, center.tileY, harvest.radiusTiles);
+  const { label, pluralLabel } = VEGETATION_DEFINITIONS[harvest.kind];
+  if (count === 0) {
+    return `No ${pluralLabel} in range - this will produce nothing here`;
+  }
+  if (count <= 2) {
+    return `Only ${count} ${count === 1 ? label : pluralLabel} in range`;
+  }
+  return null;
 }
 
 export function placeBuilding(tileX: number, tileY: number, type: BuildingType): PlacedBuilding | null {
@@ -979,9 +1022,11 @@ function runUpkeep(): number {
  * vegetation module (which can't see occupancy itself).
  */
 function runHarvest(building: PlacedBuilding, harvest: HarvestConfig): Partial<Record<ResourceKey, number>> | null {
-  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-  const centerTileX = building.tileX + Math.floor(width / 2);
-  const centerTileY = building.tileY + Math.floor(height / 2);
+  const { tileX: centerTileX, tileY: centerTileY } = getHarvestCenterTile(
+    building.tileX,
+    building.tileY,
+    building.type,
+  );
 
   if (harvest.replantChancePerTick && Math.random() < harvest.replantChancePerTick) {
     plantVegetation(

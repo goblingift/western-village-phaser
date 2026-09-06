@@ -27,6 +27,15 @@ export const TILE_COLORS: Record<TileType, number> = {
 const GROUND_TYPES: readonly TileType[] = [TileType.Dirt, TileType.Gravel, TileType.Sand];
 
 /**
+ * Phase 34: the patch-type roll is weighted toward Sand (listed twice) rather
+ * than uniform over GROUND_TYPES. Cacti only grow on sand, and a uniform roll
+ * left so little sand on the map that the Cactus Milker had nothing to
+ * harvest (see vegetationConfig's Cactus notes). Purely a terrain-mix change:
+ * all three ground types remain equally buildable.
+ */
+const PATCH_TYPE_WEIGHTS: readonly TileType[] = [...GROUND_TYPES, TileType.Sand];
+
+/**
  * Ground variants are painted as overlapping blobs rather than rolled
  * per-tile (pre-Phase-30 behaviour), so gravel and sand read as patches of
  * terrain instead of uniform noise.
@@ -68,7 +77,7 @@ function paintGround(grid: TileType[][]): void {
   }
 
   for (let patch = 0; patch < PATCH_COUNT; patch++) {
-    const type = pick(GROUND_TYPES);
+    const type = pick(PATCH_TYPE_WEIGHTS);
     const centerX = randomInt(0, MAP_WIDTH_TILES - 1);
     const centerY = randomInt(0, MAP_HEIGHT_TILES - 1);
     const radius = randomInt(PATCH_RADIUS_MIN, PATCH_RADIUS_MAX);

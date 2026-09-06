@@ -462,14 +462,18 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     color: 0x7cb342,
     category: BuildingCategory.Farming,
     upkeep: 1,
-    // Same harvest shape as Forestry but against Cacti, and with no replant:
-    // cacti are the desert's finite bounty, so a Milker eventually drinks its
-    // radius dry and has to be rebuilt somewhere else.
+    // Phase 34: the "no replant, finite desert bounty" rule was a nice idea
+    // that made the building unusable in practice - with the map's cactus
+    // count it stripped its radius in under a minute and then sat dead for
+    // the rest of the run. It now replants like Forestry, slightly slower
+    // (cacti grow slower than pines), which together with the raised cactus
+    // density/yield makes a well-sited Milker sustainable.
     harvest: {
       kind: 'Cactus',
       radiusTiles: 5,
       yieldPerTick: 1,
       outputs: { agaveJuice: 1 },
+      replantChancePerTick: 0.1,
     },
     maxHp: 80,
   },

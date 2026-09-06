@@ -3,11 +3,14 @@ import {
   AutoSale,
   BUILDING_DEFINITIONS,
   BuildingType,
+  HarvestConfig,
   PlacedBuilding,
   RESOURCE_LABELS,
   ResourceKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
+import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
+import { countVegetationInRadius } from '../state/vegetation';
 import {
   BANK_TRANSACTION_AMOUNT,
   COWBOY_MAX_PER_BARRACKS,
@@ -21,6 +24,7 @@ import {
   buyAnimal,
   demolishBuilding,
   depositToBank,
+  getHarvestCenterTile,
   getMoney,
   getRepairCost,
   getWellWaterDistance,
@@ -108,12 +112,8 @@ export class BuildingInfoPanel {
         ? `Upkeep: $${definition.upkeep}/tick${this.selected.disabled ? ' - UNPAID, idle' : ''}`
         : null;
 
-    // Phase 32: harvesters live or die by what's still standing near them,
-    // so the panel reports last tick's actual take rather than a nominal rate.
-    const harvestText = definition.harvest
-      ? this.selected.lastHarvest && this.selected.lastHarvest > 0
-        ? `Harvested: ${this.selected.lastHarvest} ${definition.harvest.kind}`
-        : `No ${definition.harvest.kind}s left within ${definition.harvest.radiusTiles} tiles`
+    const harvestStatus = definition.harvest
+      ? this.describeHarvestStatus(this.selected, definition.harvest)
       : null;
 
     // Phase 30: a Well's yield depends on how close it got to water.
@@ -135,7 +135,7 @@ export class BuildingInfoPanel {
       ${statusText ? `<div>${statusText}</div>` : ''}
       ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
-      ${harvestText ? `<div>${harvestText}</div>` : ''}
+      ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
@@ -163,6 +163,59 @@ export class BuildingInfoPanel {
       this.renderWithdrawButton(this.selected);
     }
     this.renderDemolishButton(this.selected);
+  }
+
+  /**
+   * Phase 34 bug fix. This line used to be inferred purely from
+   * `lastHarvest`, which is only ever written by runHarvest - and runHarvest
+   * sits behind the hp/staffing/upkeep gates in runProductionTick. So a
+   * harvester that was understaffed, unpaid, or simply placed ten seconds ago
+   * had `lastHarvest === undefined` and got told "No Trees left within 5
+   * tiles", which was frequently a flat lie and sent players off to rebuild a
+   * building that was fine.
+   *
+   * The panel now asks the vegetation module what is actually standing in
+   * range (countVegetationInRadius was already written for exactly this and
+   * had zero call sites), and reports blockers in the order they actually
+   * apply in the production tick: destroyed -> understaffed -> upkeep unpaid
+   * -> nothing in range -> running (with a low-stock warning).
+   */
+  private describeHarvestStatus(
+    building: PlacedBuilding,
+    harvest: HarvestConfig,
+  ): { text: string; blocked: boolean } {
+    const center = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const inRange = countVegetationInRadius(harvest.kind, center.tileX, center.tileY, harvest.radiusTiles);
+    const definition = VEGETATION_DEFINITIONS[harvest.kind];
+    const plural = definition.pluralLabel;
+
+    if (building.hp <= 0) {
+      return { text: `Not harvesting: destroyed`, blocked: true };
+    }
+    if (!building.staffed) {
+      const required = getWorkersRequired(building.type);
+      return {
+        text: `Not harvesting: understaffed (${building.assignedWorkers}/${required} workers)`,
+        blocked: true,
+      };
+    }
+    if (building.disabled) {
+      return { text: 'Not harvesting: upkeep unpaid', blocked: true };
+    }
+    if (inRange === 0) {
+      return {
+        text: `Not harvesting: no ${plural} within ${harvest.radiusTiles} tiles`,
+        blocked: true,
+      };
+    }
+
+    const stock = `${inRange} ${inRange === 1 ? definition.label : plural} in range`;
+    if (building.lastHarvest && building.lastHarvest > 0) {
+      return { text: `Harvested ${building.lastHarvest} ${definition.label} - ${stock}`, blocked: false };
+    }
+    // In range but nothing taken last tick: the nearest entity was drained to
+    // exactly 0 on that tick, or this is the building's very first tick.
+    return { text: `Ready to harvest - ${stock}`, blocked: false };
   }
 
   /**

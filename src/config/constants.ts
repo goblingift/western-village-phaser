@@ -56,6 +56,16 @@ export const RAID_MAX_UNITS = 5;
 // undefended town with nothing shooting back), so raids never stall forever.
 export const RAID_WAVE_TIMEOUT_MS = 60000;
 
+/**
+ * Phase 34: raid grace period. Raids used to be able to land ~41s into a run
+ * (getThreatLevel already reads ~0.15 from the starting purse alone), before
+ * the player had a Barracks, let alone a cowboy in it. Two gates now apply,
+ * combined: nothing may spawn before RAID_EARLIEST_ELAPSED_MS of run time has
+ * passed, AND raids only ever spawn at night. The earliest possible raid is
+ * therefore the first nightfall at/after the 5:00 mark - i.e. night of day 2.
+ */
+export const RAID_EARLIEST_ELAPSED_MS = 300000;
+
 // Phase 28: Horsery & Cowboy on Horse. Mirrors Phase 22's Barracks/Cowboy
 // cost/cap/HP constants above rather than sharing them - the two units differ
 // in cost, cap, HP and speed, so keeping separate named constants keeps each
