@@ -8,7 +8,7 @@ import {
 } from '../config/buildingConfig';
 import { GAME_SPEEDS } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
-import { canAfford, getMoney } from '../state/gameState';
+import { canAfford, describeUnlockRequirement, getMoney, isBuildingUnlocked } from '../state/gameState';
 import { getAudioVolume, isAudioMuted, setAudioMuted, setAudioVolume } from '../audio/sound';
 import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
 
@@ -28,6 +28,8 @@ import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
 export class BuildingBar {
   private moneyLabel: HTMLSpanElement;
   private buttons = new Map<BuildingType, HTMLButtonElement>();
+  /** Phase 47: the normal "Label — cost/production summary" tooltip, restored once a locked button unlocks. */
+  private baseTitles = new Map<BuildingType, string>();
   private tabs = new Map<BuildingCategory, HTMLButtonElement>();
   private panels = new Map<BuildingCategory, HTMLDivElement>();
   private speedButtons: HTMLButtonElement[] = [];
@@ -91,7 +93,15 @@ export class BuildingBar {
     gameEvents.on('money-changed', (money: number) => this.updateMoney(money));
     // Phase 37: a building can also be unaffordable purely on materials, so
     // the dim state must refresh on the resource pool too, not just money.
-    gameEvents.on('resources-changed', () => this.refreshAffordability());
+    // Phase 47: unlock state (population/net worth/day) changes on the same
+    // cadence, so the lock/unlock check rides these same events rather than
+    // its own timer - 'production-tick' and 'house-tier-changed' cover
+    // population/net-worth drift between resource-pool changes, and
+    // 'building-placed' covers the instant net-worth jump from a purchase.
+    gameEvents.on('resources-changed', () => this.refreshButtonStates());
+    gameEvents.on('production-tick', () => this.refreshButtonStates());
+    gameEvents.on('house-tier-changed', () => this.refreshButtonStates());
+    gameEvents.on('building-placed', () => this.refreshButtonStates());
     gameEvents.on('select-building', (type: BuildingType) => this.setActive(type));
     gameEvents.on('cancel-placement', () => this.setActive(null));
     gameEvents.on('demolish-mode-changed', (active: boolean) => {
@@ -130,6 +140,7 @@ export class BuildingBar {
 
     button.addEventListener('click', () => this.onButtonClick(definition.type));
     this.buttons.set(definition.type, button);
+    this.baseTitles.set(definition.type, button.title);
     return button;
   }
 
@@ -247,6 +258,12 @@ export class BuildingBar {
   }
 
   private onButtonClick(type: BuildingType): void {
+    // Phase 47: a locked building never enters placement mode - unlike an
+    // unlocked-but-unaffordable one, which still does so the preview can
+    // explain the rejection (Phase 33's existing behavior, unchanged here).
+    if (!isBuildingUnlocked(type)) {
+      return;
+    }
     if (this.buttons.get(type)?.classList.contains('active')) {
       gameEvents.emit('cancel-placement');
       return;
@@ -262,12 +279,27 @@ export class BuildingBar {
 
   private updateMoney(money: number): void {
     this.moneyLabel.textContent = `$${Math.round(money * 10) / 10}`;
-    this.refreshAffordability();
+    this.refreshButtonStates();
   }
 
-  private refreshAffordability(): void {
+  /**
+   * Phase 47: a locked building is a distinct state from an unlocked-but-
+   * unaffordable one - it gets the 'locked' class (greyscale + lock badge,
+   * see index.html) instead of 'unaffordable', and its tooltip is swapped to
+   * the unmet requirement rather than the normal cost/production summary.
+   */
+  private refreshButtonStates(): void {
     for (const [type, button] of this.buttons) {
+      const unlocked = isBuildingUnlocked(type);
+      button.classList.toggle('locked', !unlocked);
+      if (!unlocked) {
+        button.classList.remove('unaffordable');
+        const requirement = describeUnlockRequirement(type);
+        button.title = requirement ? `${BUILDING_DEFINITIONS[type].label} — ${requirement}` : button.title;
+        continue;
+      }
       button.classList.toggle('unaffordable', !canAfford(type));
+      button.title = this.baseTitles.get(type) ?? button.title;
     }
   }
 }

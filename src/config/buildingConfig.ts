@@ -190,6 +190,23 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
   },
 };
 
+/**
+ * Phase 47: Milestone-Gated Building Unlocks. Every field is an "at least"
+ * floor, all present fields must hold simultaneously (isBuildingUnlocked in
+ * gameState.ts ANDs them), and an entirely undefined `unlockRequirement`
+ * means always-unlocked - kept on the six buildings a brand-new player needs
+ * immediately (House, Well, Road, Fence, CattleFarm, ChickenFarm) so the
+ * opening minute is never gated on anything. `netWorthAtLeast` is checked
+ * against computeNetWorth().total, which starts near STARTING_MONEY (1800) -
+ * thresholds below that would be satisfied at t=0 and gate nothing, so every
+ * net-worth-gated building here sits comfortably above it.
+ */
+export interface UnlockRequirement {
+  populationAtLeast?: number;
+  netWorthAtLeast?: number;
+  dayAtLeast?: number;
+}
+
 export interface BuildingDefinition {
   type: BuildingType;
   label: string;
@@ -220,6 +237,8 @@ export interface BuildingDefinition {
    * nothing to keep standing.
    */
   upkeep: number;
+  /** Phase 47: undefined = always unlocked. See UnlockRequirement's doc comment for the full design. */
+  unlockRequirement?: UnlockRequirement;
 }
 
 /**
@@ -338,6 +357,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     production: { inputs: { rawMeat: 1, water: 1 }, outputs: { meat: 1 } },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 4 },
   },
   [BuildingType.Well]: {
     type: BuildingType.Well,
@@ -393,6 +413,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     production: {},
     animal: { animalLabel: 'Pig', costPerAnimal: 12, maxAnimals: 6, outputPerAnimal: { rawMeat: 0.25 } },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 5 },
   },
   [BuildingType.CowRanch]: {
     type: BuildingType.CowRanch,
@@ -410,6 +431,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
       outputPerAnimal: { rawMeat: 0.5, leather: 0.1 },
     },
     maxHp: 100,
+    unlockRequirement: { populationAtLeast: 6 },
   },
   [BuildingType.Fence]: {
     type: BuildingType.Fence,
@@ -433,6 +455,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
+    unlockRequirement: { netWorthAtLeast: 2200 },
   },
   [BuildingType.Supermarket]: {
     type: BuildingType.Supermarket,
@@ -445,6 +468,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 90,
+    unlockRequirement: { netWorthAtLeast: 2500 },
   },
   [BuildingType.Barracks]: {
     type: BuildingType.Barracks,
@@ -457,6 +481,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
+    unlockRequirement: { dayAtLeast: 2 },
   },
   [BuildingType.Sewery]: {
     type: BuildingType.Sewery,
@@ -469,6 +494,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     production: { inputs: { leather: 1 }, outputs: { clothes: 1 } },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 8 },
   },
   [BuildingType.Forestry]: {
     type: BuildingType.Forestry,
@@ -490,6 +516,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
       replantChancePerTick: 0.12,
     },
     maxHp: 45,
+    unlockRequirement: { populationAtLeast: 6 },
   },
   [BuildingType.WoodCutter]: {
     type: BuildingType.WoodCutter,
@@ -506,6 +533,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     production: { inputs: { logs: 1 }, outputs: { wood: 1 } },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 8 },
   },
   [BuildingType.PotatoField]: {
     type: BuildingType.PotatoField,
@@ -517,6 +545,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1,
     production: { outputs: { potatoes: 1.2 } },
     maxHp: 45,
+    unlockRequirement: { populationAtLeast: 4 },
   },
   [BuildingType.Liquor]: {
     type: BuildingType.Liquor,
@@ -529,6 +558,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     production: { inputs: { potatoes: 2 }, outputs: { liquor: 1 } },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 10 },
   },
   [BuildingType.Saloon]: {
     type: BuildingType.Saloon,
@@ -541,6 +571,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 90,
+    unlockRequirement: { netWorthAtLeast: 3200 },
   },
   [BuildingType.Horsery]: {
     type: BuildingType.Horsery,
@@ -553,6 +584,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
+    unlockRequirement: { dayAtLeast: 3 },
   },
   [BuildingType.Bank]: {
     type: BuildingType.Bank,
@@ -565,6 +597,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
+    unlockRequirement: { netWorthAtLeast: 4000 },
   },
   [BuildingType.CactusMilker]: {
     type: BuildingType.CactusMilker,
@@ -589,6 +622,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
       replantChancePerTick: 0.1,
     },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 12 },
   },
   [BuildingType.Watchtower]: {
     type: BuildingType.Watchtower,
@@ -601,6 +635,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 1,
     requiresWorkers: true,
     maxHp: 60,
+    unlockRequirement: { dayAtLeast: 2, populationAtLeast: 10 },
   },
 };
 

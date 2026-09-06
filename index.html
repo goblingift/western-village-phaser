@@ -130,6 +130,24 @@
       #building-bar button.building-button.unaffordable .cost {
         color: #ef5350;
       }
+      /* Phase 47: locked (milestone not yet reached) is a distinct state from
+         unaffordable (money/materials short but placeable) - greyscale plus a
+         lock badge instead of the plain dim, and clicking it does nothing
+         (see BuildingBar.onButtonClick), so it must read as unclickable at a
+         glance. */
+      #building-bar button.building-button.locked {
+        position: relative;
+        opacity: 0.35;
+        filter: grayscale(1);
+        cursor: not-allowed;
+      }
+      #building-bar button.building-button.locked::after {
+        content: '\1F512';
+        position: absolute;
+        top: 1px;
+        right: 3px;
+        font-size: 11px;
+      }
       /* The canvas gets its own positioned wrapper so in-game overlays anchor
          to the play area instead of the viewport - the building bar's height
          changes with its content, and a viewport-anchored panel ended up

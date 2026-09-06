@@ -282,6 +282,82 @@ export function getLaborShortfall(): number {
   return laborShortfall;
 }
 
+/**
+ * Phase 47: which building types have already had their "New building
+ * unlocked" notification fired, so a fluctuating population/net-worth (a
+ * raid destroys a House, upkeep drains cash) doesn't re-fire the log entry
+ * every time the requirement flickers back above/below the threshold.
+ * Cleared on resetGame so a fresh run starts with a clean slate.
+ */
+const unlockNotified = new Set<BuildingType>();
+
+/**
+ * Phase 47: Milestone-Gated Building Unlocks. An undefined `unlockRequirement`
+ * is always-unlocked; otherwise every present field must hold simultaneously.
+ * Reads whichever of population/net-worth/day the requirement actually names,
+ * so a building gated purely on `dayAtLeast` doesn't pay for a net-worth
+ * computation it never asked for.
+ */
+export function isBuildingUnlocked(type: BuildingType): boolean {
+  const requirement = BUILDING_DEFINITIONS[type].unlockRequirement;
+  if (!requirement) {
+    return true;
+  }
+  if (requirement.populationAtLeast !== undefined && totalPopulation < requirement.populationAtLeast) {
+    return false;
+  }
+  if (requirement.dayAtLeast !== undefined && getDayNumber() < requirement.dayAtLeast) {
+    return false;
+  }
+  if (requirement.netWorthAtLeast !== undefined && computeNetWorth().total < requirement.netWorthAtLeast) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Player-facing "Unlocks at Population 10" / "Unlocks at Day 2, Net Worth
+ * $2200" text for a locked building's tooltip - lists every unmet field, not
+ * just the first, since a building can be gated on more than one axis
+ * (Watchtower: day + population).
+ */
+export function describeUnlockRequirement(type: BuildingType): string | null {
+  const requirement = BUILDING_DEFINITIONS[type].unlockRequirement;
+  if (!requirement) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (requirement.populationAtLeast !== undefined) {
+    parts.push(`Population ${requirement.populationAtLeast}`);
+  }
+  if (requirement.dayAtLeast !== undefined) {
+    parts.push(`Day ${requirement.dayAtLeast}`);
+  }
+  if (requirement.netWorthAtLeast !== undefined) {
+    parts.push(`Net Worth $${requirement.netWorthAtLeast}`);
+  }
+  return `Unlocks at ${parts.join(', ')}`;
+}
+
+/**
+ * Called from runProductionTick and placeBuilding - the two places population,
+ * net worth or day can meaningfully change - rather than on a dedicated timer.
+ * Fires an info-kind notification the moment a still-locked building's
+ * requirement is first satisfied, then marks it so it never fires again this
+ * run (see `unlockNotified`'s doc comment).
+ */
+function checkBuildingUnlocks(): void {
+  for (const type of Object.values(BuildingType)) {
+    if (unlockNotified.has(type) || !BUILDING_DEFINITIONS[type].unlockRequirement) {
+      continue;
+    }
+    if (isBuildingUnlocked(type)) {
+      unlockNotified.add(type);
+      addNotification(`New building unlocked: ${BUILDING_DEFINITIONS[type].label}`, 'info', elapsedSeconds);
+    }
+  }
+}
+
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
   const { width, height } = BUILDING_DEFINITIONS[type].size;
   return (
@@ -384,6 +460,12 @@ function wellOutputMultiplier(building: PlacedBuilding): number {
  * tint and the actual placement rule can never disagree.
  */
 export function getPlacementRejection(tileX: number, tileY: number, type: BuildingType): string | null {
+  // Phase 47: locked buildings are rejected before any of the map/afford
+  // checks below - a locked-but-otherwise-legal tile shouldn't surface a
+  // misleading "not enough money" reason instead of the real one.
+  if (!isBuildingUnlocked(type)) {
+    return describeUnlockRequirement(type) ?? 'Locked';
+  }
   if (!isWithinBounds(tileX, tileY, type)) {
     return 'Outside the map';
   }
@@ -505,6 +587,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   gameEvents.emit('building-placed', building);
 
   updateConnections();
+  checkBuildingUnlocks();
 
   return building;
 }
@@ -1548,6 +1631,8 @@ export function runProductionTick(): void {
     resourceTrends[key] = Math.round((resources[key] - before[key]) * 10) / 10;
   }
 
+  checkBuildingUnlocks();
+
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
   gameEvents.emit('production-tick');
@@ -1714,6 +1799,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
 
   clearNotificationDebounceState();
   clearNotifications();
+  unlockNotified.clear();
 
   // Terrain is intentionally kept across a reset (the player replays the same
   // map they just learned), but vegetation is reseeded so a run that felled
