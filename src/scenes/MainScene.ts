@@ -60,6 +60,7 @@ import {
   RAID_WARNING_LEAD_MS,
   RAID_WAVE_TIMEOUT_MS,
   RAIDER_UNIT_ATTACK_RANGE_TILES,
+  RAIDER_WALL_DETOUR_OFFSETS_TILES,
   TILE_SIZE,
   VEGETATION_CLEAR_COST,
   VIEWPORT_HEIGHT,
@@ -539,6 +540,14 @@ interface Raider {
   targetBuildingId: string | null;
   /** True once this raider's walk-to-target tween has completed; only then does it attack instead of moving. */
   arrived: boolean;
+  /**
+   * Phase 61: true while this raider is mid-detour (walking a lateral
+   * waypoint leg found by findWallDetourPoint, not yet re-resolved onto its
+   * real attack target). updateRaiderTargeting early-returns while this is
+   * set so the retarget-every-combat-tick check doesn't interrupt the
+   * detour's own tween; the detour's onComplete clears it and re-resolves.
+   */
+  detouring: boolean;
 }
 
 /**
@@ -2249,7 +2258,7 @@ export class MainScene extends Phaser.Scene {
       nightAccents: [],
     };
     this.buildingVisuals.set(building.id, visual);
-    if (building.type === BuildingType.Fence) {
+    if (building.type === BuildingType.Fence || building.type === BuildingType.Gate) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
@@ -4546,6 +4555,7 @@ export class MainScene extends Phaser.Scene {
       maxHp: scaledMaxHp,
       targetBuildingId: null,
       arrived: false,
+      detouring: false,
     };
     this.raiders.push(raider);
     this.updateRaiderTargeting(raider);
@@ -4576,8 +4586,19 @@ export class MainScene extends Phaser.Scene {
    * Called once at spawn (target starts null) and again each combat tick so
    * a raider whose target died (or that spawned with none, e.g. an empty
    * map) can pick up a newly-valid building without needing its own timer.
+   *
+   * Phase 61: early-returns while `detouring` is set - a raider mid-detour-
+   * leg (see resolveWallInteraction/findWallDetourPoint) has a null/stale
+   * targetBuildingId by design, and re-entering this normally would
+   * interrupt its detour tween every combat tick. The detour's own
+   * onComplete clears the flag and calls this again from the raider's new
+   * (closer, hopefully unblocked) position.
    */
   private updateRaiderTargeting(raider: Raider): void {
+    if (raider.detouring) {
+      return;
+    }
+
     const currentTarget = raider.targetBuildingId ? getBuildingById(raider.targetBuildingId) : null;
     if (currentTarget && currentTarget.hp > 0) {
       return;
@@ -4592,20 +4613,27 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    raider.targetBuildingId = next.id;
+    const { attackTarget, detourPoint } = this.resolveWallInteraction(raider.image.x, raider.image.y, next);
+
+    if (detourPoint) {
+      raider.arrived = false;
+      raider.detouring = true;
+      this.sendRaiderToPoint(raider, detourPoint, definition.speedPxPerSec, () => {
+        raider.detouring = false;
+        this.updateRaiderTargeting(raider);
+      });
+      return;
+    }
+
+    raider.targetBuildingId = attackTarget.id;
     raider.arrived = false;
-    this.sendRaiderToTarget(raider, next);
+    this.sendRaiderToTarget(raider, attackTarget);
   }
 
   /**
-   * Phase 38: Palisade blocking. A raider's real target is still picked by
-   * "nearest (preferred-type) building", unchanged - but if the straight
-   * line from the raider to that target crosses a live Fence tile, the
-   * blocking Fence is returned instead. Once that Fence dies,
-   * updateRaiderTargeting's normal "current target invalid -> re-pick" path
-   * calls this again from the raider's now-closer position, which either
-   * finds the next Fence layer or the original target with nothing left in
-   * the way - no separate "resume original target" bookkeeping needed.
+   * Phase 38: the "nearest (preferred-type) building" pick, unchanged - wall
+   * interaction (attack vs. detour) was split out into resolveWallInteraction
+   * in Phase 61 so this stays a pure "what's my real target" query.
    */
   private pickRaiderTarget(definition: RaiderDefinition, x: number, y: number): PlacedBuilding | null {
     let target: PlacedBuilding | null = null;
@@ -4615,10 +4643,39 @@ export class MainScene extends Phaser.Scene {
     if (!target) {
       target = this.findNearestBuilding(x, y, () => true);
     }
-    if (!target || target.type === BuildingType.Fence) {
-      return target;
+    return target;
+  }
+
+  /**
+   * Phase 61: given a raider's real target (from pickRaiderTarget), decides
+   * what it should actually walk toward this tick. If the target is itself a
+   * Fence, or nothing blocks the straight line to it, nothing changes from
+   * Phase 38 - attackTarget is just the real target. If a live Fence blocks
+   * the line, findWallDetourPoint gets one bounded shot at finding a nearby
+   * gap (a Gate, or simply a spot where the wall doesn't reach) before
+   * falling back to Phase 38's original behavior of attacking the blocking
+   * Fence outright.
+   */
+  private resolveWallInteraction(
+    x: number,
+    y: number,
+    target: PlacedBuilding,
+  ): { attackTarget: PlacedBuilding; detourPoint: { x: number; y: number } | null } {
+    if (target.type === BuildingType.Fence) {
+      return { attackTarget: target, detourPoint: null };
     }
-    return this.findBlockingFence(x, y, target) ?? target;
+
+    const blocking = this.findBlockingFence(x, y, target);
+    if (!blocking) {
+      return { attackTarget: target, detourPoint: null };
+    }
+
+    const detourPoint = this.findWallDetourPoint(x, y, target);
+    if (detourPoint) {
+      return { attackTarget: target, detourPoint };
+    }
+
+    return { attackTarget: blocking, detourPoint: null };
   }
 
   private findNearestBuilding(
@@ -4645,23 +4702,43 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Phase 38: no grid pathfinding - just a straight-line sample from the
-   * raider's current position to its target's tile-center, in half-tile
-   * steps, returning the first live Fence tile crossed (i.e. the segment
-   * nearest the raider, since sampling walks outward from it). A rough
-   * "the wall in your way" check is enough to make Fences a real obstacle
-   * without simulating movement around them.
+   * Phase 38, refactored in Phase 61 into a thin wrapper around
+   * sampleForBlockingFence (see that method's doc comment for the actual
+   * sampling logic) - kept as its own method since it's the one call site
+   * that always samples all the way out to a target building's tile-center
+   * and excludes that target's own id.
    */
   private findBlockingFence(x: number, y: number, target: PlacedBuilding): PlacedBuilding | null {
     const center = this.tileCenter(target);
-    const distance = Phaser.Math.Distance.Between(x, y, center.x, center.y);
+    return this.sampleForBlockingFence(x, y, center.x, center.y, target.id);
+  }
+
+  /**
+   * Phase 38's original straight-line sample, generalized in Phase 61 to
+   * take two raw points instead of always ending at a target building's
+   * center - findWallDetourPoint below needs to sample short raider-to-
+   * candidate and candidate-to-target legs, not just raider-to-target. Still
+   * no grid pathfinding: half-tile steps along one straight segment,
+   * returning the first live Fence tile crossed (the segment nearest the
+   * start point, since sampling walks outward from it). Gate is
+   * deliberately not checked here - see buildingConfig.ts's Gate doc comment
+   * - so a Gate tile never blocks this sample.
+   */
+  private sampleForBlockingFence(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    excludeBuildingId?: string,
+  ): PlacedBuilding | null {
+    const distance = Phaser.Math.Distance.Between(x1, y1, x2, y2);
     const steps = Math.max(1, Math.ceil(distance / (TILE_SIZE / 2)));
     const seen = new Set<string>();
 
     for (let step = 1; step < steps; step++) {
       const t = step / steps;
-      const sampleTileX = Math.floor((x + (center.x - x) * t) / TILE_SIZE);
-      const sampleTileY = Math.floor((y + (center.y - y) * t) / TILE_SIZE);
+      const sampleTileX = Math.floor((x1 + (x2 - x1) * t) / TILE_SIZE);
+      const sampleTileY = Math.floor((y1 + (y2 - y1) * t) / TILE_SIZE);
       const key = `${sampleTileX},${sampleTileY}`;
       if (seen.has(key)) {
         continue;
@@ -4669,8 +4746,74 @@ export class MainScene extends Phaser.Scene {
       seen.add(key);
 
       const building = getBuildingAtTile(sampleTileX, sampleTileY);
-      if (building && building.id !== target.id && building.type === BuildingType.Fence && building.hp > 0) {
+      if (
+        building &&
+        building.id !== excludeBuildingId &&
+        building.type === BuildingType.Fence &&
+        building.hp > 0
+      ) {
         return building;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Phase 61: bounded local search for a way around a wall segment blocking
+   * the raider's straight line to `target` - deliberately NOT pathfinding,
+   * same scoping call Phase 38 made for findBlockingFence itself. Tries
+   * RAIDER_WALL_DETOUR_OFFSETS_TILES (1 and 2 tiles) to both sides,
+   * perpendicular to the raider->target line, for 4 point samples total:
+   * - skips a candidate that lands inside a live Fence tile (nowhere to
+   *   stand),
+   * - checks the short raider->candidate leg is itself clear,
+   * - checks the longer candidate->target leg is clear (a Gate anywhere
+   *   along either leg is fine, since sampleForBlockingFence never treats
+   *   Gate as blocking).
+   * The first fully-clear candidate is returned as a one-leg waypoint; the
+   * raider walks there, then updateRaiderTargeting re-resolves fresh from
+   * that position. Two tiles is enough to find a Gate placed in an
+   * otherwise-solid wall line or a narrow gap without ever simulating a grid
+   * search - if nothing clears within that radius the wall is treated as
+   * solid there and the raider falls back to attacking it (Phase 38
+   * behavior, unchanged).
+   */
+  private findWallDetourPoint(x: number, y: number, target: PlacedBuilding): { x: number; y: number } | null {
+    const center = this.tileCenter(target);
+    const dx = center.x - x;
+    const dy = center.y - y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) {
+      return null;
+    }
+
+    const perpX = -dy / length;
+    const perpY = dx / length;
+    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
+    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
+
+    for (const offsetTiles of RAIDER_WALL_DETOUR_OFFSETS_TILES) {
+      for (const side of [-1, 1]) {
+        const offsetPx = offsetTiles * TILE_SIZE * side;
+        const candidateX = Phaser.Math.Clamp(x + perpX * offsetPx, 0, mapWidthPx);
+        const candidateY = Phaser.Math.Clamp(y + perpY * offsetPx, 0, mapHeightPx);
+
+        const candidateTileX = Math.floor(candidateX / TILE_SIZE);
+        const candidateTileY = Math.floor(candidateY / TILE_SIZE);
+        const occupant = getBuildingAtTile(candidateTileX, candidateTileY);
+        if (occupant && occupant.type === BuildingType.Fence && occupant.hp > 0) {
+          continue;
+        }
+
+        if (this.sampleForBlockingFence(x, y, candidateX, candidateY, target.id)) {
+          continue;
+        }
+        if (this.sampleForBlockingFence(candidateX, candidateY, center.x, center.y, target.id)) {
+          continue;
+        }
+
+        return { x: candidateX, y: candidateY };
       }
     }
 
@@ -4681,20 +4824,35 @@ export class MainScene extends Phaser.Scene {
   private sendRaiderToTarget(raider: Raider, target: PlacedBuilding): void {
     const definition = RAIDER_DEFINITIONS[raider.faction];
     const center = this.tileCenter(target);
-    const distance = Phaser.Math.Distance.Between(raider.image.x, raider.image.y, center.x, center.y);
-    const duration = (distance / definition.speedPxPerSec) * 1000;
+    this.sendRaiderToPoint(raider, center, definition.speedPxPerSec, () => {
+      raider.arrived = true;
+    });
+  }
 
-    raider.image.setFlipX(center.x < raider.image.x);
+  /**
+   * Phase 61: generalization of sendRaiderToTarget's tween to any raw point,
+   * not just a target building's center - used both by sendRaiderToTarget
+   * itself and by updateRaiderTargeting's detour leg (which walks to a
+   * findWallDetourPoint waypoint, not a building).
+   */
+  private sendRaiderToPoint(
+    raider: Raider,
+    point: { x: number; y: number },
+    speedPxPerSec: number,
+    onComplete: () => void,
+  ): void {
+    const distance = Phaser.Math.Distance.Between(raider.image.x, raider.image.y, point.x, point.y);
+    const duration = (distance / speedPxPerSec) * 1000;
+
+    raider.image.setFlipX(point.x < raider.image.x);
 
     this.tweens.add({
       targets: raider.image,
-      x: center.x,
-      y: center.y,
+      x: point.x,
+      y: point.y,
       duration: Math.max(duration, 1),
       ease: 'Linear',
-      onComplete: () => {
-        raider.arrived = true;
-      },
+      onComplete,
     });
   }
 

@@ -405,4 +405,19 @@ export const DYNAMITER_MAX_HP = 18;
 export const DYNAMITER_DAMAGE = 10;
 export const DYNAMITER_SPLASH_DAMAGE = 5;
 export const DYNAMITER_SPLASH_RADIUS_TILES = 2;
+
+/**
+ * Phase 61: Walls, Gates & Raider Pathing. MainScene.findWallDetourPoint's
+ * bounded local search - deliberately not pathfinding, per Phase 38's
+ * precedent (findBlockingFence's own doc comment). A raider blocked by a live
+ * Fence tries a handful of lateral sidestep points (perpendicular to its own
+ * straight line to its target, at 1 and 2 tiles out on both sides - 4 point
+ * samples total) and re-runs the same straight-line Fence sample from each
+ * candidate; the first one with a clear line to the target becomes a single
+ * waypoint leg the raider walks before re-resolving its route. No candidate
+ * clear -> falls back to Phase 38's attack-the-wall behavior unchanged. Two
+ * tiles is enough to find a nearby Gate or a one-tile-wide gap in a player's
+ * wall without ever simulating a grid search.
+ */
+export const RAIDER_WALL_DETOUR_OFFSETS_TILES: readonly number[] = [1, 2];
 export const DYNAMITER_WALK_SPEED_PX_PER_SEC = 40;

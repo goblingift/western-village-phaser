@@ -1721,19 +1721,32 @@ export interface FenceLink {
   toId: string;
 }
 
-/** Right/down-only adjacency so each fence pair is reported once, for drawing connected fence-line segments. */
+/**
+ * Phase 61: Fence and Gate are both "wall segments" for the purposes of the
+ * connected wall-line visual (redrawFenceLines in MainScene.ts) - a Gate is a
+ * deliberate opening, not a missing piece of wall, so the line should still
+ * read as one continuous fence with a gate in it rather than breaking in two.
+ * Deliberately NOT used by MainScene's raider-blocking sample
+ * (sampleForBlockingFence/findBlockingFence) - those stay Fence-only, since a
+ * Gate must never block a raider's path.
+ */
+function isWallSegment(building: PlacedBuilding): boolean {
+  return building.type === BuildingType.Fence || building.type === BuildingType.Gate;
+}
+
+/** Right/down-only adjacency so each wall-segment pair (Fence/Gate) is reported once, for drawing connected wall-line segments. */
 export function getFenceLinks(): FenceLink[] {
   const links: FenceLink[] = [];
   for (const building of placedBuildings) {
-    if (building.type !== BuildingType.Fence) {
+    if (!isWallSegment(building)) {
       continue;
     }
     const right = getBuildingAtTile(building.tileX + 1, building.tileY);
-    if (right?.type === BuildingType.Fence) {
+    if (right && isWallSegment(right)) {
       links.push({ fromId: building.id, toId: right.id });
     }
     const down = getBuildingAtTile(building.tileX, building.tileY + 1);
-    if (down?.type === BuildingType.Fence) {
+    if (down && isWallSegment(down)) {
       links.push({ fromId: building.id, toId: down.id });
     }
   }

@@ -501,6 +501,30 @@ const FENCE_SPRITE: PixelSprite = {
   ],
 };
 
+/**
+ * Phase 61: deliberately reads as a gap in the wall line rather than another
+ * solid Fence segment - heavy end posts (F) at both edges with an open lane
+ * down the middle, and a pair of hinged door-slat marks (H) on each post so
+ * it still reads as "gate", not "missing wall". The horizontal rails (D) stop
+ * short of the middle two columns instead of running edge-to-edge like
+ * FENCE_SPRITE's, which is what visually signals "you can walk through
+ * here" even though redrawFenceLines still draws a connecting line across it
+ * (see gameState.ts's isWallSegment).
+ */
+const GATE_SPRITE: PixelSprite = {
+  palette: { F: 0xc9a063, D: 0x8d6748, H: 0x4e342e },
+  pattern: [
+    '........',
+    'FH....HF',
+    'FH....HF',
+    'DD....DD',
+    'FH....HF',
+    'FH....HF',
+    'DD....DD',
+    '........',
+  ],
+};
+
 const BARRACKS_SPRITE: PixelSprite = {
   // Row 0's alternating S/gap crenellations give the roofline a small-fort
   // parapet silhouette; the H pair (rows 6-7) reads as a sheriff's-office
@@ -906,6 +930,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.PigFarm]: PIG_FARM_SPRITE,
   [BuildingType.CowRanch]: COW_RANCH_SPRITE,
   [BuildingType.Fence]: FENCE_SPRITE,
+  [BuildingType.Gate]: GATE_SPRITE,
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
   [BuildingType.Barracks]: BARRACKS_SPRITE,

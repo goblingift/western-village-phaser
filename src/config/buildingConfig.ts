@@ -28,6 +28,7 @@ export enum BuildingType {
   PigFarm = 'PigFarm',
   CowRanch = 'CowRanch',
   Fence = 'Fence',
+  Gate = 'Gate',
   Warehouse = 'Warehouse',
   Supermarket = 'Supermarket',
   Barracks = 'Barracks',
@@ -618,6 +619,30 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     category: BuildingCategory.Infrastructure,
     upkeep: 0,
     maxHp: 20,
+  },
+  /**
+   * Phase 61: Walls, Gates & Raider Pathing. A Gate is placement/connectivity-
+   * equivalent to a Fence (see gameState.ts's isWallSegment/getFenceLinks - a
+   * Gate still draws a connected wall line to its Fence neighbors) but is
+   * deliberately excluded from MainScene.sampleForBlockingFence's raider-
+   * blocking sample, so raiders walk straight through it while a solid Fence
+   * line still stops them. Passive infrastructure like Fence - no
+   * requiresWorkers, no production. Slightly costlier/tougher than Fence
+   * (reinforced posts+doors) and unlocks one tick later (population 3 vs
+   * Fence's always-unlocked) since it's a refinement a player reaches for
+   * once they're already walling something in, not on minute zero.
+   */
+  [BuildingType.Gate]: {
+    type: BuildingType.Gate,
+    label: 'Gate',
+    cost: 25,
+    materials: { logs: 2, wood: 1 },
+    size: { width: 1, height: 1 },
+    color: 0x8d6748,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0,
+    maxHp: 25,
+    unlockRequirement: { populationAtLeast: 3 },
   },
   [BuildingType.Warehouse]: {
     type: BuildingType.Warehouse,
