@@ -17,6 +17,8 @@ import {
   MOUNTED_COWBOY_SPRITE_WIDTH,
   MOUNTED_COWBOY_TEXTURE_KEY,
   RAIDERS_ATLAS_KEY,
+  RAIDER_CAMPS_ATLAS_KEY,
+  RAIDER_CAMP_SPRITE_SIZE,
   RAIDER_SPRITE_SIZE,
   RESOURCE_ICONS_ATLAS_KEY,
   RESOURCE_ICON_SIZE,
@@ -28,6 +30,7 @@ import {
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
+  raiderCampTextureKey,
   raiderTextureKey,
   resourceIconTextureKey,
 } from '../config/buildingConfig';
@@ -57,6 +60,16 @@ const PIXEL_SIZE = TILE_SIZE / PIXEL_GRID;
  */
 const ANIMAL_PIXEL_GRID = 6;
 const ANIMAL_PIXEL_SIZE = ANIMAL_SPRITE_SIZE / ANIMAL_PIXEL_GRID;
+
+/**
+ * Phase 57: Raider Camps are drawn on their own coarser-than-tile-but-finer-
+ * than-critter 8x8 grid, scaled up to RAIDER_CAMP_SPRITE_SIZE - bigger and
+ * more detailed than the 6x6 small-unit grid above, since a camp needs to
+ * read as a standing structure (tents + campfire) rather than a single
+ * creature.
+ */
+const CAMP_PIXEL_GRID = 8;
+const CAMP_PIXEL_SIZE = RAIDER_CAMP_SPRITE_SIZE / CAMP_PIXEL_GRID;
 
 type PixelPalette = Record<string, number>;
 
@@ -1117,6 +1130,46 @@ const RAIDER_SPRITES: Record<RaiderFaction, PixelSprite> = {
   [RaiderFaction.Coyotes]: COYOTE_SPRITE,
 };
 
+/**
+ * Phase 57 Raider Camp: a two-peaked tent silhouette over a small campfire
+ * (flame/ember/log palette shared across all three factions - fire looks
+ * like fire regardless of who lit it), with only the tent canvas color (C)
+ * varying per faction, mirroring how the three raider units above mostly
+ * differ by silhouette/palette rather than a wildly different composition.
+ */
+const CAMP_FLAME_PALETTE: PixelPalette = { F: 0xff7043, O: 0xffca28, W: 0x5d4037 };
+const CAMP_PATTERN: string[] = [
+  '..C...C.',
+  '.CCC.CC.',
+  'CCCCCCCC',
+  'CCCCCCCC',
+  '........',
+  '...FO...',
+  '..FOOF..',
+  '.WWWWWW.',
+];
+
+const OUTLAW_CAMP_SPRITE: PixelSprite = {
+  palette: { C: 0x37474f, ...CAMP_FLAME_PALETTE },
+  pattern: CAMP_PATTERN,
+};
+
+const RUSTLER_CAMP_SPRITE: PixelSprite = {
+  palette: { C: 0x6d5a3a, ...CAMP_FLAME_PALETTE },
+  pattern: CAMP_PATTERN,
+};
+
+const COYOTE_CAMP_SPRITE: PixelSprite = {
+  palette: { C: 0xbfa980, ...CAMP_FLAME_PALETTE },
+  pattern: CAMP_PATTERN,
+};
+
+const RAIDER_CAMP_SPRITES: Record<RaiderFaction, PixelSprite> = {
+  [RaiderFaction.Outlaws]: OUTLAW_CAMP_SPRITE,
+  [RaiderFaction.Rustlers]: RUSTLER_CAMP_SPRITE,
+  [RaiderFaction.Coyotes]: COYOTE_CAMP_SPRITE,
+};
+
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
   originX: number,
@@ -1150,6 +1203,7 @@ export class BootScene extends Phaser.Scene {
     this.generateCowboyAtlas();
     this.generateMountedCowboyAtlas();
     this.generateRaiderAtlas();
+    this.generateRaiderCampAtlas();
     this.generateVegetationAtlas();
     this.generateResourceIconAtlas();
   }
@@ -1420,6 +1474,35 @@ export class BootScene extends Phaser.Scene {
     const texture = this.textures.get(RAIDERS_ATLAS_KEY);
     factions.forEach((faction, index) => {
       texture.add(raiderTextureKey(faction), 0, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
+    });
+  }
+
+  /** Multi-frame atlas (one per faction), same layout technique as generateRaiderAtlas but on the larger RAIDER_CAMP_SPRITE_SIZE frame/pixel grid. */
+  private generateRaiderCampAtlas(): void {
+    const factions = Object.keys(RAIDER_CAMP_SPRITES) as RaiderFaction[];
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    factions.forEach((faction, index) => {
+      drawPixelSprite(graphics, index * RAIDER_CAMP_SPRITE_SIZE, 0, RAIDER_CAMP_SPRITES[faction], CAMP_PIXEL_SIZE);
+    });
+
+    graphics.generateTexture(
+      RAIDER_CAMPS_ATLAS_KEY,
+      factions.length * RAIDER_CAMP_SPRITE_SIZE,
+      RAIDER_CAMP_SPRITE_SIZE,
+    );
+    graphics.destroy();
+
+    const texture = this.textures.get(RAIDER_CAMPS_ATLAS_KEY);
+    factions.forEach((faction, index) => {
+      texture.add(
+        raiderCampTextureKey(faction),
+        0,
+        index * RAIDER_CAMP_SPRITE_SIZE,
+        0,
+        RAIDER_CAMP_SPRITE_SIZE,
+        RAIDER_CAMP_SPRITE_SIZE,
+      );
     });
   }
 }

@@ -26,6 +26,7 @@ import {
 import { addNotification } from './notifications';
 import { MarketSaveState, restoreMarket, serializeMarket } from './market';
 import { VegetationEntity, getVegetation, restoreVegetationEntities } from './vegetation';
+import { RaiderCampSaveState, getRaiderCamps, restoreRaiderCamps } from './raiderCamps';
 
 /**
  * Phase 52: Save / Load + Autosave.
@@ -46,6 +47,12 @@ import { VegetationEntity, getVegetation, restoreVegetationEntities } from './ve
  *    fresh initObjectiveQueue() rather than being treated as an error),
  *    including cumulative resources-sold and units-trained counters and the
  *    "nights survived without losing a building" count those objectives read.
+ *  - SAVED (Phase 57 addition): every live Raider Camp (`raiderCamps`,
+ *    optional on the type for the same pre-existing-save backward
+ *    compatibility reason as `objectives` - a missing field just keeps
+ *    resetGame's fresh (empty) camp list). A camp is a standing map object,
+ *    not an active/ephemeral combat entity, so it round-trips like a
+ *    building's hp rather than being discarded like an in-progress raid wave.
  *  - NOT SAVED (reset to fresh-game defaults on load), by design:
  *      - `resourceHistory` (Phase 49's rolling sparkline buffers) - purely
  *        cosmetic, and re-populates itself over the next
@@ -83,6 +90,8 @@ export interface SaveGameV1 {
   market: MarketSaveState;
   /** Phase 56: optional so a save made before this phase shipped still loads (see the class doc comment above). */
   objectives?: ObjectiveSaveState;
+  /** Phase 57: optional for the same backward-compatibility reason as objectives above - a pre-Phase-57 save simply keeps resetGame's fresh (empty) camp list instead of an error. */
+  raiderCamps?: RaiderCampSaveState[];
 }
 
 export interface SaveSlotInfo {
@@ -123,6 +132,7 @@ export function serializeGameState(): SaveGameV1 {
     vegetation: getVegetation().map((entity) => ({ ...entity })),
     market: serializeMarket(),
     objectives: serializeObjectivesState(),
+    raiderCamps: getRaiderCamps().map((camp) => ({ ...camp })),
   };
 }
 
@@ -163,6 +173,12 @@ export function deserializeGameState(save: SaveGameV1): void {
     });
     restoreMarket(save.market);
     restoreVegetationEntities(save.vegetation);
+    // Phase 57: undefined on a pre-Phase-57 save - resetGame() above already
+    // cleared the camp list via its own resetRaiderCamps() call, so a missing
+    // field is simply left as-is (empty) rather than treated as an error.
+    if (save.raiderCamps) {
+      restoreRaiderCamps(save.raiderCamps);
+    }
     for (const building of save.placedBuildings) {
       restoreBuilding(cloneBuilding(building));
     }

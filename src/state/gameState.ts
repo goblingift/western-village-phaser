@@ -87,6 +87,7 @@ import {
   resetWorldEvents,
   runWorldEventsTick,
 } from './worldEvents';
+import { resetRaiderCamps } from './raiderCamps';
 
 export interface Resources {
   rawMeat: number;
@@ -2537,6 +2538,22 @@ export function getThreatLevel(): number {
   return Math.min(1, elapsedFraction * 0.5 + wealthFraction * 0.5);
 }
 
+/**
+ * Phase 57: Raider Camps loot payout, called by MainScene's destroyRaiderCamp
+ * once a camp's hp reaches 0. Mirrors runObjectivesCheck's own reward-
+ * granting shape immediately below - money added directly, materials added
+ * straight to the resource pool bypassing the storage cap - since this is a
+ * loot drop, not production output that should be able to overflow/waste.
+ */
+export function grantRaiderCampLoot(moneyAmount: number, materials: Partial<Record<ResourceKey, number>>): void {
+  money = Math.round((money + moneyAmount) * 100) / 100;
+  for (const [key, amount] of Object.entries(materials) as [ResourceKey, number][]) {
+    resources[key] += amount;
+  }
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('resources-changed', { ...resources });
+}
+
 export function getResourceTrends(): Readonly<Resources> {
   return resourceTrends;
 }
@@ -2660,6 +2677,11 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   // map they just learned), but vegetation is reseeded so a run that felled
   // every tree doesn't start the next one on a bald map.
   resetVegetation();
+  // Phase 57: a fresh run/reset never inherits the previous run's Raider
+  // Camps - MainScene's own initialCampsSpawned flag (reset alongside this
+  // via 'game-reset') re-triggers spawnInitialRaiderCamps() once Day
+  // RAIDER_CAMP_SPAWN_DAY begins again.
+  resetRaiderCamps();
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });

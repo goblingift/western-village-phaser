@@ -346,3 +346,23 @@ export const WANDERING_SETTLERS_MONEY_MAX = 400;
  * the player always has this many goals in view rather than one at a time.
  */
 export const ROLLING_OBJECTIVE_SLOT_COUNT = 3;
+
+/**
+ * Phase 57: Raider Camps (Offense Phase). Persistent hostile structures that
+ * source raid waves (see MainScene.startRaid) instead of raiders spawning out
+ * of nowhere at a random map edge, and are themselves a valid right-click
+ * attack-order target for player units (CombatUnit.attackTarget). Gated
+ * behind the same "not immediately" idea as RAID_EARLIEST_ELAPSED_MS above -
+ * the first camp(s) appear once Day RAIDER_CAMP_SPAWN_DAY begins, giving the
+ * player time to field a Barracks/Cowboy before there's anything to strike
+ * (or be struck from).
+ */
+export const RAIDER_CAMP_MIN_COUNT = 1;
+export const RAIDER_CAMP_MAX_COUNT = 3;
+export const RAIDER_CAMP_SPAWN_DAY = 2;
+export const RAIDER_CAMP_MAX_HP = 140;
+/** Loot dropped once a camp's hp reaches 0 - a flat reward, not scaled by threat, so raiding a camp is reliably worth it even early in a run. */
+export const RAIDER_CAMP_LOOT_MONEY = 150;
+export const RAIDER_CAMP_LOOT_TOOLS = 10;
+/** Slightly larger than MainScene's RAIDER_ATTACK_HIT_RADIUS_PX, matching the camp's bigger sprite footprint. */
+export const RAIDER_CAMP_ATTACK_HIT_RADIUS_PX = 14;

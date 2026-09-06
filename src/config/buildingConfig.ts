@@ -1082,6 +1082,20 @@ export function raiderTextureKey(faction: RaiderFaction): string {
   return `raider-${faction}`;
 }
 
+/**
+ * Phase 57: Raider Camps. Own atlas, one frame per faction like
+ * RAIDERS_ATLAS_KEY/RAIDER_SPRITE_SIZE above, but a larger frame - a camp is
+ * a standing cluster of tents/a campfire, not a single moving creature, and
+ * needs to read as a structure at a glance (including as a bigger dot on the
+ * minimap).
+ */
+export const RAIDER_CAMPS_ATLAS_KEY = 'raider-camps-atlas';
+export const RAIDER_CAMP_SPRITE_SIZE = 24;
+
+export function raiderCampTextureKey(faction: RaiderFaction): string {
+  return `raider-camp-${faction}`;
+}
+
 export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',

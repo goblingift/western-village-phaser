@@ -31,6 +31,13 @@ import {
   MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
   POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
+  RAIDER_CAMP_ATTACK_HIT_RADIUS_PX,
+  RAIDER_CAMP_LOOT_MONEY,
+  RAIDER_CAMP_LOOT_TOOLS,
+  RAIDER_CAMP_MAX_COUNT,
+  RAIDER_CAMP_MAX_HP,
+  RAIDER_CAMP_MIN_COUNT,
+  RAIDER_CAMP_SPAWN_DAY,
   RAID_MAX_HP_MULTIPLIER,
   RAID_MAX_INTERVAL_MS,
   RAID_MAX_INTERVAL_SQUEEZE,
@@ -86,6 +93,8 @@ import {
   MOUNTED_COWBOY_TEXTURE_KEY,
   PlacedBuilding,
   RAIDERS_ATLAS_KEY,
+  RAIDER_CAMPS_ATLAS_KEY,
+  RAIDER_CAMP_SPRITE_SIZE,
   RAIDER_DEFINITIONS,
   RESOURCE_LABELS,
   RaiderDefinition,
@@ -99,6 +108,7 @@ import {
   formatResourceMap,
   getWorkersRequired,
   isLinePlacementBuilding,
+  raiderCampTextureKey,
   raiderTextureKey,
 } from '../config/buildingConfig';
 import {
@@ -113,6 +123,14 @@ import { BuildingRemovedPayload, HouseTierChangePayload, gameEvents } from '../s
 import { addNotification } from '../state/notifications';
 import { startMerchantDeal } from '../state/market';
 import { AUTOSAVE_SLOT, saveToSlot } from '../state/persistence';
+import {
+  RaiderCamp,
+  damageRaiderCamp,
+  getRaiderCampById,
+  getRaiderCamps,
+  removeRaiderCamp,
+  spawnRaiderCamp,
+} from '../state/raiderCamps';
 import {
   DurationWorldEventType,
   WORLD_EVENT_LABELS,
@@ -141,6 +159,7 @@ import {
   getPlacementRejection,
   getPlacementWarning,
   getThreatLevel,
+  grantRaiderCampLoot,
   isGameOver,
   placeBuilding,
   runProductionTick,
@@ -231,6 +250,15 @@ const MINIMAP_UNIT_DOT_SIZE = 3;
 const MINIMAP_UNIT_COLOR = 0x2979ff;
 const MINIMAP_RAIDER_DOT_SIZE = 3;
 const MINIMAP_RAIDER_COLOR = 0xff1744;
+/**
+ * Phase 57: Raider Camps get their own distinct minimap marker color/size -
+ * bigger than a unit dot and drawn on the always-on minimapGraphics (not the
+ * throttled minimapCombatGraphics units/raiders share), since a camp is a
+ * permanent map feature the player should be able to plan around at any
+ * time, not just during an active wave.
+ */
+const MINIMAP_CAMP_DOT_SIZE = 5;
+const MINIMAP_CAMP_COLOR = 0x9c27b0;
 /** How long a hit building's minimap dot alternates size/color after taking damage. */
 const MINIMAP_FLASH_DURATION_MS = 1600;
 /** Blink half-period - the flash dot toggles size every this-many ms. */
@@ -332,6 +360,15 @@ const VILLAGER_PAUSE_MAX_MS = 2000;
  * on top of everything they're reporting on.
  */
 const RAIDER_SPRITE_DEPTH = 12;
+/**
+ * Phase 57: Raider Camps are static map structures, not roaming units, so
+ * they render at the same depth band as buildings (10) rather than the
+ * small-unit band (12) - the same z-order convention a real building would
+ * use, just without ever entering buildingVisuals/gameState's PlacedBuilding
+ * list.
+ */
+const RAIDER_CAMP_SPRITE_DEPTH = 10;
+const RAIDER_CAMP_SPRITE_HALF_HEIGHT_PX = RAIDER_CAMP_SPRITE_SIZE / 2;
 const COWBOY_SHOT_DEPTH = 13.5;
 const COWBOY_SHOT_COLOR = 0xffee58;
 const COWBOY_SHOT_FADE_MS = 200;
@@ -451,7 +488,7 @@ interface BuildingVisual {
  * single source of truth.
  */
 interface Raider {
-  /** Phase 40: stable identity so a unit's attack order (CombatUnit.attackTargetRaiderId) can survive this raider's hp changing/moving across ticks without holding a live object reference across the array's own churn. */
+  /** Phase 40: stable identity so a unit's attack order (CombatUnit.attackTarget) can survive this raider's hp changing/moving across ticks without holding a live object reference across the array's own churn. */
   id: string;
   image: Phaser.GameObjects.Image;
   faction: RaiderFaction;
@@ -512,6 +549,18 @@ interface OffscreenThreat {
   lastHitAt: number;
 }
 
+/**
+ * Phase 57: generalizes what used to be a bare `attackTargetRaiderId: string
+ * | null` into a small discriminated ref so a standing attack order can name
+ * either a Raider or a RaiderCamp by id - both are looked up fresh every tick
+ * (through getAttackTargetPosition) rather than holding a live object
+ * reference, exactly like the raider-only version did.
+ */
+interface AttackTargetRef {
+  kind: 'raider' | 'camp';
+  id: string;
+}
+
 interface CombatUnit {
   /** Phase 41: stable identity for control groups (Map<number, string[]>) and double-click-select-all, surviving this.cowboyUnits' own churn the same way Raider.id does. */
   id: string;
@@ -522,16 +571,18 @@ interface CombatUnit {
   kind: UnitKind;
   /**
    * Phase 40: an explicit attack order (issueUnitAttackOrder) on a specific
-   * raider, by Raider.id. While set, this unit's combat-tick behavior
-   * (resolveUnitAttackOrders/resolveCowboyFire) locks onto that one raider -
-   * approaching into range and then focus-firing it every tick - instead of
-   * the default "auto-fire at whichever raider is nearest" rule. Cleared the
-   * moment the ordered raider is no longer found alive (dead, or the wave
-   * ended) so the unit falls back to auto-targeting on its own, and also
-   * cleared by any new plain move order (issueUnitMoveOrders), since that's
-   * an explicit new command superseding the standing attack order.
+   * raider or (Phase 57) Raider Camp. While set, this unit's combat-tick
+   * behavior (resolveUnitAttackOrders/resolveCowboyFire) locks onto that one
+   * target - approaching into range and then focus-firing it every tick -
+   * instead of the default "auto-fire at whichever raider is nearest" rule
+   * (which never auto-targets a camp; only an explicit order does). Cleared
+   * the moment the ordered target is no longer found alive (dead/destroyed,
+   * or the wave ended) so the unit falls back to auto-targeting raiders on
+   * its own, and also cleared by any new plain move order
+   * (issueUnitMoveOrders), since that's an explicit new command superseding
+   * the standing attack order.
    */
-  attackTargetRaiderId: string | null;
+  attackTarget: AttackTargetRef | null;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -573,8 +624,12 @@ export class MainScene extends Phaser.Scene {
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
   private raiders: Raider[] = [];
-  /** Phase 40: monotonically increasing so every Raider.id is unique for the life of the scene, even across waves/resets - a stray stale attackTargetRaiderId can then never accidentally match a later, unrelated raider. */
+  /** Phase 40: monotonically increasing so every Raider.id is unique for the life of the scene, even across waves/resets - a stray stale AttackTargetRef can then never accidentally match a later, unrelated raider. */
   private raiderIdCounter = 0;
+  /** Phase 57: Raider Camps' sprites, keyed by RaiderCamp.id - the camps themselves (position/hp/faction) live in state/raiderCamps.ts, mirroring how building.hp lives in gameState while buildingVisuals only holds the Image. */
+  private campVisuals = new Map<string, Phaser.GameObjects.Image>();
+  /** Phase 57: true once this run has rolled its initial 1-3 Raider Camps (on the first dawn at/after RAIDER_CAMP_SPAWN_DAY, or restored from a loaded save) - guards spawnInitialRaiderCamps against firing more than once per run. */
+  private initialCampsSpawned = false;
   private raidActive = false;
   private raidNoticeText!: Phaser.GameObjects.Text;
   private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
@@ -683,6 +738,7 @@ export class MainScene extends Phaser.Scene {
     this.setupDayNightCycle();
     this.setupAudio();
     this.setupRaidSystem();
+    this.setupRaiderCamps();
     this.setupMerchantSystem();
     this.setupWorldEventSystem();
     this.setupNotificationLog();
@@ -1224,6 +1280,23 @@ export class MainScene extends Phaser.Scene {
         this.minimapY + centerTileY * tileHeight - MINIMAP_BUILDING_DOT_SIZE / 2,
         MINIMAP_BUILDING_DOT_SIZE,
         MINIMAP_BUILDING_DOT_SIZE,
+      );
+    }
+
+    // Phase 57: Raider Camps are drawn on this always-on layer (redrawn on
+    // building-placed/game-reset/camp-spawned/camp-destroyed), not the
+    // throttled per-frame minimapCombatGraphics units/raiders share - a camp
+    // never moves and should be visible as a standing objective regardless of
+    // whether a wave is currently active.
+    this.minimapGraphics.fillStyle(MINIMAP_CAMP_COLOR, 1);
+    for (const camp of getRaiderCamps()) {
+      const tileX = camp.x / TILE_SIZE;
+      const tileY = camp.y / TILE_SIZE;
+      this.minimapGraphics.fillRect(
+        this.minimapX + tileX * tileWidth - MINIMAP_CAMP_DOT_SIZE / 2,
+        this.minimapY + tileY * tileHeight - MINIMAP_CAMP_DOT_SIZE / 2,
+        MINIMAP_CAMP_DOT_SIZE,
+        MINIMAP_CAMP_DOT_SIZE,
       );
     }
 
@@ -1931,6 +2004,12 @@ export class MainScene extends Phaser.Scene {
 
   private spawnDustBurst(building: PlacedBuilding): void {
     const center = this.tileCenter(building);
+    this.spawnDustBurstAt(center.x, center.y);
+  }
+
+  /** Extracted from spawnDustBurst (Phase 57) so Raider Camp destruction - which has no PlacedBuilding/tileCenter to read a footprint from - can reuse the same dust-motes burst at a plain world point. */
+  private spawnDustBurstAt(centerX: number, centerY: number): void {
+    const center = { x: centerX, y: centerY };
 
     for (let index = 0; index < DUST_PUFF_COUNT; index++) {
       const radius = Phaser.Math.Between(DUST_PUFF_RADIUS_MIN, DUST_PUFF_RADIUS_MAX);
@@ -2440,7 +2519,9 @@ export class MainScene extends Phaser.Scene {
    * buildingVisuals. Player units hide their bar at full HP (matching the
    * building convention); raiders always show theirs since they're
    * transient, combat-only entities where "how close is this one to dying"
-   * is useful at a glance even at full health.
+   * is useful at a glance even at full health. Phase 57: every live Raider
+   * Camp gets the same always-shown treatment as a raider - it's a standing
+   * objective the player is actively expected to whittle down.
    */
   private redrawUnitHpBars(): void {
     this.unitHpBarGraphics.clear();
@@ -2463,6 +2544,10 @@ export class MainScene extends Phaser.Scene {
       }
       this.drawUnitHpBar(raider.image.x, raider.image.y, raider.hp, raider.maxHp);
     }
+
+    for (const camp of getRaiderCamps()) {
+      this.drawUnitHpBar(camp.x, camp.y, camp.hp, camp.maxHp, RAIDER_CAMP_SPRITE_HALF_HEIGHT_PX);
+    }
   }
 
   /** Reads a unit's live HP straight out of its owning building's parallel HP array - gameState stays the single source of truth for unit HP, same pattern isCowboyUnitAlive already uses. */
@@ -2475,10 +2560,22 @@ export class MainScene extends Phaser.Scene {
     return hpArray[unit.index] ?? null;
   }
 
-  /** Same two-fill-rect background/fill technique as redrawHpBars, just centered on a unit's live x/y instead of anchored to a building's tile footprint. */
-  private drawUnitHpBar(centerX: number, centerY: number, hp: number, maxHp: number): void {
+  /**
+   * Same two-fill-rect background/fill technique as redrawHpBars, just
+   * centered on a unit's live x/y instead of anchored to a building's tile
+   * footprint. `spriteHalfHeightPx` (Phase 57) defaults to a small unit's
+   * half-height but lets a bigger sprite (a Raider Camp) push its bar up far
+   * enough to clear its own footprint.
+   */
+  private drawUnitHpBar(
+    centerX: number,
+    centerY: number,
+    hp: number,
+    maxHp: number,
+    spriteHalfHeightPx: number = UNIT_SPRITE_HALF_HEIGHT_PX,
+  ): void {
     const px = centerX - UNIT_HP_BAR_WIDTH / 2;
-    const py = centerY - UNIT_SPRITE_HALF_HEIGHT_PX - UNIT_HP_BAR_MARGIN_ABOVE_PX - UNIT_HP_BAR_HEIGHT;
+    const py = centerY - spriteHalfHeightPx - UNIT_HP_BAR_MARGIN_ABOVE_PX - UNIT_HP_BAR_HEIGHT;
     const ratio = Math.max(0, hp / maxHp);
 
     this.unitHpBarGraphics.fillStyle(HP_BAR_BG_COLOR, 1);
@@ -3086,7 +3183,7 @@ export class MainScene extends Phaser.Scene {
       index,
       moveTween: null,
       kind: 'cowboy',
-      attackTargetRaiderId: null,
+      attackTarget: null,
     };
     this.cowboyUnits.push(unit);
     return unit;
@@ -3105,7 +3202,7 @@ export class MainScene extends Phaser.Scene {
       index,
       moveTween: null,
       kind: 'cowboyOnHorse',
-      attackTargetRaiderId: null,
+      attackTarget: null,
     };
     this.cowboyUnits.push(unit);
     return unit;
@@ -3241,11 +3338,18 @@ export class MainScene extends Phaser.Scene {
         }
         // Phase 40: right-clicking directly on a live raider issues a focus-fire
         // attack order on that specific raider instead of a plain move order;
+        // Phase 57 extends the same hit-test to a live Raider Camp (checked
+        // second - a raider standing in front of its own camp still wins);
         // right-clicking anything else (empty ground, a building, etc.) keeps
         // the original move-order behavior unchanged.
         const raider = this.findRaiderAt(pointer.worldX, pointer.worldY);
         if (raider) {
-          this.issueUnitAttackOrder(raider);
+          this.issueUnitAttackOrder({ kind: 'raider', id: raider.id }, { x: raider.image.x, y: raider.image.y });
+          return;
+        }
+        const camp = this.findCampAt(pointer.worldX, pointer.worldY);
+        if (camp) {
+          this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
         } else {
           this.issueUnitMoveOrders(pointer);
         }
@@ -3342,7 +3446,7 @@ export class MainScene extends Phaser.Scene {
       // An explicit new move order supersedes any standing attack order -
       // otherwise resolveUnitAttackOrders would immediately start steering
       // the unit back toward its old target on the next combat tick.
-      unit.attackTargetRaiderId = null;
+      unit.attackTarget = null;
       const jitterX = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       this.issueUnitMoveOrder(unit, pointer.worldX + jitterX, pointer.worldY + jitterY);
@@ -3368,39 +3472,77 @@ export class MainScene extends Phaser.Scene {
     return best;
   }
 
+  /** Nearest live Raider Camp to a world point within RAIDER_CAMP_ATTACK_HIT_RADIUS_PX, or null - mirrors findRaiderAt exactly, checked second in the pointerup handler so an overlapping raider always wins the hit-test. */
+  private findCampAt(worldX: number, worldY: number): RaiderCamp | null {
+    let best: RaiderCamp | null = null;
+    let bestDistance = RAIDER_CAMP_ATTACK_HIT_RADIUS_PX;
+
+    for (const camp of getRaiderCamps()) {
+      const distance = Phaser.Math.Distance.Between(worldX, worldY, camp.x, camp.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = camp;
+      }
+    }
+
+    return best;
+  }
+
   /**
-   * Phase 40: locks every selected unit onto one specific raider by id. Unlike
-   * a plain move order, this survives across combat ticks
-   * (resolveUnitAttackOrders re-issues the approach each tick and
-   * resolveCowboyFire focus-fires this raider specifically once in range)
-   * until the raider dies or otherwise stops being found alive, at which
-   * point the unit falls back to auto-targeting on its own.
+   * Phase 40: locks every selected unit onto one specific raider (or, Phase
+   * 57, Raider Camp) by AttackTargetRef. Unlike a plain move order, this
+   * survives across combat ticks (resolveUnitAttackOrders re-issues the
+   * approach each tick and resolveCowboyFire focus-fires this target
+   * specifically once in range) until the target dies/is destroyed or
+   * otherwise stops being found alive, at which point the unit falls back to
+   * auto-targeting raiders on its own. `position` is the target's current
+   * world position at order time, used only for the immediate approach-or-
+   * engage feedback below - every later tick re-resolves it fresh via
+   * getAttackTargetPosition instead of trusting this snapshot.
    */
-  private issueUnitAttackOrder(raider: Raider): void {
+  private issueUnitAttackOrder(target: AttackTargetRef, position: { x: number; y: number }): void {
     // Same one-confirmation-per-order rule as issueUnitMoveOrders.
     playUiSound('moveConfirm');
     for (const unit of this.selectedUnits) {
-      unit.attackTargetRaiderId = raider.id;
-      this.approachOrEngageRaiderTarget(unit, raider);
+      unit.attackTarget = target;
+      this.approachOrEngageTarget(unit, position);
     }
+  }
+
+  /**
+   * Live world position of a unit's standing attack order, re-resolved fresh
+   * every call (never cached) since a raider walks and a camp's hp can hit
+   * zero between ticks. Returns null once the ordered target is no longer
+   * found alive/existing, which is exactly the signal resolveUnitAttackOrders
+   * uses to clear the order and hand the unit back to auto-targeting.
+   */
+  private getAttackTargetPosition(target: AttackTargetRef): { x: number; y: number } | null {
+    if (target.kind === 'raider') {
+      const raider = this.raiders.find((candidate) => candidate.id === target.id && candidate.hp > 0);
+      return raider ? { x: raider.image.x, y: raider.image.y } : null;
+    }
+    const camp = getRaiderCampById(target.id);
+    return camp && camp.hp > 0 ? { x: camp.x, y: camp.y } : null;
   }
 
   /**
    * Shared by issueUnitAttackOrder (immediate feedback the moment the order is
    * given) and resolveUnitAttackOrders (the per-combat-tick refresh): if the
-   * unit is already within COWBOY_RANGE_TILES of the raider, stop closing the
-   * distance and hold position so resolveCowboyFire can start focus-firing it;
-   * otherwise (re)issue a move order toward the raider's current position.
+   * unit is already within COWBOY_RANGE_TILES of the target position, stop
+   * closing the distance and hold position so resolveCowboyFire can start
+   * focus-firing it; otherwise (re)issue a move order toward it. Generalized
+   * (Phase 57) from a Raider-only version to a plain {x,y} since neither a
+   * raider's live position nor a camp's static one need any other field here.
    */
-  private approachOrEngageRaiderTarget(unit: CombatUnit, raider: Raider): void {
+  private approachOrEngageTarget(unit: CombatUnit, position: { x: number; y: number }): void {
     const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
-    const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, raider.image.x, raider.image.y);
+    const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, position.x, position.y);
     if (distance <= rangePx) {
       unit.moveTween?.stop();
       unit.moveTween = null;
       return;
     }
-    this.issueUnitMoveOrder(unit, raider.image.x, raider.image.y);
+    this.issueUnitMoveOrder(unit, position.x, position.y);
   }
 
   /** Same point-to-point tween technique as villagers/raiders (distance/speed -> duration, setFlipX for facing), clamped to map bounds. */
@@ -3570,14 +3712,14 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * Cycles selection through units with no standing order (not mid-move-tween
-   * and no attackTargetRaiderId), centering the camera on each in turn and
+   * and no attackTarget), centering the camera on each in turn and
    * wrapping around. If exactly one idle unit is already selected, this
    * advances from its position in the idle list; any other selection state
    * (none, multiple, or a non-idle unit) restarts from the first idle unit.
    */
   private cycleIdleUnitSelection(): void {
     const idleUnits = this.cowboyUnits.filter(
-      (unit) => this.isCowboyUnitAlive(unit) && unit.moveTween === null && unit.attackTargetRaiderId === null,
+      (unit) => this.isCowboyUnitAlive(unit) && unit.moveTween === null && unit.attackTarget === null,
     );
     if (idleUnits.length === 0) {
       return;
@@ -3750,6 +3892,7 @@ export class MainScene extends Phaser.Scene {
       // so rebuilding every sprite from the current entity list here picks up
       // the new layout.
       this.redrawAllVegetation();
+      this.resetRaiderCampVisuals();
       this.redrawMinimap();
 
       this.resetRaidState();
@@ -3773,6 +3916,16 @@ export class MainScene extends Phaser.Scene {
       for (const building of getPlacedBuildings()) {
         this.restoreBuildingVisual(building);
       }
+      // Phase 57: a loaded save's Raider Camps are real persisted state (see
+      // persistence.ts) - restore their sprites the same way. Whether the
+      // day-2 initial spawn should still be considered "pending" depends on
+      // the loaded day number, not merely on whether any camp currently
+      // exists: a save from before RAIDER_CAMP_SPAWN_DAY should still spawn
+      // camps once that day naturally arrives during continued play, while a
+      // later save with 0 camps (every one already destroyed) must not have
+      // them respawn just because it was reloaded.
+      this.restoreCampVisuals();
+      this.initialCampsSpawned = getDayNumber() >= RAIDER_CAMP_SPAWN_DAY;
       this.redrawMinimap();
       this.suppressNextAutosaveCheck = true;
     });
@@ -4085,9 +4238,18 @@ export class MainScene extends Phaser.Scene {
    * Phase 31: wave size and raider toughness both scale with threat. The HP
    * multiplier is carried on each Raider rather than mutating
    * RAIDER_DEFINITIONS, which must stay the immutable base stat table.
+   *
+   * Phase 57: piggybacks Raider Camps onto this same wave timer rather than
+   * forking a second one per camp (per the phase brief) - if any camp exists,
+   * this wave sources its spawn point and faction from one random live camp
+   * instead of pickRaidSpawnPoint()'s random edge point/pickRaidFaction()'s
+   * random faction; with no camps on the map yet (or all destroyed), a raid
+   * still spawns exactly as it always did, out of nowhere at a random edge.
    */
   private startRaid(): void {
-    const faction = this.pickRaidFaction();
+    const camps = getRaiderCamps();
+    const sourceCamp = camps.length > 0 ? camps[Phaser.Math.Between(0, camps.length - 1)] : null;
+    const faction = sourceCamp ? sourceCamp.faction : this.pickRaidFaction();
     const threat = getThreatLevel();
     const maxUnits = Math.round(
       RAID_MIN_UNITS + (RAID_MAX_UNITS_ESCALATED - RAID_MIN_UNITS) * threat,
@@ -4098,9 +4260,10 @@ export class MainScene extends Phaser.Scene {
     this.raidActive = true;
     this.raidWarningTimer?.remove();
     this.raidWarningTimer = null;
-    this.showRaidNotice(faction, count, threat);
+    this.showRaidNotice(faction, count, threat, sourceCamp !== null);
+    const origin = sourceCamp ? { x: sourceCamp.x, y: sourceCamp.y } : undefined;
     for (let i = 0; i < count; i++) {
-      this.spawnRaider(faction, hpMultiplier);
+      this.spawnRaider(faction, hpMultiplier, origin);
     }
 
     this.raidWaveTimer = this.time.delayedCall(RAID_WAVE_TIMEOUT_MS, () => this.endRaidWave());
@@ -4113,9 +4276,10 @@ export class MainScene extends Phaser.Scene {
    * still visible afterward. No buildingId: a raid targets whichever building
    * each raider individually picks, not one fixed location.
    */
-  private showRaidNotice(faction: RaiderFaction, count: number, threat: number): void {
+  private showRaidNotice(faction: RaiderFaction, count: number, threat: number, fromCamp = false): void {
     const tier = threat >= 0.66 ? 'Large ' : threat >= 0.33 ? 'Organized ' : '';
-    const message = `${tier}${RAIDER_DEFINITIONS[faction].label} raid - ${count} incoming!`;
+    const originText = fromCamp ? ' from their camp' : '';
+    const message = `${tier}${RAIDER_DEFINITIONS[faction].label} raid${originText} - ${count} incoming!`;
     this.raidNoticeText.setText(message);
     this.raidNoticeText.setVisible(true);
     addNotification(message, 'danger', getElapsedSeconds());
@@ -4125,8 +4289,9 @@ export class MainScene extends Phaser.Scene {
     this.raidNoticeText.setVisible(false);
   }
 
-  private spawnRaider(faction: RaiderFaction, hpMultiplier = 1): void {
-    const spawn = this.pickRaidSpawnPoint();
+  /** origin (Phase 57): when a wave is sourced from a Raider Camp, every raider spawns at that camp's position instead of a random pickRaidSpawnPoint() edge point. */
+  private spawnRaider(faction: RaiderFaction, hpMultiplier = 1, origin?: { x: number; y: number }): void {
+    const spawn = origin ?? this.pickRaidSpawnPoint();
     const definition = RAIDER_DEFINITIONS[faction];
 
     const image = this.add
@@ -4294,9 +4459,22 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  /** Runs on the same 2s cadence as production (see setupProductionTimer); no-op when nothing is on the map so an idle game costs nothing extra. */
+  /**
+   * Runs on the same 2s cadence as production (see setupProductionTimer);
+   * no-op when nothing is on the map so an idle game costs nothing extra.
+   *
+   * Phase 57: the "nothing on the map" bail-out used to be just
+   * `this.raiders.length === 0`, which would silently skip
+   * resolveUnitAttackOrders/resolveCowboyFire (and therefore never apply any
+   * damage) for a unit sent to proactively assault a Raider Camp while no
+   * wave happens to be active - exactly the primary offense-phase use case.
+   * The guard now also stays open while any unit has a live camp attack
+   * order; every other branch below already no-ops cheaply against an empty
+   * raiders array.
+   */
   private runRaidCombatTick(): void {
-    if (this.raiders.length === 0) {
+    const hasCampAttackOrder = this.cowboyUnits.some((unit) => unit.attackTarget?.kind === 'camp');
+    if (this.raiders.length === 0 && !hasCampAttackOrder) {
       return;
     }
 
@@ -4316,24 +4494,25 @@ export class MainScene extends Phaser.Scene {
   /**
    * Phase 40: advances every unit under a live attack order (see
    * issueUnitAttackOrder) one step ahead of resolveRaiderAttacks/
-   * resolveCowboyFire - closing the distance if the ordered raider is still
-   * out of range, or holding position once it's in range. A target that died
-   * or otherwise vanished since the order was given clears
-   * attackTargetRaiderId, which is what lets resolveCowboyFire's default
+   * resolveCowboyFire - closing the distance if the ordered target is still
+   * out of range, or holding position once it's in range. A target that died/
+   * was destroyed or otherwise vanished since the order was given clears
+   * attackTarget, which is what lets resolveCowboyFire's default
    * nearest-in-range rule take back over for that unit starting this same
-   * tick.
+   * tick. Phase 57: the target may now be a Raider Camp as well as a raider;
+   * getAttackTargetPosition resolves either kind uniformly.
    */
   private resolveUnitAttackOrders(): void {
     for (const unit of this.cowboyUnits) {
-      if (!unit.attackTargetRaiderId || !this.isCowboyUnitAlive(unit)) {
+      if (!unit.attackTarget || !this.isCowboyUnitAlive(unit)) {
         continue;
       }
-      const raider = this.raiders.find((candidate) => candidate.id === unit.attackTargetRaiderId);
-      if (!raider || raider.hp <= 0) {
-        unit.attackTargetRaiderId = null;
+      const position = this.getAttackTargetPosition(unit.attackTarget);
+      if (!position) {
+        unit.attackTarget = null;
         continue;
       }
-      this.approachOrEngageRaiderTarget(unit, raider);
+      this.approachOrEngageTarget(unit, position);
     }
   }
 
@@ -4466,8 +4645,15 @@ export class MainScene extends Phaser.Scene {
       if (!target) {
         continue;
       }
-      target.hp -= COWBOY_DAMAGE;
-      this.spawnCowboyShotVisual(position, target.image);
+      // Phase 57: same damage-application pattern for either kind - a plain
+      // subtract-then-check-for-death, just against a Raider's local .hp or a
+      // RaiderCamp's module-owned hp (via damageCamp/state/raiderCamps.ts).
+      if (target.kind === 'raider') {
+        target.raider.hp -= COWBOY_DAMAGE;
+        this.spawnCowboyShotVisual(position, target.raider.image);
+      } else {
+        this.damageCamp(target.camp, COWBOY_DAMAGE, position);
+      }
       shots.push(position);
       anyHit = true;
     }
@@ -4483,27 +4669,41 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * Phase 40: a unit under a live, in-range attack order focus-fires that
-   * specific raider - ignoring whatever is nearest - so it doesn't get pulled
-   * off its ordered target onto a closer raider mid-fight. resolveUnitAttackOrders
-   * already ran earlier this same tick and either closed the distance or is
-   * holding position, so "still out of range" here just means "keep
-   * approaching, don't fire yet" rather than falling back to auto-targeting.
+   * specific target - ignoring whatever raider is nearest - so it doesn't get
+   * pulled off its ordered target mid-fight. resolveUnitAttackOrders already
+   * ran earlier this same tick and either closed the distance or is holding
+   * position, so "still out of range" here just means "keep approaching,
+   * don't fire yet" rather than falling back to auto-targeting.
+   *
+   * Phase 57: generalized to a small tagged union so this can resolve either
+   * a Raider or (only ever via an explicit order - never the default
+   * nearest-in-range fallback below, since a camp is a static objective, not
+   * a threat a defender should reflexively engage) a RaiderCamp.
    */
   private resolveUnitFireTarget(
     unit: CombatUnit,
     position: { x: number; y: number },
     rangePx: number,
-  ): Raider | null {
-    if (unit.attackTargetRaiderId) {
-      const raider = this.raiders.find(
-        (candidate) => candidate.id === unit.attackTargetRaiderId && candidate.hp > 0,
-      );
-      if (raider) {
-        const distance = Phaser.Math.Distance.Between(position.x, position.y, raider.image.x, raider.image.y);
-        return distance <= rangePx ? raider : null;
+  ): { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp } | null {
+    if (unit.attackTarget) {
+      if (unit.attackTarget.kind === 'raider') {
+        const raider = this.raiders.find(
+          (candidate) => candidate.id === unit.attackTarget!.id && candidate.hp > 0,
+        );
+        if (raider) {
+          const distance = Phaser.Math.Distance.Between(position.x, position.y, raider.image.x, raider.image.y);
+          return distance <= rangePx ? { kind: 'raider', raider } : null;
+        }
+      } else {
+        const camp = getRaiderCampById(unit.attackTarget.id);
+        if (camp && camp.hp > 0) {
+          const distance = Phaser.Math.Distance.Between(position.x, position.y, camp.x, camp.y);
+          return distance <= rangePx ? { kind: 'camp', camp } : null;
+        }
       }
     }
-    return this.findNearestRaider(position.x, position.y, rangePx);
+    const raider = this.findNearestRaider(position.x, position.y, rangePx);
+    return raider ? { kind: 'raider', raider } : null;
   }
 
   /**
@@ -4653,6 +4853,116 @@ export class MainScene extends Phaser.Scene {
     this.offscreenThreats.clear();
 
     this.scheduleNextRaidCheck();
+  }
+
+  /**
+   * Phase 57: Raider Camps (Offense Phase). Camps are persistent hostile
+   * structures rather than another wave-scoped combat entity, so their
+   * existence/hp live in state/raiderCamps.ts (Phase 52-style persistence,
+   * see that module's doc comment) instead of alongside the ephemeral
+   * Raider[]/raidActive state above. This scene still owns every camp's
+   * sprite (campVisuals) and decides *when* the initial batch appears -
+   * once, on the first dawn at/after RAIDER_CAMP_SPAWN_DAY, mirroring the
+   * once-per-dawn guard setupSaveLoad's autosave already uses.
+   */
+  private setupRaiderCamps(): void {
+    gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
+      if (this.initialCampsSpawned || phase !== 'day' || dayNumber < RAIDER_CAMP_SPAWN_DAY) {
+        return;
+      }
+      this.initialCampsSpawned = true;
+      this.spawnInitialRaiderCamps();
+    });
+  }
+
+  private spawnInitialRaiderCamps(): void {
+    const count = Phaser.Math.Between(RAIDER_CAMP_MIN_COUNT, RAIDER_CAMP_MAX_COUNT);
+    for (let i = 0; i < count; i++) {
+      const spawn = this.pickRaidSpawnPoint();
+      const faction = this.pickRaidFaction();
+      const camp = spawnRaiderCamp(spawn.x, spawn.y, faction, RAIDER_CAMP_MAX_HP);
+      this.createCampVisual(camp);
+    }
+    this.redrawMinimap();
+  }
+
+  private createCampVisual(camp: RaiderCamp): void {
+    const image = this.add
+      .image(camp.x, camp.y, RAIDER_CAMPS_ATLAS_KEY, raiderCampTextureKey(camp.faction))
+      .setDepth(RAIDER_CAMP_SPRITE_DEPTH);
+    this.campVisuals.set(camp.id, image);
+  }
+
+  /** Called from setupSaveLoad's 'game-loaded' handler - rebuilds every persisted camp's sprite from state/raiderCamps.ts, mirroring restoreBuildingVisual's role for PlacedBuildings. */
+  private restoreCampVisuals(): void {
+    for (const camp of getRaiderCamps()) {
+      this.createCampVisual(camp);
+    }
+  }
+
+  /**
+   * Applies a unit's shot to a camp: the shot-line visual (same
+   * spawnCowboyShotVisual helper a raider hit uses) plus the actual hp
+   * mutation, routed through state/raiderCamps.ts's damageRaiderCamp so gameState's
+   * sibling module stays the single source of truth for camp hp exactly like
+   * building.hp is for buildings.
+   */
+  private damageCamp(camp: RaiderCamp, amount: number, shooterPosition: { x: number; y: number }): void {
+    const image = this.campVisuals.get(camp.id);
+    if (image) {
+      this.spawnCowboyShotVisual(shooterPosition, image);
+    }
+    const remaining = damageRaiderCamp(camp.id, amount);
+    if (remaining !== null && remaining <= 0) {
+      this.destroyRaiderCamp(camp);
+    }
+  }
+
+  /**
+   * A camp reaching 0 hp is removed outright (no repair/rebuild path, unlike
+   * a PlacedBuilding) and drops a flat loot reward - the whole point of the
+   * offense phase is that raiding a camp is worth the trip. Any unit still
+   * holding an attack order on this camp has it cleared the same way
+   * resolveUnitAttackOrders already clears one pointed at a dead raider.
+   */
+  private destroyRaiderCamp(camp: RaiderCamp): void {
+    const image = this.campVisuals.get(camp.id);
+    if (image) {
+      this.tweens.killTweensOf(image);
+      image.destroy();
+      this.campVisuals.delete(camp.id);
+    }
+    removeRaiderCamp(camp.id);
+
+    for (const unit of this.cowboyUnits) {
+      if (unit.attackTarget?.kind === 'camp' && unit.attackTarget.id === camp.id) {
+        unit.attackTarget = null;
+      }
+    }
+
+    this.spawnDustBurstAt(camp.x, camp.y);
+    playWorldSound('buildingCollapse', camp.x, camp.y);
+
+    grantRaiderCampLoot(RAIDER_CAMP_LOOT_MONEY, { tools: RAIDER_CAMP_LOOT_TOOLS });
+    const message = `${RAIDER_DEFINITIONS[camp.faction].label} camp destroyed! +$${RAIDER_CAMP_LOOT_MONEY}, +${RAIDER_CAMP_LOOT_TOOLS} Tools`;
+    addNotification(message, 'info', getElapsedSeconds());
+
+    this.redrawMinimap();
+  }
+
+  /**
+   * Mirrors the villager/unit cleanup setupGameReset already does for its own
+   * kind: gameState.resetGame() already cleared the underlying camp list
+   * (its own resetRaiderCamps() call), so this only tears down the now-
+   * orphaned scene-side sprites and re-arms the once-per-run initial spawn.
+   */
+  private resetRaiderCampVisuals(): void {
+    for (const image of this.campVisuals.values()) {
+      this.tweens.killTweensOf(image);
+      image.destroy();
+    }
+    this.campVisuals.clear();
+    this.initialCampsSpawned = false;
   }
 
   private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {
