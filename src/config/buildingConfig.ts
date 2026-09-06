@@ -4,6 +4,7 @@ import {
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  POPULATION_PER_HOUSE,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
@@ -124,6 +125,71 @@ export interface HarvestConfig {
   replantChancePerTick?: number;
 }
 
+export type HouseTier = 1 | 2 | 3;
+
+/**
+ * Phase 46: one "or" group of a House tier's resource needs - e.g. Tier 2's
+ * second need is satisfied by *either* Meat or Eggs, not both. runHouseNeeds
+ * (gameState.ts) tries each key in `options`'s declaration order and consumes
+ * the first one the pool can afford; `label` is purely for the info panel
+ * ("Needs: Water OK, Meat or Eggs MISSING").
+ */
+export interface HouseNeedGroup {
+  label: string;
+  options: Partial<Record<ResourceKey, number>>;
+}
+
+export interface HouseTierConfig {
+  tier: HouseTier;
+  /** Workforce this tier's House contributes to the town-wide population pool. */
+  population: number;
+  /** Money collected into the town's pool per tick once this tier's needs are met (0 for Tier 1). */
+  taxPerTick: number;
+  needs: HouseNeedGroup[];
+}
+
+/**
+ * Phase 46: Population Needs & House Tiers. A House starts at Tier 1 (just
+ * needs a trickle of Water, like every other early building) and climbs to
+ * Tier 2/3 by keeping its growing resource needs satisfied for
+ * HOUSE_TIER_HYSTERESIS_TICKS consecutive ticks (see runHouseNeeds); losing
+ * the ability to pay a tier's needs for the same number of consecutive ticks
+ * drops it back down one tier. Numbers are kept modest against real
+ * production rates seen elsewhere in this file: a single staffed Chicken Farm
+ * (4 chickens @ 0.2 eggs/tick = 0.8/tick) alone covers 8 Tier-2/3 houses'
+ * Meat-or-Eggs need, and a single Sewery/Liquor Still's typical output
+ * (bottlenecked by Leather/Potato supply to well under 1/tick) covers roughly
+ * 10-6 Tier-3 houses' Clothes-or-Liquor need - satisfiable by a
+ * reasonably-developed economy, not trivial and not a brick wall.
+ */
+export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
+  1: {
+    tier: 1,
+    population: POPULATION_PER_HOUSE,
+    taxPerTick: 0,
+    needs: [{ label: 'Water', options: { water: 0.2 } }],
+  },
+  2: {
+    tier: 2,
+    population: 4,
+    taxPerTick: 2,
+    needs: [
+      { label: 'Water', options: { water: 0.3 } },
+      { label: 'Meat or Eggs', options: { meat: 0.1, eggs: 0.1 } },
+    ],
+  },
+  3: {
+    tier: 3,
+    population: 6,
+    taxPerTick: 5,
+    needs: [
+      { label: 'Water', options: { water: 0.4 } },
+      { label: 'Meat or Eggs', options: { meat: 0.15, eggs: 0.15 } },
+      { label: 'Clothes or Liquor', options: { clothes: 0.05, liquor: 0.1 } },
+    ],
+  },
+};
+
 export interface BuildingDefinition {
   type: BuildingType;
   label: string;
@@ -234,6 +300,13 @@ export interface PlacedBuilding {
   lastHarvest?: number;
   /** Phase 42: defaults to 'normal' on placement; player-set via setBuildingPriority, consumed by assignWorkforce's sort. */
   priority: WorkerPriority;
+  /** Phase 46: only meaningful for House; current tier, starts at 1 on placement. Drives population contribution, tax, and sprite frame. */
+  houseTier: HouseTier;
+  /** Phase 46: only meaningful for House; consecutive ticks the current tier's needs have been fully met/unmet, reset on any tier change - the hysteresis pair runHouseNeeds uses to gate up/downgrades. */
+  houseNeedsMetStreak: number;
+  houseNeedsUnmetStreak: number;
+  /** Phase 46: only meaningful for House; last tick's per-need-group met/missing snapshot, for the info panel. Empty until the first production tick after placement. */
+  houseNeedsStatus: { label: string; met: boolean }[];
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -597,7 +670,17 @@ export const SALOON_SELL_RATES: Record<SaloonSellableKey, { amount: number; pric
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
 
-export function buildingTextureKey(type: BuildingType): string {
+/**
+ * Phase 46: House is the only building type with more than one sprite frame -
+ * `tier` is accepted for every type (so callers can just pass a
+ * PlacedBuilding's `houseTier` unconditionally) but only changes the key for
+ * House at Tier 2/3; everything else always resolves to its single base
+ * frame, exactly as before.
+ */
+export function buildingTextureKey(type: BuildingType, tier?: HouseTier): string {
+  if (type === BuildingType.House && tier && tier > 1) {
+    return `building-${type}-tier${tier}`;
+  }
   return `building-${type}`;
 }
 
@@ -821,6 +904,11 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Watchtower) {
     parts.push(`Auto-fires ${WATCHTOWER_DAMAGE} dmg at the nearest raider within ${WATCHTOWER_RANGE_TILES} tiles`);
+  }
+  if (definition.type === BuildingType.House) {
+    parts.push(
+      `Grows Tier 1->3 as needs are met (pop ${HOUSE_TIER_CONFIG[1].population}/${HOUSE_TIER_CONFIG[2].population}/${HOUSE_TIER_CONFIG[3].population}, tax $0/$${HOUSE_TIER_CONFIG[2].taxPerTick}/$${HOUSE_TIER_CONFIG[3].taxPerTick} per tick)`,
+    );
   }
   return parts.join(' | ');
 }

@@ -89,7 +89,7 @@ import {
   setAudioGameSpeed,
   setAudioListenerRect,
 } from '../audio/sound';
-import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
+import { BuildingRemovedPayload, HouseTierChangePayload, gameEvents } from '../state/gameEvents';
 import { addNotification } from '../state/notifications';
 import {
   DayPhase,
@@ -567,6 +567,7 @@ export class MainScene extends Phaser.Scene {
     this.setupConnectionVisuals();
     this.setupFenceVisuals();
     this.setupAnimalVisuals();
+    this.setupHouseTierVisuals();
     this.setupCowboyVisuals();
     this.setupUnitControl();
     this.setupHotkeys();
@@ -1904,7 +1905,7 @@ export class MainScene extends Phaser.Scene {
         building.tileX * TILE_SIZE,
         building.tileY * TILE_SIZE,
         BUILDING_ATLAS_KEY,
-        buildingTextureKey(building.type),
+        buildingTextureKey(building.type, building.houseTier),
       )
       .setOrigin(0, 0)
       .setDepth(10);
@@ -2629,6 +2630,34 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Phase 46: swaps a House's sprite frame the moment gameState.runHouseNeeds
+   * actually flips its tier, plus a small non-audio feedback cue (a scale
+   * pulse on upgrade, a brief red tint flash on downgrade) so the change
+   * reads as an event rather than a silent texture swap - the same
+   * lightweight-tween-only treatment Phase 19's idle accents use, no new
+   * sound asset needed for a rare, non-combat event.
+   */
+  private setupHouseTierVisuals(): void {
+    gameEvents.on('house-tier-changed', ({ building, direction }: HouseTierChangePayload) => {
+      const visual = this.buildingVisuals.get(building.id);
+      if (!visual) {
+        return;
+      }
+
+      visual.image.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(building.type, building.houseTier));
+
+      this.tweens.killTweensOf(visual.image);
+      if (direction === 'upgrade') {
+        visual.image.setScale(1.25);
+        this.tweens.add({ targets: visual.image, scale: 1, duration: 300, ease: 'Back.easeOut' });
+      } else {
+        visual.image.setTint(0xff8a80);
+        this.time.delayedCall(300, () => visual.image.clearTint());
+      }
+    });
+  }
+
   /** Only called on placement and 'animal-bought' (i.e. when animalCount actually changes), never per production tick. */
   private redrawAnimalSprites(visual: BuildingVisual): void {
     for (const animalImage of visual.animalImages) {
@@ -3229,6 +3258,13 @@ export class MainScene extends Phaser.Scene {
    * capacity, not employment - employment is recomputed every tick and
    * shouldn't churn sprites in/out). Capped at VILLAGER_CAP total for
    * performance, so a later House may spawn fewer (or none).
+   *
+   * Phase 46: deliberately NOT scaled by houseTier - this is a fixed
+   * decorative flourish at placement time, whereas the workforce-relevant
+   * population figure (gameState's totalPopulation, HUD's Pop X/Y) is
+   * computed fresh from HOUSE_TIER_CONFIG every tick. Re-syncing rendered
+   * sprite counts to a live tier would add churn/pooling complexity for a
+   * purely cosmetic number already capped and decoupled from gameplay.
    */
   private spawnVillagersForHouse(building: PlacedBuilding): void {
     const spawnCount = Math.min(POPULATION_PER_HOUSE, VILLAGER_CAP - this.villagers.length);

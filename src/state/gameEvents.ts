@@ -17,6 +17,12 @@ export interface BuildingRemovedPayload {
   reason: BuildingRemovalReason;
 }
 
+/** Phase 46: fired by gameState's runHouseNeeds whenever a House's hysteresis counter actually flips its tier. */
+export interface HouseTierChangePayload {
+  building: PlacedBuilding;
+  direction: 'upgrade' | 'downgrade';
+}
+
 export interface GameEventMap {
   'select-building': (type: BuildingType) => void;
   'cancel-placement': () => void;
@@ -61,6 +67,8 @@ export interface GameEventMap {
    * panel.
    */
   'camera-focus-requested': (worldX: number, worldY: number) => void;
+  /** Phase 46: a House's tier just flipped (see runHouseNeeds); MainScene swaps its sprite frame, BuildingInfoPanel/HUD pick up the new population/tax on their next render. */
+  'house-tier-changed': (payload: HouseTierChangePayload) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

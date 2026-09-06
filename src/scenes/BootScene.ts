@@ -247,7 +247,7 @@ const WELL_SPRITE: PixelSprite = {
 
 const HOUSE_SPRITE: PixelSprite = {
   // Narrowed top cap (row 0) reads as a raised saloon-style false-front
-  // parapet rather than a gable peak.
+  // parapet rather than a gable peak. This is the Tier 1 look.
   palette: { R: 0xa1442e, S: 0x4e342e, B: 0xffcb8e, P: 0xe0a968, W: 0x90caf9, D: 0x5d4037 },
   pattern: [
     '..SSSS..',
@@ -257,6 +257,46 @@ const HOUSE_SPRITE: PixelSprite = {
     'SBPWWPBS',
     'SBPWWPBS',
     'SBPDDPBS',
+    'SSSSSSSS',
+  ],
+};
+
+/**
+ * Phase 46 Tier 2 House: full-width parapet with a painted white trim stripe
+ * (T) and a second full window row (green-shuttered, P) instead of Tier 1's
+ * single window/door split - reads as a freshly-painted, slightly grander
+ * home without changing the footprint.
+ */
+const HOUSE_TIER2_SPRITE: PixelSprite = {
+  palette: { R: 0x8d3b2f, S: 0x4e342e, B: 0xffcb8e, P: 0x66bb6a, W: 0x90caf9, D: 0x5d4037, T: 0xffffff },
+  pattern: [
+    'SSSSSSSS',
+    'SRRTTRRS',
+    'SRRRRRRS',
+    'SSSSSSSS',
+    'SBPWWPBS',
+    'SBWWWWBS',
+    'SBPDDPBS',
+    'SSSSSSSS',
+  ],
+};
+
+/**
+ * Phase 46 Tier 3 House: a stepped double-flag parapet (F posts, row 0),
+ * a rich purple roof, twin full-width windows and a gold balcony rail (P,
+ * row 6) replacing the door entirely - the grandest of the three within the
+ * same 8x8 frame.
+ */
+const HOUSE_TIER3_SPRITE: PixelSprite = {
+  palette: { R: 0x6a1b9a, S: 0x4e342e, B: 0xffcb8e, P: 0xffd54f, W: 0x90caf9, T: 0xffffff, F: 0xd32f2f },
+  pattern: [
+    '.SFSSFS.',
+    'SRRRRRRS',
+    'SRRTTRRS',
+    'SSSSSSSS',
+    'SBWWWWBS',
+    'SBWWWWBS',
+    'SPPPPPPS',
     'SSSSSSSS',
   ],
 };
@@ -1030,6 +1070,25 @@ export class BootScene extends Phaser.Scene {
       height: definition.size.height * TILE_SIZE,
     }));
 
+    // Phase 46: House is the only type with extra tier frames - appended
+    // after the one-frame-per-type layout above so every other building's
+    // frame position is completely untouched by this addition.
+    const houseSize = BUILDING_DEFINITIONS[BuildingType.House].size;
+    const tierFrames: { key: string; sprite: PixelSprite; width: number; height: number }[] = [
+      {
+        key: buildingTextureKey(BuildingType.House, 2),
+        sprite: HOUSE_TIER2_SPRITE,
+        width: houseSize.width * TILE_SIZE,
+        height: houseSize.height * TILE_SIZE,
+      },
+      {
+        key: buildingTextureKey(BuildingType.House, 3),
+        sprite: HOUSE_TIER3_SPRITE,
+        width: houseSize.width * TILE_SIZE,
+        height: houseSize.height * TILE_SIZE,
+      },
+    ];
+
     let atlasWidth = 0;
     let atlasHeight = 0;
     const positions: number[] = [];
@@ -1038,10 +1097,19 @@ export class BootScene extends Phaser.Scene {
       atlasWidth += width;
       atlasHeight = Math.max(atlasHeight, height);
     }
+    const tierPositions: number[] = [];
+    for (const { width, height } of tierFrames) {
+      tierPositions.push(atlasWidth);
+      atlasWidth += width;
+      atlasHeight = Math.max(atlasHeight, height);
+    }
 
     const graphics = this.make.graphics({ x: 0, y: 0 });
     layout.forEach(({ definition }, index) => {
       drawPixelSprite(graphics, positions[index], 0, BUILDING_SPRITES[definition.type]);
+    });
+    tierFrames.forEach(({ sprite }, index) => {
+      drawPixelSprite(graphics, tierPositions[index], 0, sprite);
     });
 
     graphics.generateTexture(BUILDING_ATLAS_KEY, atlasWidth, atlasHeight);
@@ -1050,6 +1118,9 @@ export class BootScene extends Phaser.Scene {
     const texture = this.textures.get(BUILDING_ATLAS_KEY);
     layout.forEach(({ definition, width, height }, index) => {
       texture.add(buildingTextureKey(definition.type), 0, positions[index], 0, width, height);
+    });
+    tierFrames.forEach(({ key, width, height }, index) => {
+      texture.add(key, 0, tierPositions[index], 0, width, height);
     });
   }
 

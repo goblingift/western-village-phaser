@@ -13,12 +13,12 @@ import {
   DIFFICULTY_SETTINGS,
   ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
+  HOUSE_TIER_HYSTERESIS_TICKS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
   MOUNTED_COWBOY_MAX_HP,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
-  POPULATION_PER_HOUSE,
   PRODUCTION_STALL_NOTIFY_TICKS,
   REPAIR_COST_FRACTION,
   RunMode,
@@ -34,7 +34,9 @@ import {
 import {
   BUILDING_DEFINITIONS,
   BuildingType,
+  HOUSE_TIER_CONFIG,
   HarvestConfig,
+  HouseTier,
   PlacedBuilding,
   RESOURCE_LABELS,
   RESOURCE_VALUES,
@@ -475,6 +477,10 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     bankBalance: 0,
     disabled: false,
     priority: 'normal',
+    houseTier: 1,
+    houseNeedsMetStreak: 0,
+    houseNeedsUnmetStreak: 0,
+    houseNeedsStatus: [],
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -1016,10 +1022,17 @@ const WORKER_PRIORITY_RANK: Record<WorkerPriority, number> = { high: 0, normal: 
  * within a tier fall back to the original placement order exactly as before.
  * `placedBuildings` itself, and every other pass that iterates it, is left
  * untouched.
+ *
+ * Phase 46: total population is now the SUM of each House's current-tier
+ * population (HOUSE_TIER_CONFIG), not a flat POPULATION_PER_HOUSE per House -
+ * a Tier 2/3 House contributes more workforce than a Tier 1 one. No hp/
+ * disabled filter here, matching the pre-Phase-46 count-based version exactly
+ * (a destroyed House is already removed from placedBuildings entirely).
  */
 function assignWorkforce(): void {
-  const houseCount = placedBuildings.filter((building) => building.type === BuildingType.House).length;
-  totalPopulation = houseCount * POPULATION_PER_HOUSE;
+  totalPopulation = placedBuildings
+    .filter((building) => building.type === BuildingType.House)
+    .reduce((sum, building) => sum + HOUSE_TIER_CONFIG[building.houseTier].population, 0);
 
   let available = totalPopulation;
   let employed = 0;
@@ -1159,6 +1172,99 @@ function runSaloonSales(): void {
       revenue: Math.round(revenue * 100) / 100,
     };
     building.active = anySold;
+  }
+}
+
+/**
+ * Phase 46: Population Needs & House Tiers. Run after the production/sales
+ * passes (runSupermarketSales/runSaloonSales) rather than before them, so a
+ * House's Meat/Eggs/Clothes/Liquor need can be satisfied by goods finished
+ * earlier in this very tick - Houses are consumers at the end of every chain,
+ * the same position a Supermarket/Saloon sale occupies.
+ *
+ * Each House's current HOUSE_TIER_CONFIG entry is checked atomically: every
+ * need group must have at least one affordable option (tried in the group's
+ * declared key order) or nothing at all is consumed for that House this tick
+ * - there's no partial credit for meeting 2 of 3 needs. A fully-met tick
+ * collects that tier's tax into money and grows houseNeedsMetStreak (resetting
+ * houseNeedsUnmetStreak); an unmet tick does the reverse. Crossing
+ * HOUSE_TIER_HYSTERESIS_TICKS consecutive ticks in either direction flips the
+ * tier exactly once and resets both streaks, so a tier can't cascade twice in
+ * one debounce window. Skips destroyed (hp <= 0, though such a building is
+ * normally already removed) and upkeep-unpaid (disabled) Houses entirely -
+ * neither consuming, taxing, nor moving their streaks - matching how every
+ * other pass in this file treats a disabled building as merely idle, not
+ * penalized further.
+ */
+function runHouseNeeds(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.House) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled) {
+      continue;
+    }
+
+    const tierConfig = HOUSE_TIER_CONFIG[building.houseTier];
+    const status: { label: string; met: boolean }[] = [];
+    const picks: [ResourceKey, number][] = [];
+    let allMet = true;
+
+    for (const group of tierConfig.needs) {
+      let picked: [ResourceKey, number] | null = null;
+      for (const [key, amount] of Object.entries(group.options) as [ResourceKey, number][]) {
+        if (resources[key] >= amount) {
+          picked = [key, amount];
+          break;
+        }
+      }
+      status.push({ label: group.label, met: picked !== null });
+      if (picked) {
+        picks.push(picked);
+      } else {
+        allMet = false;
+      }
+    }
+
+    building.houseNeedsStatus = status;
+
+    if (allMet) {
+      for (const [key, amount] of picks) {
+        resources[key] -= amount;
+      }
+      if (tierConfig.taxPerTick > 0) {
+        money = Math.round((money + tierConfig.taxPerTick) * 100) / 100;
+      }
+      building.houseNeedsMetStreak += 1;
+      building.houseNeedsUnmetStreak = 0;
+
+      if (building.houseNeedsMetStreak >= HOUSE_TIER_HYSTERESIS_TICKS && building.houseTier < 3) {
+        building.houseTier = (building.houseTier + 1) as HouseTier;
+        building.houseNeedsMetStreak = 0;
+        gameEvents.emit('house-tier-changed', { building, direction: 'upgrade' });
+        addNotification(
+          `A House grew to Tier ${building.houseTier} (population ${HOUSE_TIER_CONFIG[building.houseTier].population})`,
+          'info',
+          elapsedSeconds,
+          building.id,
+        );
+      }
+    } else {
+      building.houseNeedsUnmetStreak += 1;
+      building.houseNeedsMetStreak = 0;
+
+      if (building.houseNeedsUnmetStreak >= HOUSE_TIER_HYSTERESIS_TICKS && building.houseTier > 1) {
+        building.houseTier = (building.houseTier - 1) as HouseTier;
+        building.houseNeedsUnmetStreak = 0;
+        gameEvents.emit('house-tier-changed', { building, direction: 'downgrade' });
+        addNotification(
+          `A House fell back to Tier ${building.houseTier} - needs went unmet`,
+          'warning',
+          elapsedSeconds,
+          building.id,
+        );
+      }
+    }
   }
 }
 
@@ -1427,6 +1533,7 @@ export function runProductionTick(): void {
 
   runSupermarketSales();
   runSaloonSales();
+  runHouseNeeds();
 
   // Recovery pass for the storage-waste notification: once a resource drops
   // back below the cap (a sale, a Warehouse coming online, etc.), clear its

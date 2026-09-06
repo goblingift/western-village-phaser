@@ -199,3 +199,13 @@ export const PRODUCTION_STALL_NOTIFY_TICKS = 3;
 
 /** Phase 44: notification log retention - oldest entries drop once the log exceeds this many. */
 export const MAX_NOTIFICATION_LOG_ENTRIES = 50;
+
+/**
+ * Phase 46: Population Needs & House Tiers. How many consecutive production
+ * ticks a House's current tier's needs must sit fully met (to upgrade) or
+ * fully unmet (to downgrade) before the tier actually changes. Debounced the
+ * same way Phase 44's stall notification is (PRODUCTION_STALL_NOTIFY_TICKS)
+ * so a House doesn't flip tiers on a single borderline tick where another
+ * building happened to drain the pool a moment earlier.
+ */
+export const HOUSE_TIER_HYSTERESIS_TICKS = 5;

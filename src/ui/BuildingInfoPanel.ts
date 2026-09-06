@@ -3,6 +3,7 @@ import {
   AutoSale,
   BUILDING_DEFINITIONS,
   BuildingType,
+  HOUSE_TIER_CONFIG,
   HarvestConfig,
   PlacedBuilding,
   RESOURCE_LABELS,
@@ -16,6 +17,7 @@ import {
   BANK_TRANSACTION_AMOUNT,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  HOUSE_TIER_HYSTERESIS_TICKS,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
   WATCHTOWER_DAMAGE,
@@ -88,6 +90,7 @@ export class BuildingInfoPanel {
     const isHorsery = this.selected.type === BuildingType.Horsery;
     const isBank = this.selected.type === BuildingType.Bank;
     const isWatchtower = this.selected.type === BuildingType.Watchtower;
+    const isHouse = this.selected.type === BuildingType.House;
     // Harvesters (Forestry, Cactus Milker) have no `production` block but are
     // still production buildings from the player's point of view.
     const statusText = production || definition.harvest
@@ -156,6 +159,14 @@ export class BuildingInfoPanel {
           : `Water ${wellDistance} tile${wellDistance === 1 ? '' : 's'} away`
         : null;
 
+    // Phase 46: House tier/needs/population/tax block. Houses have no
+    // `production`/`animal`/`harvest` config, so none of the lines above
+    // apply to them - this is the entirety of a House's panel content besides
+    // HP/upkeep/demolish.
+    const houseTierText = isHouse ? this.formatHouseTierText(this.selected) : null;
+    const houseNeedsText = isHouse ? this.formatHouseNeedsText(this.selected) : null;
+    const houseProgressText = isHouse ? this.formatHouseProgressText(this.selected) : null;
+
     this.panel.hidden = false;
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
@@ -166,6 +177,9 @@ export class BuildingInfoPanel {
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}
+      ${houseTierText ? `<div>${houseTierText}</div>` : ''}
+      ${houseNeedsText ? `<div>${houseNeedsText}</div>` : ''}
+      ${houseProgressText ? `<div>${houseProgressText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
@@ -214,6 +228,38 @@ export class BuildingInfoPanel {
       return `not enough population (need ${shortfall} more worker${shortfall === 1 ? '' : 's'} town-wide)`;
     }
     return `understaffed (${building.assignedWorkers}/${workersRequired} workers)`;
+  }
+
+  /** Phase 46: "Tier 2/3 | Population +4 | Tax +$2/tick" - Tier 1 has no tax, so that clause is omitted rather than shown as "+$0/tick". */
+  private formatHouseTierText(building: PlacedBuilding): string {
+    const tierConfig = HOUSE_TIER_CONFIG[building.houseTier];
+    const taxPart = tierConfig.taxPerTick > 0 ? ` | Tax: +$${tierConfig.taxPerTick}/tick` : '';
+    return `Tier ${building.houseTier}/3 | Population: +${tierConfig.population}${taxPart}`;
+  }
+
+  /** Phase 46: "Needs: Water OK, Meat or Eggs MISSING" - built from the exact per-group snapshot runHouseNeeds wrote last tick, so it can never disagree with what was actually consumed/taxed. */
+  private formatHouseNeedsText(building: PlacedBuilding): string {
+    if (building.houseNeedsStatus.length === 0) {
+      return 'Needs: checking...';
+    }
+    const parts = building.houseNeedsStatus.map((need) => `${need.label} ${need.met ? 'OK' : 'MISSING'}`);
+    return `Needs: ${parts.join(', ')}`;
+  }
+
+  /**
+   * Phase 46: surfaces the hysteresis counter that's actually moving, so the
+   * player can see a tier change coming rather than have it happen silently.
+   * Never shows both directions at once - runHouseNeeds always zeroes the
+   * other streak on every tick, met or not.
+   */
+  private formatHouseProgressText(building: PlacedBuilding): string | null {
+    if (building.houseTier < 3 && building.houseNeedsMetStreak > 0) {
+      return `Upgrading in ${HOUSE_TIER_HYSTERESIS_TICKS - building.houseNeedsMetStreak} tick(s)...`;
+    }
+    if (building.houseTier > 1 && building.houseNeedsUnmetStreak > 0) {
+      return `Downgrade risk: ${HOUSE_TIER_HYSTERESIS_TICKS - building.houseNeedsUnmetStreak} tick(s) left`;
+    }
+    return null;
   }
 
   /**
