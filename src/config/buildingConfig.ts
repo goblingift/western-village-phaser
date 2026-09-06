@@ -1115,6 +1115,19 @@ export const DYNAMITER_SPRITE_SIZE = COWBOY_SPRITE_SIZE;
 export const DYNAMITER_TEXTURE_KEY = 'dynamiter';
 
 /**
+ * Phase 60: Goods Carts on Roads - a purely cosmetic, short-lived travel
+ * sprite MainScene spawns whenever a road-connected building produces output,
+ * animating it toward the nearest connected depot. Its own atlas/asset class,
+ * same convention as MOUNTED_COWBOYS_ATLAS_KEY: a non-square frame (wagon bed
+ * + wheels reads wider than tall) rather than the uniform ANIMAL_SPRITE_SIZE
+ * square every other small-unit atlas uses.
+ */
+export const CARTS_ATLAS_KEY = 'carts-atlas';
+export const CART_SPRITE_WIDTH = 14;
+export const CART_SPRITE_HEIGHT = 10;
+export const CART_TEXTURE_KEY = 'goods-cart';
+
+/**
  * Phase 23: threat factions for raid events. Fictional names by deliberate
  * design (Outlaws/Rustlers/Coyotes), not standing in for any real group.
  */

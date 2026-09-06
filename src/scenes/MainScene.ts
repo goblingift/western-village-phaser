@@ -97,6 +97,8 @@ import {
   BUILDING_DEFINITIONS,
   BuildingCategory,
   BuildingType,
+  CARTS_ATLAS_KEY,
+  CART_TEXTURE_KEY,
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
@@ -373,6 +375,25 @@ const VILLAGER_CAP = 30;
 const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
 const VILLAGER_PAUSE_MIN_MS = 500;
 const VILLAGER_PAUSE_MAX_MS = 2000;
+
+/**
+ * Phase 60: Goods Carts on Roads - purely cosmetic, short-lived (one leg,
+ * then fade out and destroy) so create-then-destroy is simpler than pooling
+ * at this volume, mirroring the villager/animal small-unit depth band rather
+ * than getting its own. Cap mirrors VILLAGER_CAP's "display-only cap,
+ * skip-spawning-past-it" precedent.
+ */
+const MAX_VISIBLE_CARTS = 8;
+const CART_WALK_SPEED_PX_PER_SEC = 40;
+const CART_SPRITE_DEPTH = ANIMAL_SPRITE_DEPTH;
+const CART_FADE_OUT_DURATION_MS = 300;
+/** Depots a cart can travel to - every building type with an autonomous-sale or storage role, none of which have a `production` field so they can never themselves be the cart's *source*. */
+const CART_DEPOT_BUILDING_TYPES: readonly BuildingType[] = [
+  BuildingType.Warehouse,
+  BuildingType.Supermarket,
+  BuildingType.Saloon,
+  BuildingType.TradingPost,
+];
 
 /**
  * Phase 23 raiders share the villager/animal/cowboy small-unit depth band -
@@ -724,6 +745,8 @@ export class MainScene extends Phaser.Scene {
   private lineDragWasActive = false;
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
+  /** Phase 60: Goods Carts on Roads - short-lived travel sprites, tracked only so game-reset can kill their tweens and destroy them; MAX_VISIBLE_CARTS is enforced against this array's length. */
+  private activeCarts: Phaser.GameObjects.Image[] = [];
   private raiders: Raider[] = [];
   /** Phase 40: monotonically increasing so every Raider.id is unique for the life of the scene, even across waves/resets - a stray stale AttackTargetRef can then never accidentally match a later, unrelated raider. */
   private raiderIdCounter = 0;
@@ -825,6 +848,7 @@ export class MainScene extends Phaser.Scene {
     this.setupBuildingSelection();
     this.setupProductionTimer();
     this.setupConnectionVisuals();
+    this.setupGoodsCarts();
     this.setupFenceVisuals();
     this.setupChainView();
     this.setupAnimalVisuals();
@@ -3940,6 +3964,105 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
+  /**
+   * Phase 60: Goods Carts on Roads. Rides the same 'production-tick' event
+   * every other per-tick redraw pass listens to, firing after
+   * runProductionTick has already updated every PlacedBuilding's
+   * `active`/`connected` flags for this tick (Roads & Logistics' existing
+   * BFS - see gameState's updateConnections/isBuildingConnected - already
+   * computes `connected`; `active` is set true at the exact point a building
+   * successfully produced output this tick, see recordProductivityTick's call
+   * sites in runProductionTick). No gameplay side effect: this only spawns a
+   * cosmetic sprite, never touches resources/money/the +10% bonus itself.
+   */
+  private setupGoodsCarts(): void {
+    gameEvents.on('production-tick', () => {
+      if (this.activeCarts.length >= MAX_VISIBLE_CARTS) {
+        return;
+      }
+
+      const depots = getPlacedBuildings().filter(
+        (building) =>
+          CART_DEPOT_BUILDING_TYPES.includes(building.type) && building.connected && building.hp > 0,
+      );
+      if (depots.length === 0) {
+        return;
+      }
+
+      for (const building of getPlacedBuildings()) {
+        if (this.activeCarts.length >= MAX_VISIBLE_CARTS) {
+          break;
+        }
+        if (!building.active || !building.connected) {
+          continue;
+        }
+
+        const depot = this.findNearestCartDepot(building, depots);
+        if (depot) {
+          this.spawnGoodsCart(building, depot);
+        }
+      }
+    });
+  }
+
+  /** Straight-line nearest-by-tile-center search, no road-tile pathfinding (Phase 38's raider-fence-blocking precedent: simple robust behavior over full pathfinding, since roads are decorative for this purpose). */
+  private findNearestCartDepot(
+    from: PlacedBuilding,
+    depots: readonly PlacedBuilding[],
+  ): PlacedBuilding | null {
+    const origin = this.tileCenter(from);
+    let nearest: PlacedBuilding | null = null;
+    let nearestDistance = Infinity;
+
+    for (const depot of depots) {
+      const center = this.tileCenter(depot);
+      const distance = Phaser.Math.Distance.Between(origin.x, origin.y, center.x, center.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = depot;
+      }
+    }
+
+    return nearest;
+  }
+
+  /**
+   * Single point-to-point tween, same walk-speed/duration technique as
+   * startVillagerWander/sendRaiderToTarget - but one-shot rather than a
+   * forever-looping chain: on arrival it fades out and destroys itself
+   * instead of picking a new leg, since a cart represents one delivery, not a
+   * wandering resident.
+   */
+  private spawnGoodsCart(from: PlacedBuilding, to: PlacedBuilding): void {
+    const origin = this.tileCenter(from);
+    const destination = this.tileCenter(to);
+    const distance = Phaser.Math.Distance.Between(origin.x, origin.y, destination.x, destination.y);
+    const duration = (distance / CART_WALK_SPEED_PX_PER_SEC) * 1000;
+
+    const cart = this.add.image(origin.x, origin.y, CARTS_ATLAS_KEY, CART_TEXTURE_KEY).setDepth(CART_SPRITE_DEPTH);
+    cart.setFlipX(destination.x < origin.x);
+    this.activeCarts.push(cart);
+
+    this.tweens.add({
+      targets: cart,
+      x: destination.x,
+      y: destination.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        this.tweens.add({
+          targets: cart,
+          alpha: 0,
+          duration: CART_FADE_OUT_DURATION_MS,
+          onComplete: () => {
+            this.activeCarts = this.activeCarts.filter((image) => image !== cart);
+            cart.destroy();
+          },
+        });
+      },
+    });
+  }
+
   private setupGameReset(): void {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
@@ -3980,6 +4103,12 @@ export class MainScene extends Phaser.Scene {
         villager.destroy();
       }
       this.villagers = [];
+
+      for (const cart of this.activeCarts) {
+        this.tweens.killTweensOf(cart);
+        cart.destroy();
+      }
+      this.activeCarts = [];
 
       for (const unit of this.cowboyUnits) {
         unit.moveTween?.stop();

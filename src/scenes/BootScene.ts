@@ -12,6 +12,10 @@ import {
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
+  CARTS_ATLAS_KEY,
+  CART_SPRITE_HEIGHT,
+  CART_SPRITE_WIDTH,
+  CART_TEXTURE_KEY,
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
@@ -1111,6 +1115,19 @@ const BRAWLER_SPRITE: PixelSprite = {
 };
 
 /**
+ * Phase 60 Goods Cart: a wheeled-wagon silhouette, distinct from every unit
+ * sprite above (no hat/torso/legs at all) - a row of tan cargo crates over a
+ * dark wood bed, riding on two black wheel hubs. Drawn 7 cols x 5 rows at the
+ * same coarse ANIMAL_PIXEL_GRID as animals/villagers/units, giving a
+ * CART_SPRITE_WIDTH x CART_SPRITE_HEIGHT (14x10) frame - wider than tall,
+ * like Cowboy-on-Horse, since a wagon reads better squat than square.
+ */
+const CART_SPRITE: PixelSprite = {
+  palette: { C: 0xd7ccc8, W: 0x6d4c41, O: 0x3e2723 },
+  pattern: ['.CCCCC.', 'WWWWWWW', 'WWWWWWW', '..O.O..', '.OO.OO.'],
+};
+
+/**
  * Phase 58 Dynamiter: a satchel (S patch across the torso, standing in for a
  * bandolier of charges) plus a single bright fuse-spark pixel (P) above the
  * hat brim - the "satchel/lit-fuse" motif - on an otherwise Cowboy-shaped
@@ -1234,6 +1251,7 @@ export class BootScene extends Phaser.Scene {
     this.generateMountedCowboyAtlas();
     this.generateBrawlerAtlas();
     this.generateDynamiterAtlas();
+    this.generateCartAtlas();
     this.generateRaiderAtlas();
     this.generateRaiderCampAtlas();
     this.generateVegetationAtlas();
@@ -1476,6 +1494,22 @@ export class BootScene extends Phaser.Scene {
 
     const texture = this.textures.get(DYNAMITERS_ATLAS_KEY);
     texture.add(DYNAMITER_TEXTURE_KEY, 0, 0, 0, DYNAMITER_SPRITE_SIZE, DYNAMITER_SPRITE_SIZE);
+  }
+
+  /**
+   * Phase 60: single-frame atlas, same non-square technique as
+   * generateMountedCowboyAtlas - a wagon reads wider than tall, same as a
+   * mounted rider does.
+   */
+  private generateCartAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, CART_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(CARTS_ATLAS_KEY, CART_SPRITE_WIDTH, CART_SPRITE_HEIGHT);
+    graphics.destroy();
+
+    const texture = this.textures.get(CARTS_ATLAS_KEY);
+    texture.add(CART_TEXTURE_KEY, 0, 0, 0, CART_SPRITE_WIDTH, CART_SPRITE_HEIGHT);
   }
 
   /** Tile-sized frames (vegetation owns a whole tile), so the uniform-grid layout is stepped by TILE_SIZE rather than the small-unit size. */
