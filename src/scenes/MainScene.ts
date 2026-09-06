@@ -28,6 +28,8 @@ import {
   VEGETATION_CLEAR_COST,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
+  WATCHTOWER_DAMAGE,
+  WATCHTOWER_RANGE_TILES,
 } from '../config/constants';
 import { TILE_COLORS, TileType, getWorldTiles } from '../config/mapConfig';
 import {
@@ -2628,14 +2630,28 @@ export class MainScene extends Phaser.Scene {
     this.sendRaiderToTarget(raider, next);
   }
 
+  /**
+   * Phase 38: Palisade blocking. A raider's real target is still picked by
+   * "nearest (preferred-type) building", unchanged - but if the straight
+   * line from the raider to that target crosses a live Fence tile, the
+   * blocking Fence is returned instead. Once that Fence dies,
+   * updateRaiderTargeting's normal "current target invalid -> re-pick" path
+   * calls this again from the raider's now-closer position, which either
+   * finds the next Fence layer or the original target with nothing left in
+   * the way - no separate "resume original target" bookkeeping needed.
+   */
   private pickRaiderTarget(definition: RaiderDefinition, x: number, y: number): PlacedBuilding | null {
+    let target: PlacedBuilding | null = null;
     if (definition.targeting === 'farm-preferred') {
-      const farm = this.findNearestBuilding(x, y, (building) => !!BUILDING_DEFINITIONS[building.type].animal);
-      if (farm) {
-        return farm;
-      }
+      target = this.findNearestBuilding(x, y, (building) => !!BUILDING_DEFINITIONS[building.type].animal);
     }
-    return this.findNearestBuilding(x, y, () => true);
+    if (!target) {
+      target = this.findNearestBuilding(x, y, () => true);
+    }
+    if (!target || target.type === BuildingType.Fence) {
+      return target;
+    }
+    return this.findBlockingFence(x, y, target) ?? target;
   }
 
   private findNearestBuilding(
@@ -2659,6 +2675,39 @@ export class MainScene extends Phaser.Scene {
     }
 
     return best;
+  }
+
+  /**
+   * Phase 38: no grid pathfinding - just a straight-line sample from the
+   * raider's current position to its target's tile-center, in half-tile
+   * steps, returning the first live Fence tile crossed (i.e. the segment
+   * nearest the raider, since sampling walks outward from it). A rough
+   * "the wall in your way" check is enough to make Fences a real obstacle
+   * without simulating movement around them.
+   */
+  private findBlockingFence(x: number, y: number, target: PlacedBuilding): PlacedBuilding | null {
+    const center = this.tileCenter(target);
+    const distance = Phaser.Math.Distance.Between(x, y, center.x, center.y);
+    const steps = Math.max(1, Math.ceil(distance / (TILE_SIZE / 2)));
+    const seen = new Set<string>();
+
+    for (let step = 1; step < steps; step++) {
+      const t = step / steps;
+      const sampleTileX = Math.floor((x + (center.x - x) * t) / TILE_SIZE);
+      const sampleTileY = Math.floor((y + (center.y - y) * t) / TILE_SIZE);
+      const key = `${sampleTileX},${sampleTileY}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      const building = getBuildingAtTile(sampleTileX, sampleTileY);
+      if (building && building.id !== target.id && building.type === BuildingType.Fence && building.hp > 0) {
+        return building;
+      }
+    }
+
+    return null;
   }
 
   /** Single point-to-point tween, same walk-speed/duration technique as Phase 20's villagers - but with no onComplete chain back into another leg, since this raider's target never moves. */
@@ -2693,6 +2742,7 @@ export class MainScene extends Phaser.Scene {
     }
     this.resolveRaiderAttacks();
     this.resolveCowboyFire();
+    this.resolveWatchtowerFire();
     this.removeDeadRaiders();
     this.removeDestroyedBuildings();
     this.redrawHpBars();
@@ -2836,6 +2886,44 @@ export class MainScene extends Phaser.Scene {
     if (anyHit) {
       // One hit acknowledgement per tick, not per shot: the engine would
       // throttle the rest anyway and they'd only muddy the volley.
+      const first = shots[0];
+      playWorldSound('raiderHit', first.x, first.y);
+    }
+  }
+
+  /**
+   * Phase 38: Watchtowers fire automatically - no selection/move-order, no
+   * player unit to command - so this mirrors resolveCowboyFire's shape
+   * (gather shots, apply damage, one shared volley/hit sound) but iterates
+   * staffed Watchtower buildings instead of CombatUnits, reusing
+   * findNearestRaider/spawnCowboyShotVisual/playCombatVolley as-is rather
+   * than duplicating any of that logic for a second shooter type.
+   */
+  private resolveWatchtowerFire(): void {
+    const rangePx = WATCHTOWER_RANGE_TILES * TILE_SIZE;
+    const shots: { x: number; y: number }[] = [];
+    let anyHit = false;
+
+    for (const building of getPlacedBuildings()) {
+      if (building.type !== BuildingType.Watchtower) {
+        continue;
+      }
+      if (building.hp <= 0 || building.disabled || !building.staffed) {
+        continue;
+      }
+      const position = this.tileCenter(building);
+      const target = this.findNearestRaider(position.x, position.y, rangePx);
+      if (!target) {
+        continue;
+      }
+      target.hp -= WATCHTOWER_DAMAGE;
+      this.spawnCowboyShotVisual(position, target.image);
+      shots.push(position);
+      anyHit = true;
+    }
+
+    this.playCombatVolley(shots);
+    if (anyHit) {
       const first = shots[0];
       playWorldSound('raiderHit', first.x, first.y);
     }

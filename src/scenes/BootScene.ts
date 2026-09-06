@@ -690,6 +690,23 @@ const CACTUS_MILKER_SPRITE: PixelSprite = {
   ],
 };
 
+const WATCHTOWER_SPRITE: PixelSprite = {
+  // Phase 38: a tall single-tile lookout - a small cabin (rows 0-3) raised
+  // on crossed stilts (rows 4-7) - rather than a walled ground-floor
+  // building, so it reads as height/reach on the 1x1 footprint it occupies.
+  palette: { S: 0x3e2723, R: 0x6d4c41, W: 0xd7ccc8, D: 0x2b1d12, P: 0x5d4037 },
+  pattern: [
+    '.SSSSSS.',
+    'SRRRRRRS',
+    'SRWWWWRS',
+    'SSSSSSSS',
+    '..P..P..',
+    '.PD..DP.',
+    'P.D..D.P',
+    'P......P',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -712,6 +729,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Horsery]: HORSERY_SPRITE,
   [BuildingType.Bank]: BANK_SPRITE,
   [BuildingType.CactusMilker]: CACTUS_MILKER_SPRITE,
+  [BuildingType.Watchtower]: WATCHTOWER_SPRITE,
 };
 
 /**

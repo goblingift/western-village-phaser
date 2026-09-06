@@ -4,6 +4,8 @@ import {
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  WATCHTOWER_DAMAGE,
+  WATCHTOWER_RANGE_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
 } from './constants';
 import { VegetationKind } from './vegetationConfig';
@@ -30,6 +32,7 @@ export enum BuildingType {
   Horsery = 'Horsery',
   Bank = 'Bank',
   CactusMilker = 'CactusMilker',
+  Watchtower = 'Watchtower',
 }
 
 /**
@@ -503,6 +506,18 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     },
     maxHp: 80,
   },
+  [BuildingType.Watchtower]: {
+    type: BuildingType.Watchtower,
+    label: 'Watchtower',
+    cost: 130,
+    materials: { wood: 6 },
+    size: { width: 1, height: 1 },
+    color: 0x5d4037,
+    category: BuildingCategory.Military,
+    upkeep: 1,
+    requiresWorkers: true,
+    maxHp: 60,
+  },
 };
 
 /**
@@ -775,6 +790,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Bank) {
     parts.push(`Interest: ${BANK_INTEREST_RATE * 100}% per tick (compounding)`);
+  }
+  if (definition.type === BuildingType.Watchtower) {
+    parts.push(`Auto-fires ${WATCHTOWER_DAMAGE} dmg at the nearest raider within ${WATCHTOWER_RANGE_TILES} tiles`);
   }
   return parts.join(' | ');
 }

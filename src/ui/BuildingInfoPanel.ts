@@ -17,6 +17,8 @@ import {
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  WATCHTOWER_DAMAGE,
+  WATCHTOWER_RANGE_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
 } from '../config/constants';
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
@@ -80,15 +82,21 @@ export class BuildingInfoPanel {
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const isHorsery = this.selected.type === BuildingType.Horsery;
     const isBank = this.selected.type === BuildingType.Bank;
+    const isWatchtower = this.selected.type === BuildingType.Watchtower;
     // Harvesters (Forestry, Cactus Milker) have no `production` block but are
     // still production buildings from the player's point of view.
     const statusText = production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
       : isBarracks || isHorsery || isBank
         ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
-        : definition.requiresWorkers && !isSupermarket && !isSaloon
-          ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
-          : null;
+        : isWatchtower
+          ? `Defense: ${this.selected.staffed && !this.selected.disabled ? 'Active' : 'Inactive (understaffed)'}`
+          : definition.requiresWorkers && !isSupermarket && !isSaloon
+            ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+            : null;
+    const watchtowerText = isWatchtower
+      ? `Range: ${WATCHTOWER_RANGE_TILES} tiles | Damage: ${WATCHTOWER_DAMAGE}/shot`
+      : null;
     const saleText = isSupermarket
       ? this.formatSaleText(this.selected.lastSale, this.selected.staffed)
       : isSaloon
@@ -133,6 +141,7 @@ export class BuildingInfoPanel {
       <strong>${definition.label}</strong>
       <div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${hpText}</div>
       ${statusText ? `<div>${statusText}</div>` : ''}
+      ${watchtowerText ? `<div>${watchtowerText}</div>` : ''}
       ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}

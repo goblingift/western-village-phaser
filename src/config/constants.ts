@@ -130,3 +130,12 @@ export const GAME_SPEEDS: readonly number[] = [1, 2, 4];
 export const VEGETATION_CLEAR_COST = 8;
 export const VEGETATION_CLEAR_TREE_LOGS = 2;
 export const VEGETATION_CLEAR_CACTUS_JUICE = 1;
+
+/**
+ * Phase 38: Watchtower auto-fire. A stationary counterpart to a manually
+ * positioned Cowboy - longer reach (a tower sees further than a man on the
+ * ground) but weaker per-shot damage than COWBOY_DAMAGE, so it's a
+ * force-multiplier alongside garrisoned units rather than a replacement.
+ */
+export const WATCHTOWER_RANGE_TILES = 6;
+export const WATCHTOWER_DAMAGE = 6;
