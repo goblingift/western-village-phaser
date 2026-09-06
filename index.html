@@ -161,6 +161,34 @@
       #stage canvas {
         display: block;
       }
+      /* Phase 48: hover tooltip for ResourceHudPanel's icon grid - a Phaser
+         canvas widget can't use the building bar's native `title`-attribute
+         trick, so this is a small positioned DOM element instead, following
+         the same dark-panel look as #building-info-panel. pointer-events:none
+         so it never itself blocks the Phaser Zone underneath the cursor. */
+      #resource-tooltip {
+        position: absolute;
+        z-index: 1500;
+        pointer-events: none;
+        background: #2b1d12ee;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-family: sans-serif;
+        font-size: 12px;
+        max-width: 240px;
+        line-height: 1.4;
+      }
+      #resource-tooltip strong {
+        font-size: 13px;
+        color: #ffd54f;
+      }
+      #resource-tooltip .hint {
+        color: #8d7f6e;
+        font-size: 11px;
+        margin-top: 4px;
+      }
       #building-info-panel {
         position: absolute;
         right: 16px;

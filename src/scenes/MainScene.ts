@@ -35,6 +35,7 @@ import {
   WATCHTOWER_RANGE_TILES,
 } from '../config/constants';
 import { TILE_COLORS, TileType, getWorldTiles } from '../config/mapConfig';
+import { getResourceChainBuildingTypes } from '../config/resourceGraph';
 import {
   VEGETATION_ATLAS_KEY,
   VEGETATION_DEFINITIONS,
@@ -118,6 +119,8 @@ import {
 } from '../state/gameState';
 
 const FENCE_LINE_COLOR = 0x8d6748;
+/** Phase 48: chain-view map overlay outline color - gold, distinct from the green connection outline and the red/blue minimap combat dots. */
+const CHAIN_VIEW_HIGHLIGHT_COLOR = 0xffd54f;
 
 /**
  * Phase 31: Phase 29's bank-balance-only raid hook is generalized into
@@ -543,6 +546,11 @@ export class MainScene extends Phaser.Scene {
   private lastMinimapCombatRedraw = 0;
   private minimapBuildingFlashes = new Map<string, MinimapBuildingFlash>();
   private offscreenThreats = new Map<string, OffscreenThreat>();
+  /** Phase 48: chain-view map overlay - which resource (if any) ResourceHudPanel currently has selected, and a single shared Graphics redrawn on selection/placement changes (same pattern as connectionGraphics). */
+  private selectedResourceKey: ResourceKey | null = null;
+  /** Phase 48: 'C' toggles the overlay's visibility without forgetting the selection, distinct from Escape/re-click which clears it outright. */
+  private chainViewVisible = true;
+  private chainViewGraphics!: Phaser.GameObjects.Graphics;
 
   constructor() {
     super('MainScene');
@@ -566,6 +574,7 @@ export class MainScene extends Phaser.Scene {
     this.setupProductionTimer();
     this.setupConnectionVisuals();
     this.setupFenceVisuals();
+    this.setupChainView();
     this.setupAnimalVisuals();
     this.setupHouseTierVisuals();
     this.setupCowboyVisuals();
@@ -2182,6 +2191,64 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Phase 48: Chain Encyclopedia & Resource Tooltips' map-side half. Mirrors
+   * redrawConnectionOutlines' one-shared-Graphics-object approach rather than
+   * a GameObject per highlighted building - a rect stroke per currently-
+   * placed building whose type produces or consumes the ResourceHudPanel-
+   * selected resource (config/resourceGraph.ts's getResourceChainBuildingTypes,
+   * itself derived from BUILDING_DEFINITIONS/HOUSE_TIER_CONFIG/the sell-rate
+   * tables - no new PlacedBuilding state, purely informational). Redrawn on
+   * selection change and on 'connections-updated' (fired on every placement/
+   * removal, regardless of building type) so a newly-placed matching building
+   * lights up without a dedicated 'building-placed' listener.
+   */
+  private setupChainView(): void {
+    this.chainViewGraphics = this.add.graphics();
+    this.chainViewGraphics.setDepth(21);
+
+    gameEvents.on('resource-selected', (key: ResourceKey | null) => {
+      this.selectedResourceKey = key;
+      this.redrawChainViewHighlight();
+    });
+    gameEvents.on('connections-updated', () => this.redrawChainViewHighlight());
+
+    this.input.keyboard?.on('keydown-ESC', () => {
+      if (this.selectedResourceKey !== null) {
+        gameEvents.emit('resource-selected', null);
+      }
+    });
+  }
+
+  private redrawChainViewHighlight(): void {
+    this.chainViewGraphics.clear();
+    if (!this.selectedResourceKey || !this.chainViewVisible) {
+      return;
+    }
+
+    const chainTypes = getResourceChainBuildingTypes(this.selectedResourceKey);
+    this.chainViewGraphics.lineStyle(3, CHAIN_VIEW_HIGHLIGHT_COLOR, 1);
+
+    for (const building of getPlacedBuildings()) {
+      if (!chainTypes.has(building.type)) {
+        continue;
+      }
+      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+      const px = building.tileX * TILE_SIZE;
+      const py = building.tileY * TILE_SIZE;
+      this.chainViewGraphics.strokeRect(px + 1, py + 1, width * TILE_SIZE - 2, height * TILE_SIZE - 2);
+    }
+  }
+
+  /** 'C' toggles the overlay's visibility without discarding the current selection - unlike Escape/re-click, which clear it outright. No-op if nothing is selected. */
+  private toggleChainViewVisibility(): void {
+    if (!this.selectedResourceKey) {
+      return;
+    }
+    this.chainViewVisible = !this.chainViewVisible;
+    this.redrawChainViewHighlight();
+  }
+
   private setupHpBarVisuals(): void {
     this.hpBarGraphics = this.add.graphics();
     this.hpBarGraphics.setDepth(HP_BAR_DEPTH);
@@ -3150,6 +3217,11 @@ export class MainScene extends Phaser.Scene {
         this.demolishSelectedBuilding();
         event.preventDefault();
       }
+
+      if (event.code === 'KeyC') {
+        this.toggleChainViewVisibility();
+        event.preventDefault();
+      }
     });
   }
 
@@ -3362,6 +3434,10 @@ export class MainScene extends Phaser.Scene {
       this.buildingVisuals.clear();
       this.connectionGraphics.clear();
       this.fenceLineGraphics.clear();
+      this.selectedResourceKey = null;
+      this.chainViewVisible = true;
+      this.chainViewGraphics.clear();
+      gameEvents.emit('resource-selected', null);
       this.hpBarGraphics.clear();
       this.unitHpBarGraphics.clear();
       this.statusBadgeGraphics.clear();

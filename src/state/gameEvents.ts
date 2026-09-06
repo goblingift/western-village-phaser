@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import type { BuildingCategory, BuildingType, PlacedBuilding } from '../config/buildingConfig';
+import type { BuildingCategory, BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
 import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
 import type { NotificationEntry } from './notifications';
 import type { VegetationEntity } from './vegetation';
@@ -69,6 +69,14 @@ export interface GameEventMap {
   'camera-focus-requested': (worldX: number, worldY: number) => void;
   /** Phase 46: a House's tier just flipped (see runHouseNeeds); MainScene swaps its sprite frame, BuildingInfoPanel/HUD pick up the new population/tax on their next render. */
   'house-tier-changed': (payload: HouseTierChangePayload) => void;
+  /**
+   * Phase 48: fired by ResourceHudPanel when a resource icon is clicked
+   * (toggling selection) and by MainScene's Escape/'C' handling for the same
+   * selection - MainScene listens to redraw the chain-view map highlight,
+   * ResourceHudPanel listens to itself so an external clear (Escape) keeps its
+   * own icon-highlight state in sync. `null` clears the selection.
+   */
+  'resource-selected': (key: ResourceKey | null) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}
