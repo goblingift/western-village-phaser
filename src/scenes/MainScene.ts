@@ -155,6 +155,32 @@ const MINIMAP_BORDER_COLOR = 0xffffff;
 const MINIMAP_VIEWPORT_COLOR = 0xffee58;
 const MINIMAP_VIEWPORT_THROTTLE_MS = 50;
 const MINIMAP_BUILDING_DOT_SIZE = 3;
+
+/**
+ * Phase 45: minimap combat awareness. Live unit/raider dots and building
+ * damage-flash/off-screen pings are redrawn on their own Graphics object
+ * (minimapCombatGraphics) at the exact same throttle interval the viewport
+ * rectangle already uses (MINIMAP_VIEWPORT_THROTTLE_MS), but driven from
+ * update() every frame rather than only on camera-move/pointer events -
+ * units and raiders drift continuously even while the camera sits still.
+ */
+const MINIMAP_UNIT_DOT_SIZE = 3;
+const MINIMAP_UNIT_COLOR = 0x2979ff;
+const MINIMAP_RAIDER_DOT_SIZE = 3;
+const MINIMAP_RAIDER_COLOR = 0xff1744;
+/** How long a hit building's minimap dot alternates size/color after taking damage. */
+const MINIMAP_FLASH_DURATION_MS = 1600;
+/** Blink half-period - the flash dot toggles size every this-many ms. */
+const MINIMAP_FLASH_BLINK_MS = 200;
+const MINIMAP_FLASH_COLOR = 0xffffff;
+const MINIMAP_FLASH_DOT_SIZE = MINIMAP_BUILDING_DOT_SIZE + 3;
+/** Off-screen attack ping: how long after the last hit it keeps fading before disappearing. */
+const OFFSCREEN_PING_FADE_MS = 3000;
+const OFFSCREEN_PING_PULSE_MS = 500;
+const OFFSCREEN_PING_COLOR = 0xff6d00;
+const OFFSCREEN_PING_RADIUS = 4;
+/** Keeps the ping's edge-clamped point from ever touching the minimap's own border stroke. */
+const OFFSCREEN_PING_EDGE_INSET = 5;
 const ANIMAL_SPRITE_DEPTH = 11;
 const ANIMAL_SLOT_GAP = 2;
 const ANIMAL_SLOT_STEP = ANIMAL_SPRITE_SIZE + ANIMAL_SLOT_GAP;
@@ -395,6 +421,20 @@ const UNIT_KIND_CONFIG: Record<UnitKind, UnitKindConfig> = {
   cowboyOnHorse: { walkSpeedPxPerSec: MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC },
 };
 
+/** Phase 45: a snapshot of where/until a building's minimap dot should flash after taking raid damage, kept independent of the building still existing so a killing blow's flash can outlive removeDestroyedBuildings() deleting the record. */
+interface MinimapBuildingFlash {
+  tileX: number;
+  tileY: number;
+  until: number;
+}
+
+/** Phase 45: an off-screen building currently under attack, tracked so the minimap can point toward it until a few seconds pass without another hit. */
+interface OffscreenThreat {
+  worldX: number;
+  worldY: number;
+  lastHitAt: number;
+}
+
 interface CombatUnit {
   /** Phase 41: stable identity for control groups (Map<number, string[]>) and double-click-select-all, surviving this.cowboyUnits' own churn the same way Raider.id does. */
   id: string;
@@ -498,6 +538,11 @@ export class MainScene extends Phaser.Scene {
   private minimapViewportGraphics!: Phaser.GameObjects.Graphics;
   private minimapPointerActive = false;
   private lastMinimapViewportRedraw = 0;
+  /** Phase 45: live unit/raider dots + damage flashes/off-screen pings - separate from minimapGraphics since this one redraws continuously instead of only on placement events. */
+  private minimapCombatGraphics!: Phaser.GameObjects.Graphics;
+  private lastMinimapCombatRedraw = 0;
+  private minimapBuildingFlashes = new Map<string, MinimapBuildingFlash>();
+  private offscreenThreats = new Map<string, OffscreenThreat>();
 
   constructor() {
     super('MainScene');
@@ -537,7 +582,7 @@ export class MainScene extends Phaser.Scene {
     this.pauseForPreGameSelection();
   }
 
-  update(_time: number, delta: number): void {
+  update(time: number, delta: number): void {
     this.redrawSelectionRing();
     this.updateKeyboardCameraPan(delta);
     // The audio engine culls/pans world sounds against the camera's current
@@ -545,6 +590,11 @@ export class MainScene extends Phaser.Scene {
     // the audio module) keeps that module free of any Phaser dependency.
     setAudioListenerRect(this.cameras.main.worldView);
     this.emitFootstepTicks();
+    // Phase 45: unlike buildings (event-driven redraw) or the viewport rect
+    // (redrawn on camera-move events), units/raiders drift every frame even
+    // while the camera and buildings are untouched - so this is the one
+    // minimap redraw driven straight from update(), throttled the same way.
+    this.redrawMinimapCombatThrottled(time);
   }
 
   private buildTilemap(): void {
@@ -1010,6 +1060,12 @@ export class MainScene extends Phaser.Scene {
     this.minimapViewportGraphics.setScrollFactor(0);
     this.minimapViewportGraphics.setDepth(1001);
 
+    // Phase 45: above the viewport rectangle so live combat dots/pings are
+    // never hidden behind it.
+    this.minimapCombatGraphics = this.add.graphics();
+    this.minimapCombatGraphics.setScrollFactor(0);
+    this.minimapCombatGraphics.setDepth(1002);
+
     this.redrawMinimap();
 
     gameEvents.on('building-placed', () => this.redrawMinimap());
@@ -1100,6 +1156,157 @@ export class MainScene extends Phaser.Scene {
 
     this.minimapViewportGraphics.lineStyle(2, MINIMAP_VIEWPORT_COLOR, 1);
     this.minimapViewportGraphics.strokeRect(rectX, rectY, rectW, rectH);
+  }
+
+  /**
+   * Phase 45: same throttle-and-redraw pair as redrawMinimapViewportThrottled/
+   * redrawMinimapViewport, but called every update() frame instead of only on
+   * camera-move/pointer events, since units and raiders keep moving on their
+   * own.
+   */
+  private redrawMinimapCombatThrottled(now: number): void {
+    if (now - this.lastMinimapCombatRedraw < MINIMAP_VIEWPORT_THROTTLE_MS) {
+      return;
+    }
+    this.lastMinimapCombatRedraw = now;
+    this.redrawMinimapCombat(now);
+  }
+
+  private redrawMinimapCombat(now: number): void {
+    this.minimapCombatGraphics.clear();
+
+    const tileWidth = MINIMAP_WIDTH / MAP_WIDTH_TILES;
+    const tileHeight = MINIMAP_HEIGHT / MAP_HEIGHT_TILES;
+
+    this.redrawMinimapBuildingFlashes(now, tileWidth, tileHeight);
+
+    this.minimapCombatGraphics.fillStyle(MINIMAP_UNIT_COLOR, 1);
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const tileX = unit.image.x / TILE_SIZE;
+      const tileY = unit.image.y / TILE_SIZE;
+      this.minimapCombatGraphics.fillRect(
+        this.minimapX + tileX * tileWidth - MINIMAP_UNIT_DOT_SIZE / 2,
+        this.minimapY + tileY * tileHeight - MINIMAP_UNIT_DOT_SIZE / 2,
+        MINIMAP_UNIT_DOT_SIZE,
+        MINIMAP_UNIT_DOT_SIZE,
+      );
+    }
+
+    this.minimapCombatGraphics.fillStyle(MINIMAP_RAIDER_COLOR, 1);
+    for (const raider of this.raiders) {
+      const tileX = raider.image.x / TILE_SIZE;
+      const tileY = raider.image.y / TILE_SIZE;
+      this.minimapCombatGraphics.fillRect(
+        this.minimapX + tileX * tileWidth - MINIMAP_RAIDER_DOT_SIZE / 2,
+        this.minimapY + tileY * tileHeight - MINIMAP_RAIDER_DOT_SIZE / 2,
+        MINIMAP_RAIDER_DOT_SIZE,
+        MINIMAP_RAIDER_DOT_SIZE,
+      );
+    }
+
+    this.redrawOffscreenThreatPings(now);
+  }
+
+  /** Prunes expired flashes, then draws the surviving ones alternating size on MINIMAP_FLASH_BLINK_MS. */
+  private redrawMinimapBuildingFlashes(now: number, tileWidth: number, tileHeight: number): void {
+    for (const [buildingId, flash] of this.minimapBuildingFlashes) {
+      if (now >= flash.until) {
+        this.minimapBuildingFlashes.delete(buildingId);
+        continue;
+      }
+
+      const blinkOn = Math.floor((flash.until - now) / MINIMAP_FLASH_BLINK_MS) % 2 === 0;
+      const size = blinkOn ? MINIMAP_FLASH_DOT_SIZE : MINIMAP_BUILDING_DOT_SIZE;
+      this.minimapCombatGraphics.fillStyle(MINIMAP_FLASH_COLOR, 1);
+      this.minimapCombatGraphics.fillRect(
+        this.minimapX + flash.tileX * tileWidth - size / 2,
+        this.minimapY + flash.tileY * tileHeight - size / 2,
+        size,
+        size,
+      );
+    }
+  }
+
+  /**
+   * Phase 45: for every building currently under off-screen attack, draws a
+   * pulsing dot at the point where a line from the minimap's centre to that
+   * building's minimap position crosses the minimap's own border - a compact
+   * "the threat is that way" indicator that fades out once
+   * OFFSCREEN_PING_FADE_MS has passed since the last hit. Re-checks current
+   * on-screen-ness every call (rather than trusting the off-screen snapshot
+   * taken at hit time) so panning onto the fight clears its ping immediately.
+   */
+  private redrawOffscreenThreatPings(now: number): void {
+    for (const [buildingId, threat] of this.offscreenThreats) {
+      if (now - threat.lastHitAt > OFFSCREEN_PING_FADE_MS) {
+        this.offscreenThreats.delete(buildingId);
+        continue;
+      }
+      if (this.isWorldPointInViewport(threat.worldX, threat.worldY)) {
+        continue;
+      }
+
+      const mapPixelWidth = MAP_WIDTH_TILES * TILE_SIZE;
+      const mapPixelHeight = MAP_HEIGHT_TILES * TILE_SIZE;
+      const targetX = this.minimapX + Phaser.Math.Clamp(threat.worldX / mapPixelWidth, 0, 1) * MINIMAP_WIDTH;
+      const targetY = this.minimapY + Phaser.Math.Clamp(threat.worldY / mapPixelHeight, 0, 1) * MINIMAP_HEIGHT;
+
+      const centerX = this.minimapX + MINIMAP_WIDTH / 2;
+      const centerY = this.minimapY + MINIMAP_HEIGHT / 2;
+      const dx = targetX - centerX;
+      const dy = targetY - centerY;
+      const halfW = MINIMAP_WIDTH / 2 - OFFSCREEN_PING_EDGE_INSET;
+      const halfH = MINIMAP_HEIGHT / 2 - OFFSCREEN_PING_EDGE_INSET;
+      const scale = Math.min(
+        dx !== 0 ? Math.abs(halfW / dx) : Infinity,
+        dy !== 0 ? Math.abs(halfH / dy) : Infinity,
+        1,
+      );
+      const edgeX = centerX + dx * scale;
+      const edgeY = centerY + dy * scale;
+
+      const fadeAlpha = Phaser.Math.Clamp(1 - (now - threat.lastHitAt) / OFFSCREEN_PING_FADE_MS, 0, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(now / OFFSCREEN_PING_PULSE_MS);
+      this.minimapCombatGraphics.fillStyle(OFFSCREEN_PING_COLOR, fadeAlpha * (0.4 + 0.6 * pulse));
+      this.minimapCombatGraphics.fillCircle(edgeX, edgeY, OFFSCREEN_PING_RADIUS);
+    }
+  }
+
+  private isWorldPointInViewport(worldX: number, worldY: number): boolean {
+    const view = this.cameras.main.worldView;
+    return worldX >= view.x && worldX <= view.right && worldY >= view.y && worldY <= view.bottom;
+  }
+
+  /**
+   * Phase 45: called right after a raider damages a building (resolveRaiderAttacks)
+   * so a hit anywhere on the map shows up on the minimap even if the player
+   * is looking elsewhere. Snapshots the building's own centre tile rather
+   * than holding a PlacedBuilding reference, so the flash still renders for
+   * its full duration even if this same hit destroyed the building and
+   * removeDestroyedBuildings() drops it from gameState a moment later.
+   */
+  private registerMinimapBuildingDamage(building: PlacedBuilding): void {
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const centerTileX = building.tileX + width / 2;
+    const centerTileY = building.tileY + height / 2;
+    const now = this.time.now;
+
+    this.minimapBuildingFlashes.set(building.id, {
+      tileX: centerTileX,
+      tileY: centerTileY,
+      until: now + MINIMAP_FLASH_DURATION_MS,
+    });
+
+    const worldX = centerTileX * TILE_SIZE;
+    const worldY = centerTileY * TILE_SIZE;
+    if (this.isWorldPointInViewport(worldX, worldY)) {
+      this.offscreenThreats.delete(building.id);
+    } else {
+      this.offscreenThreats.set(building.id, { worldX, worldY, lastHitAt: now });
+    }
   }
 
   private isPointerInMinimap(pointer: Phaser.Input.Pointer): boolean {
@@ -3599,6 +3806,7 @@ export class MainScene extends Phaser.Scene {
         continue;
       }
       target.hp = Math.max(0, target.hp - definition.damage);
+      this.registerMinimapBuildingDamage(target);
     }
   }
 
@@ -3872,6 +4080,12 @@ export class MainScene extends Phaser.Scene {
 
     this.raidActive = false;
     this.hideRaidNotice();
+
+    // Phase 45: a wave's damage flashes/off-screen pings are wave-scoped like
+    // everything else reset here - a flash left over from the previous run
+    // would otherwise render at a stale tile until it happened to expire.
+    this.minimapBuildingFlashes.clear();
+    this.offscreenThreats.clear();
 
     this.scheduleNextRaidCheck();
   }
