@@ -7,6 +7,7 @@ import {
   PlacedBuilding,
   RESOURCE_LABELS,
   ResourceKey,
+  WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
@@ -27,15 +28,19 @@ import {
   demolishBuilding,
   depositToBank,
   getHarvestCenterTile,
+  getLaborShortfall,
   getMoney,
   getRepairCost,
   getWellWaterDistance,
   hasAdjacentFence,
   repairBuilding,
+  setBuildingPriority,
   trainCowboy,
   trainMountedCowboy,
   withdrawFromBank,
 } from '../state/gameState';
+
+const WORKER_PRIORITIES: WorkerPriority[] = ['high', 'normal', 'low'];
 
 export class BuildingInfoPanel {
   private panel: HTMLDivElement;
@@ -88,19 +93,34 @@ export class BuildingInfoPanel {
     const statusText = production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
       : isBarracks || isHorsery || isBank
-        ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+        ? `Staffed: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
         : isWatchtower
-          ? `Defense: ${this.selected.staffed && !this.selected.disabled ? 'Active' : 'Inactive (understaffed)'}`
+          ? `Defense: ${
+              this.selected.disabled
+                ? 'Inactive (upkeep unpaid)'
+                : this.selected.staffed
+                  ? 'Active'
+                  : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`
+            }`
           : definition.requiresWorkers && !isSupermarket && !isSaloon
-            ? `Storage bonus: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
+            ? `Storage bonus: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
             : null;
+    // Phase 42: a plain production building's "Production: Off" line doesn't
+    // say why - could be missing inputs, could be no staff. Surface the
+    // staffing reason as its own line only when staffing is actually the
+    // cause; harvesters get the equivalent detail from describeHarvestStatus
+    // instead, so this is gated to non-harvest production buildings.
+    const understaffedText =
+      production && !definition.harvest && workersRequired > 0 && !this.selected.staffed && this.selected.hp > 0
+        ? `Understaffed: ${this.formatUnderstaffedReason(this.selected, workersRequired)}`
+        : null;
     const watchtowerText = isWatchtower
       ? `Range: ${WATCHTOWER_RANGE_TILES} tiles | Damage: ${WATCHTOWER_DAMAGE}/shot`
       : null;
     const saleText = isSupermarket
-      ? this.formatSaleText(this.selected.lastSale, this.selected.staffed)
+      ? this.formatSaleText(this.selected.lastSale, this.selected, workersRequired)
       : isSaloon
-        ? this.formatSaleText(this.selected.saloonSale, this.selected.staffed)
+        ? this.formatSaleText(this.selected.saloonSale, this.selected, workersRequired)
         : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
@@ -149,6 +169,7 @@ export class BuildingInfoPanel {
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
+      ${understaffedText ? `<div class="hp-disabled">${understaffedText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
       ${cowboyText ? `<div>${cowboyText}</div>` : ''}
       ${mountedCowboyText ? `<div>${mountedCowboyText}</div>` : ''}
@@ -171,7 +192,57 @@ export class BuildingInfoPanel {
       this.renderDepositButton(this.selected);
       this.renderWithdrawButton(this.selected);
     }
+    if (workersRequired > 0) {
+      this.renderPriorityControls(this.selected);
+    }
     this.renderDemolishButton(this.selected);
+  }
+
+  /**
+   * Phase 42: "why is this one empty" reason shared by every staffing status
+   * line (plain production, harvesters, Barracks/Horsery/Bank/Watchtower,
+   * Supermarket/Saloon sales) so the wording doesn't have to be kept in sync
+   * by hand across all of them. Once the town-wide pool is actually short
+   * (getLaborShortfall), that's the real, actionable reason regardless of
+   * which building is asking; otherwise fall back to this building's own
+   * assigned/required counts (e.g. immediately after placement, before the
+   * next tick's assignWorkforce has run at all).
+   */
+  private formatUnderstaffedReason(building: PlacedBuilding, workersRequired: number): string {
+    const shortfall = getLaborShortfall();
+    if (shortfall > 0) {
+      return `not enough population (need ${shortfall} more worker${shortfall === 1 ? '' : 's'} town-wide)`;
+    }
+    return `understaffed (${building.assignedWorkers}/${workersRequired} workers)`;
+  }
+
+  /**
+   * Phase 42: High/Normal/Low buttons for any building that competes for the
+   * shared population pool. Clicking a tier calls setBuildingPriority and
+   * re-renders immediately - the effect on actual staffing only shows up
+   * after the next production tick's assignWorkforce pass, same as every
+   * other action this panel drives.
+   */
+  private renderPriorityControls(building: PlacedBuilding): void {
+    const row = document.createElement('div');
+    row.className = 'priority-row';
+
+    const label = document.createElement('span');
+    label.textContent = 'Priority: ';
+    row.appendChild(label);
+
+    for (const priority of WORKER_PRIORITIES) {
+      const button = document.createElement('button');
+      button.className = `priority-button${building.priority === priority ? ' active' : ''}`;
+      button.textContent = priority.charAt(0).toUpperCase() + priority.slice(1);
+      button.addEventListener('click', () => {
+        setBuildingPriority(building.id, priority);
+        this.render();
+      });
+      row.appendChild(button);
+    }
+
+    this.panel.appendChild(row);
   }
 
   /**
@@ -204,7 +275,7 @@ export class BuildingInfoPanel {
     if (!building.staffed) {
       const required = getWorkersRequired(building.type);
       return {
-        text: `Not harvesting: understaffed (${building.assignedWorkers}/${required} workers)`,
+        text: `Not harvesting: ${this.formatUnderstaffedReason(building, required)}`,
         blocked: true,
       };
     }
@@ -398,7 +469,11 @@ export class BuildingInfoPanel {
     }
   }
 
-  private formatSaleText<K extends ResourceKey>(sale: AutoSale<K> | undefined, staffed: boolean): string {
+  private formatSaleText<K extends ResourceKey>(
+    sale: AutoSale<K> | undefined,
+    building: PlacedBuilding,
+    workersRequired: number,
+  ): string {
     const soldEntries = sale
       ? (Object.entries(sale.sold) as [K, number][]).filter(([, amount]) => amount > 0)
       : [];
@@ -406,8 +481,8 @@ export class BuildingInfoPanel {
       const parts = soldEntries.map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]}`);
       return `Sold: ${parts.join(', ')} -> +$${sale.revenue}`;
     }
-    if (!staffed) {
-      return 'Not selling (understaffed)';
+    if (!building.staffed) {
+      return `Not selling (${this.formatUnderstaffedReason(building, workersRequired)})`;
     }
     return 'No stock to sell';
   }

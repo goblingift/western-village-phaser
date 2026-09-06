@@ -170,6 +170,15 @@ export interface AutoSale<K extends ResourceKey> {
 export type SupermarketSale = AutoSale<SupermarketSellableKey>;
 export type SaloonSale = AutoSale<SaloonSellableKey>;
 
+/**
+ * Phase 42: player-controlled staffing order. assignWorkforce (gameState.ts)
+ * processes every High-priority building before any Normal, and every Normal
+ * before any Low, so a scarce population pool gets funneled to whichever
+ * buildings the player flags as most important instead of whatever happened
+ * to get placed first.
+ */
+export type WorkerPriority = 'high' | 'normal' | 'low';
+
 export interface PlacedBuilding {
   id: string;
   type: BuildingType;
@@ -223,6 +232,8 @@ export interface PlacedBuilding {
   disabled: boolean;
   /** Phase 32: what a harvesting building actually pulled from vegetation last tick, for the info panel. */
   lastHarvest?: number;
+  /** Phase 42: defaults to 'normal' on placement; player-set via setBuildingPriority, consumed by assignWorkforce's sort. */
+  priority: WorkerPriority;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {

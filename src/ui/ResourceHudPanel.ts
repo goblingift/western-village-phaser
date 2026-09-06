@@ -9,6 +9,7 @@ import {
 import {
   getEmployedPopulation,
   getIdlePopulation,
+  getLaborShortfall,
   getMoney,
   getResourceTrends,
   getResources,
@@ -141,8 +142,13 @@ export class ResourceHudPanel {
     // doesn't carry a permanent "Idle 0".
     const idle = getIdlePopulation();
     const idleText = idle > 0 ? `   Idle ${idle}` : '';
+    // Phase 42: town-wide labor shortage (demand across every priority-
+    // eligible building minus total population) - distinct from idle, which
+    // is spare workers with no job rather than jobs with no worker.
+    const shortfall = getLaborShortfall();
+    const shortfallText = shortfall > 0 ? ` (short by ${shortfall})` : '';
     this.headerText.setText(
-      `$${round1(getMoney())}   Pop ${getEmployedPopulation()}/${getTotalPopulation()}${idleText}   Cap ${getStorageCap()}`,
+      `$${round1(getMoney())}   Pop ${getEmployedPopulation()}/${getTotalPopulation()}${shortfallText}${idleText}   Cap ${getStorageCap()}`,
     );
 
     const resources = getResources();

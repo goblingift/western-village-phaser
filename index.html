@@ -197,6 +197,27 @@
       #building-info-panel button.danger:hover:not(:disabled) {
         background: #c62828;
       }
+      /* Phase 42: worker priority tier buttons - a compact row, not the
+         panel's usual full-width action buttons. */
+      #building-info-panel .priority-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+        font-size: 12px;
+      }
+      #building-info-panel button.priority-button {
+        margin-top: 0;
+        background: #5b3a29;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      #building-info-panel button.priority-button:hover:not(.active) {
+        background: #714a35;
+      }
+      #building-info-panel button.priority-button.active {
+        background: #4caf50;
+      }
       #game-over-overlay {
         position: fixed;
         inset: 0;

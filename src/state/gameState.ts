@@ -42,6 +42,7 @@ import {
   SUPERMARKET_SELL_RATES,
   SaloonSellableKey,
   SupermarketSellableKey,
+  WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
 import { distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
@@ -151,6 +152,15 @@ let currentDifficulty: Difficulty = 'normal';
 let currentRunMode: RunMode = 'fixed';
 let employedPopulation = 0;
 let idlePopulation = 0;
+/**
+ * Phase 42: town-wide "workers still needed if every priority-eligible
+ * building were to be fully staffed" - computed once per assignWorkforce
+ * pass alongside idlePopulation. Unlike idlePopulation (spare workers with no
+ * job), this is jobs with no worker: the number the info panel and HUD show
+ * so a player sees *why* a Normal/Low building is sitting empty rather than
+ * just that it is.
+ */
+let laborShortfall = 0;
 
 function createEmptyOccupancy(): (string | null)[][] {
   const grid: (string | null)[][] = [];
@@ -238,6 +248,11 @@ export function getEmployedPopulation(): number {
 
 export function getIdlePopulation(): number {
   return idlePopulation;
+}
+
+/** Phase 42: see the `laborShortfall` module variable's doc comment. */
+export function getLaborShortfall(): number {
+  return laborShortfall;
 }
 
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
@@ -434,6 +449,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     mountedCowboyHp: [],
     bankBalance: 0,
     disabled: false,
+    priority: 'normal',
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -932,9 +948,32 @@ export function getPlacedBuildings(): readonly PlacedBuilding[] {
 }
 
 /**
+ * Phase 42: player-facing staffing control. Mutates the field only - the
+ * next assignWorkforce pass (already run unconditionally every tick) picks
+ * up the new order on its own, so there is nothing else to recompute here.
+ */
+export function setBuildingPriority(buildingId: string, priority: WorkerPriority): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return false;
+  }
+  building.priority = priority;
+  return true;
+}
+
+const WORKER_PRIORITY_RANK: Record<WorkerPriority, number> = { high: 0, normal: 1, low: 2 };
+
+/**
  * Recomputed from scratch every tick (not persisted on the building) so that
  * placing/losing a House immediately affects staffing on the very next tick,
  * with no stale "still employed" state to invalidate.
+ *
+ * Phase 42: the greedy assignment pass now walks buildings in priority order
+ * (High, then Normal, then Low) rather than raw placement order, via a
+ * stable sort of a scratch copy - `Array.prototype.sort` is stable, so ties
+ * within a tier fall back to the original placement order exactly as before.
+ * `placedBuildings` itself, and every other pass that iterates it, is left
+ * untouched.
  */
 function assignWorkforce(): void {
   const houseCount = placedBuildings.filter((building) => building.type === BuildingType.House).length;
@@ -942,8 +981,13 @@ function assignWorkforce(): void {
 
   let available = totalPopulation;
   let employed = 0;
+  let demand = 0;
 
-  for (const building of placedBuildings) {
+  const ordered = [...placedBuildings].sort(
+    (a, b) => WORKER_PRIORITY_RANK[a.priority] - WORKER_PRIORITY_RANK[b.priority],
+  );
+
+  for (const building of ordered) {
     // A 0 HP building has no one working in it; recomputed every tick, so this
     // also covers a building that just dropped to 0 HP mid-game.
     if (building.hp <= 0) {
@@ -959,9 +1003,12 @@ function assignWorkforce(): void {
       continue;
     }
 
-    // First-come-first-served in placement order: a building's assignment is
-    // capped at whatever population remains, so once the pool runs dry every
-    // later building in the list gets zero workers this tick.
+    demand += workersRequired;
+
+    // First-come-first-served within a priority tier: a building's
+    // assignment is capped at whatever population remains, so once the pool
+    // runs dry every later building in this priority-ordered pass gets zero
+    // workers this tick.
     const assigned = Math.min(available, workersRequired);
     building.assignedWorkers = assigned;
     building.staffed = assigned === workersRequired;
@@ -971,6 +1018,7 @@ function assignWorkforce(): void {
 
   employedPopulation = employed;
   idlePopulation = available;
+  laborShortfall = Math.max(0, demand - totalPopulation);
 }
 
 /** Phase 29: read by MainScene's raid scheduling to bias faction pick/interval once total deposits cross BANK_RISK_THRESHOLD. */
@@ -1440,6 +1488,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   totalPopulation = 0;
   employedPopulation = 0;
   idlePopulation = 0;
+  laborShortfall = 0;
 
   placedBuildings.length = 0;
   buildingsById.clear();
