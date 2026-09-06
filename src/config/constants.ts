@@ -118,6 +118,17 @@ export const CAMERA_MIN_ZOOM = 0.5;
 export const CAMERA_MAX_ZOOM = 2;
 export const CAMERA_ZOOM_STEP = 0.1;
 
+/**
+ * Phase 41: WASD/arrow-key camera panning. Screen-px/sec, applied the same
+ * unscaled way setupCameraDrag already applies a right-drag's raw pointer
+ * delta to scrollX/scrollY (no zoom adjustment) - keeping keyboard pan
+ * consistent with the existing drag-pan feel rather than introducing a
+ * second, zoom-aware convention. 480px/s covers the 960x640 viewport
+ * left-to-right in two seconds, which read as brisk but controllable on the
+ * 40x30 tile map in testing.
+ */
+export const CAMERA_KEYBOARD_PAN_SPEED_PX_PER_SEC = 480;
+
 /** Phase 33: selectable game speeds; 0 is the paused state. */
 export const GAME_SPEEDS: readonly number[] = [1, 2, 4];
 

@@ -98,6 +98,11 @@ export class BuildingBar {
       this.demolishMode = active;
       this.demolishButton.classList.toggle('active', active);
     });
+    // Phase 41: MainScene's bare-number-key hotkey (only live when no units
+    // are selected and neither placement nor demolish mode is active - see
+    // MainScene.trySwitchBuildingCategory) switches tabs the same way a tab
+    // click does.
+    gameEvents.on('select-category', (category: BuildingCategory) => this.setCategory(category));
 
     // Icons are rasterised out of the Phaser atlas once BootScene has run,
     // which may be before or after this bar is constructed.

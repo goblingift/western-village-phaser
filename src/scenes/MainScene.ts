@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import {
+  CAMERA_KEYBOARD_PAN_SPEED_PX_PER_SEC,
   CAMERA_MAX_ZOOM,
   CAMERA_MIN_ZOOM,
   CAMERA_ZOOM_STEP,
@@ -55,6 +56,7 @@ import {
   ANIMAL_SPRITE_SIZE,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
+  BuildingCategory,
   BuildingType,
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
@@ -257,6 +259,19 @@ const SELECTION_RECT_FILL_ALPHA = 0.15;
 const SELECTION_RECT_DEPTH = 13.4;
 
 /**
+ * Phase 41: hotkeys, WASD camera & control groups.
+ * - UNIT_DOUBLE_CLICK_MS: second click-select on the SAME unit within this
+ *   window selects every living unit of that unit's kind, mirroring the
+ *   dragDistance <= CLICK_MOVE_THRESHOLD click-vs-drag test already used to
+ *   reach selectUnitAt in the first place.
+ * - CONTROL_GROUP_DOUBLE_TAP_MS: second bare-number-key recall of the SAME
+ *   group within this window recenters the camera on it instead of just
+ *   re-selecting it again.
+ */
+const UNIT_DOUBLE_CLICK_MS = 300;
+const CONTROL_GROUP_DOUBLE_TAP_MS = 400;
+
+/**
  * Phase 34: the harvest radius ring. A Forestry/Cactus Milker's 5-tile reach
  * is 160px - a sixth of the viewport at zoom 1 - and was previously completely
  * invisible, so "will this building reach those trees" was pure guesswork.
@@ -377,6 +392,8 @@ const UNIT_KIND_CONFIG: Record<UnitKind, UnitKindConfig> = {
 };
 
 interface CombatUnit {
+  /** Phase 41: stable identity for control groups (Map<number, string[]>) and double-click-select-all, surviving this.cowboyUnits' own churn the same way Raider.id does. */
+  id: string;
   image: Phaser.GameObjects.Image;
   barracksId: string;
   index: number;
@@ -430,7 +447,26 @@ export class MainScene extends Phaser.Scene {
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
   private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
   private cowboyUnits: CombatUnit[] = [];
+  /** Phase 41: monotonically increasing so every CombatUnit.id is unique for the life of the scene, mirroring raiderIdCounter. */
+  private unitIdCounter = 0;
   private selectedUnits: CombatUnit[] = [];
+  /** Phase 41: control groups (Ctrl+1..9 assign, bare 1..9 recall) keyed by group number, storing member CombatUnit.ids rather than live references so a dead-and-filtered-out unit is simply absent on the next recall's alive-check. */
+  private controlGroups = new Map<number, string[]>();
+  /** Phase 41: last this.time.now a bare-number-key recall of a given group fired, for the double-tap-to-recenter check. */
+  private lastGroupRecallAt = new Map<number, number>();
+  /** Phase 41: double-click-select-all-of-kind state - the id/time of the last unit click-select, independent of controlGroups. */
+  private lastUnitClickId: string | null = null;
+  private lastUnitClickAt = 0;
+  private cameraKeys!: {
+    w: Phaser.Input.Keyboard.Key;
+    a: Phaser.Input.Keyboard.Key;
+    s: Phaser.Input.Keyboard.Key;
+    d: Phaser.Input.Keyboard.Key;
+    up: Phaser.Input.Keyboard.Key;
+    down: Phaser.Input.Keyboard.Key;
+    left: Phaser.Input.Keyboard.Key;
+    right: Phaser.Input.Keyboard.Key;
+  };
   private selectionRingGraphics!: Phaser.GameObjects.Graphics;
   private selectionRectGraphics!: Phaser.GameObjects.Graphics;
   private dragStartWorldX = 0;
@@ -460,6 +496,7 @@ export class MainScene extends Phaser.Scene {
     this.setupVegetationVisuals();
     this.setupCameraDrag();
     this.setupCameraZoom();
+    this.setupKeyboardCamera();
     this.setupInfoText();
     this.setupResourceHud();
     this.setupTimerHud();
@@ -475,6 +512,7 @@ export class MainScene extends Phaser.Scene {
     this.setupAnimalVisuals();
     this.setupCowboyVisuals();
     this.setupUnitControl();
+    this.setupHotkeys();
     this.setupHpBarVisuals();
     this.setupStatusBadges();
     this.setupHarvestRadiusRing();
@@ -486,8 +524,9 @@ export class MainScene extends Phaser.Scene {
     this.pauseForPreGameSelection();
   }
 
-  update(): void {
+  update(_time: number, delta: number): void {
     this.redrawSelectionRing();
+    this.updateKeyboardCameraPan(delta);
     // The audio engine culls/pans world sounds against the camera's current
     // view; pushing it here (rather than reading a scene reference from inside
     // the audio module) keeps that module free of any Phaser dependency.
@@ -702,6 +741,65 @@ export class MainScene extends Phaser.Scene {
     this.selectionRectGraphics.fillRect(minX, minY, width, height);
     this.selectionRectGraphics.lineStyle(1, SELECTION_RECT_COLOR, 1);
     this.selectionRectGraphics.strokeRect(minX, minY, width, height);
+  }
+
+  /**
+   * Phase 41: continuous WASD/arrow-key camera panning, checked every frame
+   * in update() rather than on one-shot keydown events - addKey()'s .isDown
+   * reflects the held state directly, the same "poll, don't event" approach
+   * Phaser's own docs recommend for movement. Diagonal input is normalized so
+   * holding two keys doesn't pan faster than one. No zoom adjustment, same
+   * simplification setupCameraDrag's right-drag pan already uses (raw screen-
+   * px delta straight onto scrollX/scrollY); camera.setBounds (buildTilemap)
+   * clamps the result to the map exactly as it already clamps drag-pan.
+   */
+  private setupKeyboardCamera(): void {
+    const keyboard = this.input.keyboard;
+    if (!keyboard) {
+      return;
+    }
+    const KeyCodes = Phaser.Input.Keyboard.KeyCodes;
+    this.cameraKeys = {
+      w: keyboard.addKey(KeyCodes.W),
+      a: keyboard.addKey(KeyCodes.A),
+      s: keyboard.addKey(KeyCodes.S),
+      d: keyboard.addKey(KeyCodes.D),
+      up: keyboard.addKey(KeyCodes.UP),
+      down: keyboard.addKey(KeyCodes.DOWN),
+      left: keyboard.addKey(KeyCodes.LEFT),
+      right: keyboard.addKey(KeyCodes.RIGHT),
+    };
+  }
+
+  private updateKeyboardCameraPan(deltaMs: number): void {
+    if (!this.cameraKeys) {
+      return;
+    }
+
+    let dx = 0;
+    let dy = 0;
+    if (this.cameraKeys.a.isDown || this.cameraKeys.left.isDown) {
+      dx -= 1;
+    }
+    if (this.cameraKeys.d.isDown || this.cameraKeys.right.isDown) {
+      dx += 1;
+    }
+    if (this.cameraKeys.w.isDown || this.cameraKeys.up.isDown) {
+      dy -= 1;
+    }
+    if (this.cameraKeys.s.isDown || this.cameraKeys.down.isDown) {
+      dy += 1;
+    }
+
+    if (dx === 0 && dy === 0) {
+      return;
+    }
+
+    const length = Math.sqrt(dx * dx + dy * dy);
+    const distance = (CAMERA_KEYBOARD_PAN_SPEED_PX_PER_SEC * deltaMs) / 1000;
+    this.cameras.main.scrollX += (dx / length) * distance;
+    this.cameras.main.scrollY += (dy / length) * distance;
+    this.redrawMinimapViewportThrottled();
   }
 
   private setupInfoText(): void {
@@ -2131,7 +2229,15 @@ export class MainScene extends Phaser.Scene {
     const image = this.add
       .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
       .setDepth(COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboy', attackTargetRaiderId: null });
+    this.cowboyUnits.push({
+      id: `unit-${this.unitIdCounter++}`,
+      image,
+      barracksId: building.id,
+      index,
+      moveTween: null,
+      kind: 'cowboy',
+      attackTargetRaiderId: null,
+    });
   }
 
   /** Mirrors spawnCowboyUnit exactly, spawning at a Horsery's mounted-slot layout and tagging the unit 'cowboyOnHorse'. */
@@ -2140,7 +2246,15 @@ export class MainScene extends Phaser.Scene {
     const image = this.add
       .image(slot.x, slot.y, MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_TEXTURE_KEY)
       .setDepth(MOUNTED_COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboyOnHorse', attackTargetRaiderId: null });
+    this.cowboyUnits.push({
+      id: `unit-${this.unitIdCounter++}`,
+      image,
+      barracksId: building.id,
+      index,
+      moveTween: null,
+      kind: 'cowboyOnHorse',
+      attackTargetRaiderId: null,
+    });
   }
 
   /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
@@ -2283,6 +2397,14 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Phase 41: a second click-select on the SAME unit within
+   * UNIT_DOUBLE_CLICK_MS selects every currently-alive unit of that unit's
+   * kind (cowboy vs cowboyOnHorse) rather than just the one clicked -
+   * "every alive" rather than "every on-screen" since it's simpler and reads
+   * correctly (a player double-clicking one Cowboy almost always wants every
+   * Cowboy, on-screen or not).
+   */
   private selectUnitAt(pointer: Phaser.Input.Pointer): void {
     let hit: CombatUnit | null = null;
     let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
@@ -2298,8 +2420,22 @@ export class MainScene extends Phaser.Scene {
       }
     }
 
-    this.selectedUnits = hit ? [hit] : [];
-    this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
+    if (!hit) {
+      this.selectedUnits = [];
+      this.lastUnitClickId = null;
+      this.cowboySelectionHintText.setVisible(false);
+      return;
+    }
+
+    const now = this.time.now;
+    const isDoubleClick = hit.id === this.lastUnitClickId && now - this.lastUnitClickAt <= UNIT_DOUBLE_CLICK_MS;
+    this.lastUnitClickId = hit.id;
+    this.lastUnitClickAt = now;
+
+    this.selectedUnits = isDoubleClick
+      ? this.cowboyUnits.filter((unit) => unit.kind === hit.kind && this.isCowboyUnitAlive(unit))
+      : [hit];
+    this.cowboySelectionHintText.setVisible(true);
   }
 
   /** Every living unit whose position falls within the released drag rectangle (world-space corners, order-independent). */
@@ -2436,6 +2572,139 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Phase 41: everything that isn't continuous camera panning (that's
+   * setupKeyboardCamera/updateKeyboardCameraPan above) - control groups,
+   * idle-unit cycling, demolishing the selected building, and the
+   * bare-number-key building-category switch. One raw 'keydown' listener
+   * (rather than addKey() per key) because several of these need modifier
+   * state (event.ctrlKey) and a native KeyCode, not just "is this key down".
+   *
+   * Conflict resolution for bare digit keys 1-9 (documented once, here,
+   * since handleNumberKey is the single place that arbitrates it): a digit
+   * key ALWAYS tries a control-group recall first. Only if that group has no
+   * living members (including a never-assigned group) does the key fall
+   * through to the building-category tab switch, and only then if no units
+   * are currently selected and neither placement nor demolish mode is
+   * active. This means an assigned, still-living control group takes
+   * permanent priority over that same digit's category tab - a deliberate
+   * choice, since a group the player bothered to assign is presumably more
+   * important than a tab shortcut sharing its digit.
+   */
+  private setupHotkeys(): void {
+    const keyboard = this.input.keyboard;
+    if (!keyboard) {
+      return;
+    }
+
+    keyboard.on('keydown', (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      const digitMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+      if (digitMatch) {
+        this.handleNumberKey(Number(digitMatch[1]), event.ctrlKey || event.metaKey);
+        event.preventDefault();
+        return;
+      }
+
+      if (event.code === 'Space') {
+        this.cycleIdleUnitSelection();
+        event.preventDefault();
+        return;
+      }
+
+      if (event.code === 'Delete' || event.code === 'Backspace') {
+        this.demolishSelectedBuilding();
+        event.preventDefault();
+      }
+    });
+  }
+
+  private handleNumberKey(groupNumber: number, ctrlHeld: boolean): void {
+    if (ctrlHeld) {
+      if (this.selectedUnits.length === 0) {
+        return;
+      }
+      this.controlGroups.set(groupNumber, this.selectedUnits.map((unit) => unit.id));
+      return;
+    }
+
+    const memberIds = this.controlGroups.get(groupNumber);
+    const livingMembers = memberIds
+      ? this.cowboyUnits.filter((unit) => memberIds.includes(unit.id) && this.isCowboyUnitAlive(unit))
+      : [];
+
+    if (livingMembers.length > 0) {
+      const now = this.time.now;
+      const lastRecallAt = this.lastGroupRecallAt.get(groupNumber) ?? -Infinity;
+      this.lastGroupRecallAt.set(groupNumber, now);
+
+      this.selectedUnits = livingMembers;
+      this.cowboySelectionHintText.setVisible(true);
+
+      if (now - lastRecallAt <= CONTROL_GROUP_DOUBLE_TAP_MS) {
+        this.centerCameraOnUnits(livingMembers);
+      }
+      return;
+    }
+
+    if (this.selectedUnits.length === 0 && this.selectedType === null && !this.demolishMode) {
+      this.trySwitchBuildingCategory(groupNumber);
+    }
+  }
+
+  private centerCameraOnUnits(units: CombatUnit[]): void {
+    const avgX = units.reduce((sum, unit) => sum + unit.image.x, 0) / units.length;
+    const avgY = units.reduce((sum, unit) => sum + unit.image.y, 0) / units.length;
+    this.cameras.main.centerOn(avgX, avgY);
+    this.redrawMinimapViewportThrottled();
+  }
+
+  /** 1-indexed against BuildingCategory's declaration order (BuildingBar builds its tabs off the same Object.values(...) order); out-of-range numbers (7-9, with today's 6 categories) are simply a no-op. */
+  private trySwitchBuildingCategory(oneIndexedCategoryNumber: number): void {
+    const categories = Object.values(BuildingCategory);
+    const category = categories[oneIndexedCategoryNumber - 1];
+    if (!category) {
+      return;
+    }
+    gameEvents.emit('select-category', category);
+  }
+
+  /**
+   * Cycles selection through units with no standing order (not mid-move-tween
+   * and no attackTargetRaiderId), centering the camera on each in turn and
+   * wrapping around. If exactly one idle unit is already selected, this
+   * advances from its position in the idle list; any other selection state
+   * (none, multiple, or a non-idle unit) restarts from the first idle unit.
+   */
+  private cycleIdleUnitSelection(): void {
+    const idleUnits = this.cowboyUnits.filter(
+      (unit) => this.isCowboyUnitAlive(unit) && unit.moveTween === null && unit.attackTargetRaiderId === null,
+    );
+    if (idleUnits.length === 0) {
+      return;
+    }
+
+    const currentIndex = this.selectedUnits.length === 1 ? idleUnits.indexOf(this.selectedUnits[0]) : -1;
+    const nextUnit = idleUnits[(currentIndex + 1) % idleUnits.length];
+
+    this.selectedUnits = [nextUnit];
+    this.cowboySelectionHintText.setVisible(true);
+    this.cameras.main.centerOn(nextUnit.image.x, nextUnit.image.y);
+    this.redrawMinimapViewportThrottled();
+  }
+
+  /** Mirrors BuildingInfoPanel's own Demolish button (demolishBuilding + clearing the selection), just bound to Delete/Backspace on whichever building is currently selected. No-op if nothing is selected. */
+  private demolishSelectedBuilding(): void {
+    if (!this.selectedBuildingId) {
+      return;
+    }
+    demolishBuilding(this.selectedBuildingId);
+    gameEvents.emit('building-selected', null);
+  }
+
+  /**
    * Spawns POPULATION_PER_HOUSE sprites per House placement (population
    * capacity, not employment - employment is recomputed every tick and
    * shouldn't churn sprites in/out). Capped at VILLAGER_CAP total for
@@ -2561,6 +2830,9 @@ export class MainScene extends Phaser.Scene {
       }
       this.cowboyUnits = [];
       this.selectedUnits = [];
+      this.controlGroups.clear();
+      this.lastGroupRecallAt.clear();
+      this.lastUnitClickId = null;
       this.selectionRingGraphics.clear();
       this.selectionRectGraphics.clear();
       this.cowboySelectionHintText.setVisible(false);

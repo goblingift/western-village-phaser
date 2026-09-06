@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import type { BuildingType, PlacedBuilding } from '../config/buildingConfig';
+import type { BuildingCategory, BuildingType, PlacedBuilding } from '../config/buildingConfig';
 import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
 import type { VegetationEntity } from './vegetation';
 
@@ -49,6 +49,8 @@ export interface GameEventMap {
    * resetGame with the player's freshly chosen settings.
    */
   'request-run-restart': () => void;
+  /** Phase 41: fired by MainScene's bare-number-key building-category hotkey; BuildingBar is the only listener. */
+  'select-category': (category: BuildingCategory) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}
