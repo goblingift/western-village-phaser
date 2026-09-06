@@ -31,6 +31,7 @@ import {
   BuildingType,
   HarvestConfig,
   PlacedBuilding,
+  RESOURCE_LABELS,
   RESOURCE_VALUES,
   ResourceKey,
   SALOON_SELL_RATES,
@@ -236,8 +237,34 @@ export function isAreaFree(tileX: number, tileY: number, type: BuildingType): bo
   return true;
 }
 
+/**
+ * Phase 37: does the global resource pool hold at least `materials` for this
+ * building type? Money-only definitions (no `materials` field) always pass.
+ */
+export function hasEnoughMaterials(type: BuildingType): boolean {
+  const { materials } = BUILDING_DEFINITIONS[type];
+  if (!materials) {
+    return true;
+  }
+  return (Object.entries(materials) as [ResourceKey, number][]).every(
+    ([key, amount]) => resources[key] >= amount,
+  );
+}
+
+/** Player-facing "$X + Y Wood (have Z)" listing of whichever materials are still short, for the placement-rejection text. */
+function describeMissingMaterials(type: BuildingType): string {
+  const { materials } = BUILDING_DEFINITIONS[type];
+  if (!materials) {
+    return '';
+  }
+  return (Object.entries(materials) as [ResourceKey, number][])
+    .filter(([key, amount]) => resources[key] < amount)
+    .map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]} (have ${Math.floor(resources[key] * 10) / 10})`)
+    .join(', ');
+}
+
 export function canAfford(type: BuildingType): boolean {
-  return money >= BUILDING_DEFINITIONS[type].cost;
+  return money >= BUILDING_DEFINITIONS[type].cost && hasEnoughMaterials(type);
 }
 
 /**
@@ -303,8 +330,11 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
   if (type === BuildingType.Well && getWellWaterDistance(tileX, tileY, type) === null) {
     return `Well must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water`;
   }
-  if (!canAfford(type)) {
+  if (money < BUILDING_DEFINITIONS[type].cost) {
     return `Not enough money ($${BUILDING_DEFINITIONS[type].cost})`;
+  }
+  if (!hasEnoughMaterials(type)) {
+    return `Not enough materials: need ${describeMissingMaterials(type)}`;
   }
   return null;
 }
@@ -388,10 +418,18 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   }
 
   money -= definition.cost;
+  if (definition.materials) {
+    for (const [key, amount] of Object.entries(definition.materials) as [ResourceKey, number][]) {
+      resources[key] -= amount;
+    }
+  }
   placedBuildings.push(building);
   buildingsById.set(building.id, building);
 
   gameEvents.emit('money-changed', money);
+  if (definition.materials) {
+    gameEvents.emit('resources-changed', { ...resources });
+  }
   gameEvents.emit('building-placed', building);
 
   updateConnections();

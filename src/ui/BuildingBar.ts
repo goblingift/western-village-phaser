@@ -4,6 +4,7 @@ import {
   BuildingDefinition,
   BuildingType,
   describeBuilding,
+  formatBuildingCost,
 } from '../config/buildingConfig';
 import { GAME_SPEEDS } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
@@ -88,6 +89,9 @@ export class BuildingBar {
     this.updateMoney(getMoney());
 
     gameEvents.on('money-changed', (money: number) => this.updateMoney(money));
+    // Phase 37: a building can also be unaffordable purely on materials, so
+    // the dim state must refresh on the resource pool too, not just money.
+    gameEvents.on('resources-changed', () => this.refreshAffordability());
     gameEvents.on('select-building', (type: BuildingType) => this.setActive(type));
     gameEvents.on('cancel-placement', () => this.setActive(null));
     gameEvents.on('demolish-mode-changed', (active: boolean) => {
@@ -116,7 +120,7 @@ export class BuildingBar {
 
     const cost = document.createElement('span');
     cost.className = 'cost';
-    cost.textContent = `$${definition.cost}`;
+    cost.textContent = formatBuildingCost(definition);
     button.appendChild(cost);
 
     button.addEventListener('click', () => this.onButtonClick(definition.type));
@@ -253,6 +257,10 @@ export class BuildingBar {
 
   private updateMoney(money: number): void {
     this.moneyLabel.textContent = `$${Math.round(money * 10) / 10}`;
+    this.refreshAffordability();
+  }
+
+  private refreshAffordability(): void {
     for (const [type, button] of this.buttons) {
       button.classList.toggle('unaffordable', !canAfford(type));
     }

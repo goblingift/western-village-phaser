@@ -125,6 +125,16 @@ export interface BuildingDefinition {
   type: BuildingType;
   label: string;
   cost: number;
+  /**
+   * Phase 37: optional material cost alongside `cost`'s money price - kept
+   * optional (rather than a required, possibly-empty map) so every existing
+   * money-only definition stays valid untouched. Walled production/commerce/
+   * military buildings mostly cost Wood (creating real demand for the
+   * WoodCutter chain); core early buildings (House/Well/Road/Fence/the raw
+   * livestock & crop buildings/Forestry) stay material-free so the opening
+   * game is never gated on a resource chain that doesn't exist yet.
+   */
+  materials?: Partial<Record<ResourceKey, number>>;
   size: BuildingSize;
   color: number;
   category: BuildingCategory;
@@ -234,6 +244,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Butcher,
     label: 'Butcher',
     cost: 150,
+    materials: { wood: 5 },
     size: { width: 2, height: 2 },
     color: 0xc62828,
     category: BuildingCategory.Industry,
@@ -317,6 +328,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Fence,
     label: 'Fence',
     cost: 15,
+    materials: { logs: 2 },
     size: { width: 1, height: 1 },
     color: 0xc9a063,
     category: BuildingCategory.Infrastructure,
@@ -327,6 +339,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Warehouse,
     label: 'Warehouse',
     cost: 150,
+    materials: { wood: 8 },
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
     category: BuildingCategory.Infrastructure,
@@ -338,6 +351,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Supermarket,
     label: 'Supermarket',
     cost: 200,
+    materials: { wood: 6 },
     size: { width: 2, height: 2 },
     color: 0x8e24aa,
     category: BuildingCategory.Commerce,
@@ -349,6 +363,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Barracks,
     label: 'Barracks',
     cost: 180,
+    materials: { wood: 10 },
     size: { width: 2, height: 2 },
     color: 0x37474f,
     category: BuildingCategory.Military,
@@ -360,6 +375,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Sewery,
     label: 'Sewery',
     cost: 130,
+    materials: { wood: 5 },
     size: { width: 2, height: 2 },
     color: 0x8d6e4a,
     category: BuildingCategory.Industry,
@@ -392,6 +408,11 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.WoodCutter,
     label: 'Wood-cutter',
     cost: 100,
+    // Deliberately Logs, not Wood: this is the only building that produces
+    // Wood at all (from Logs), so costing it Wood would be an unbreakable
+    // chicken-and-egg lock. Logs come straight from Forestry (money-only),
+    // so the sawmill still has a real, satisfiable material cost.
+    materials: { logs: 5 },
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
     category: BuildingCategory.Industry,
@@ -414,6 +435,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Liquor,
     label: 'Liquor Still',
     cost: 140,
+    materials: { wood: 5 },
     size: { width: 2, height: 2 },
     color: 0xb87333,
     category: BuildingCategory.Industry,
@@ -425,6 +447,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Saloon,
     label: 'Saloon',
     cost: 200,
+    materials: { wood: 10 },
     size: { width: 2, height: 2 },
     color: 0xefebe9,
     category: BuildingCategory.Commerce,
@@ -436,6 +459,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Horsery,
     label: 'Horsery',
     cost: 220,
+    materials: { wood: 10 },
     size: { width: 2, height: 2 },
     color: 0x795548,
     category: BuildingCategory.Military,
@@ -447,6 +471,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Bank,
     label: 'Bank',
     cost: 200,
+    materials: { wood: 8 },
     size: { width: 2, height: 2 },
     color: 0x9e9e9e,
     category: BuildingCategory.Commerce,
@@ -458,6 +483,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.CactusMilker,
     label: 'Cactus Milker',
     cost: 150,
+    materials: { wood: 5 },
     size: { width: 2, height: 2 },
     color: 0x7cb342,
     category: BuildingCategory.Farming,
@@ -687,15 +713,25 @@ export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   agaveJuice: 'Agave Juice',
 };
 
-function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
+/** Exported (Phase 37): also used to format a building's `materials` cost for tooltips/the building bar. */
+export function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
   return (Object.entries(map) as [ResourceKey, number][])
     .map(([key, amount]) => `${amount} ${RESOURCE_LABELS[key]}`)
     .join(', ');
 }
 
+/** Phase 37: "$80" for a money-only building, "$80 + 5 Wood" once `materials` is set - the single formatter every cost display (tooltip, building-bar cost tag, placement-rejection text) shares. */
+export function formatBuildingCost(definition: BuildingDefinition): string {
+  const { materials } = definition;
+  if (!materials || Object.keys(materials).length === 0) {
+    return `$${definition.cost}`;
+  }
+  return `$${definition.cost} + ${formatResourceMap(materials)}`;
+}
+
 export function describeBuilding(definition: BuildingDefinition): string {
   const parts = [
-    `Cost: $${definition.cost}`,
+    `Cost: ${formatBuildingCost(definition)}`,
     `Size: ${definition.size.width}x${definition.size.height}`,
   ];
   if (definition.production?.inputs) {
