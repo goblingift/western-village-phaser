@@ -725,6 +725,76 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
 }
 
 /**
+ * Phase 52: the load-time counterpart to placeBuilding - pushes an
+ * already-fully-formed PlacedBuilding (deserialized from a save) straight
+ * into occupancy/placedBuildings/buildingsById, skipping every affordability/
+ * placement-legality check placeBuilding runs (the building already exists,
+ * legally, in the save) and skipping the cost deduction and
+ * 'building-placed'/'money-changed' events a fresh purchase fires. Bounds are
+ * still clamped defensively against the *current* map size in case a future
+ * map-size change ever ships against an older save.
+ */
+export function restoreBuilding(building: PlacedBuilding): void {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+  for (let y = building.tileY; y < building.tileY + height; y++) {
+    for (let x = building.tileX; x < building.tileX + width; x++) {
+      if (y >= 0 && y < MAP_HEIGHT_TILES && x >= 0 && x < MAP_WIDTH_TILES) {
+        occupancy[y][x] = building.id;
+      }
+    }
+  }
+  placedBuildings.push(building);
+  buildingsById.set(building.id, building);
+}
+
+/**
+ * Phase 52: exposed so persistence's post-load hydration can force an
+ * immediate staffing pass - without this, population/employed/staffed would
+ * all read as 0 until the next PRODUCTION_TICK_MS tick fires, which is a
+ * visibly wrong HUD for up to 2s right after a load.
+ */
+export function recomputeWorkforceNow(): void {
+  assignWorkforce();
+}
+
+/**
+ * Phase 52: called once right after a save finishes restoring its buildings,
+ * before the run resumes ticking. A freshly-hydrated town can already have
+ * satisfied unlock requirements the previous session unlocked; without this,
+ * the very next checkBuildingUnlocks() (from the next production tick) would
+ * treat every already-unlocked building as newly unlocked and spam the
+ * notification log with things the player unlocked minutes/hours ago.
+ * Silently marks them notified instead, with no notification emitted.
+ */
+export function silentlySyncUnlockNotifications(): void {
+  for (const type of Object.values(BuildingType)) {
+    if (isBuildingUnlocked(type)) {
+      unlockNotified.add(type);
+    }
+  }
+}
+
+/**
+ * Phase 52: restores the handful of scalar/pool fields a save carries that
+ * resetGame() otherwise (re)initializes to fresh-game defaults - called right
+ * after resetGame() so the fresh-game values it just set are immediately
+ * overwritten with the loaded ones. `resources` keeps its existing object
+ * identity (Object.assign, matching resetGame's own pattern) rather than
+ * being replaced, in case anything ever held a reference to it.
+ */
+export function restoreCoreState(state: {
+  money: number;
+  resources: Resources;
+  elapsedSeconds: number;
+  totalMeatProduced: number;
+}): void {
+  money = state.money;
+  Object.assign(resources, state.resources);
+  elapsedSeconds = state.elapsedSeconds;
+  totalMeatProduced = state.totalMeatProduced;
+}
+
+/**
  * Phase 31: the one and only way a building leaves the world, shared by
  * raider destruction (0 HP) and the player's bulldozer. Everything hanging
  * off the building goes with it: its occupancy tiles are freed, its livestock

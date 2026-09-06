@@ -101,6 +101,7 @@ import {
 import { BuildingRemovedPayload, HouseTierChangePayload, gameEvents } from '../state/gameEvents';
 import { addNotification } from '../state/notifications';
 import { startMerchantDeal } from '../state/market';
+import { AUTOSAVE_SLOT, saveToSlot } from '../state/persistence';
 import {
   DayPhase,
   DayPhaseChange,
@@ -511,6 +512,17 @@ export class MainScene extends Phaser.Scene {
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
   /** Phase 51: Traveling Merchant - self-rescheduling timer mirroring raidCheckTimer, but with no wave/active-state to gate on. */
   private merchantCheckTimer: Phaser.Time.TimerEvent | null = null;
+  /**
+   * Phase 52: which day number the autosave last fired for, so the
+   * 'day-phase-changed' listener only saves once per genuine dawn rather than
+   * on resetGame's own synthetic "Day 1, day" event (fired at elapsedSeconds
+   * 0, which this is guarded against separately) or a repeat delivery of the
+   * same boundary. Reset to -1 on 'game-reset' so a new run's real Day 1 dawn
+   * isn't skipped for matching a previous run's already-saved day number.
+   */
+  private lastAutosaveDayNumber = -1;
+  /** Phase 52: set by the 'game-loaded' handler, consumed by the very next 'day-phase-changed' (deserializeGameState re-emits one right after 'game-loaded' to refresh the HUD with the loaded phase) so a load never immediately re-triggers the autosave it may itself have just been restored from. */
+  private suppressNextAutosaveCheck = false;
   private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
   private cowboyUnits: CombatUnit[] = [];
   /** Phase 41: monotonically increasing so every CombatUnit.id is unique for the life of the scene, mirroring raiderIdCounter. */
@@ -601,6 +613,7 @@ export class MainScene extends Phaser.Scene {
     this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
+    this.setupSaveLoad();
     this.pauseForPreGameSelection();
   }
 
@@ -1921,6 +1934,24 @@ export class MainScene extends Phaser.Scene {
       return false;
     }
 
+    // A freshly placed Barracks/Horsery always starts with zero trained units
+    // (see gameState.ts), so there is nothing to spawn here - Cowboy/mounted-
+    // Cowboy units only ever appear via the 'cowboy-trained'/'mounted-cowboy-
+    // trained' events. A loaded save's restoreBuildingVisual, below, is the
+    // one path that DOES need to spawn units up front (a restored Barracks
+    // can already have a nonzero cowboyCount).
+    this.createVisualForBuilding(building);
+    return true;
+  }
+
+  /**
+   * The visual-creation half of placeBuildingAt (image + animals + accents +
+   * villagers), split out in Phase 52 so a loaded save's restoreBuildingVisual
+   * can build the exact same visual for a building it didn't just place
+   * through gameState.placeBuilding - avoiding a second, parallel
+   * visual-creation path that could drift from this one.
+   */
+  private createVisualForBuilding(building: PlacedBuilding): BuildingVisual {
     const image = this.add
       .image(
         building.tileX * TILE_SIZE,
@@ -1944,13 +1975,40 @@ export class MainScene extends Phaser.Scene {
       this.redrawFenceLines();
     }
     this.redrawAnimalSprites(visual);
-    // A freshly placed Barracks always starts with cowboyCount 0 (see gameState.ts), so there is
-    // nothing to spawn here - Cowboy units only ever appear via the 'cowboy-trained' event below.
     this.createBuildingAccents(visual);
     if (building.type === BuildingType.House) {
       this.spawnVillagersForHouse(building);
     }
-    return true;
+    return visual;
+  }
+
+  /**
+   * Phase 52: the load-time counterpart to placeBuildingAt. Builds the exact
+   * same visual (createVisualForBuilding) but additionally re-spawns any
+   * garrisoned Cowboy/Cowboy-on-Horse units the restored building's
+   * cowboyHp/mountedCowboyHp arrays record - a freshly-placed building can
+   * never have these (see placeBuildingAt's comment), but a loaded one can.
+   * Spawned at the unit's static home slot (getCowboySlotPosition/
+   * getMountedCowboySlotPosition), not wherever it was standing when the save
+   * was made - see persistence.ts's doc comment for why live unit position is
+   * out of scope for this phase.
+   */
+  private restoreBuildingVisual(building: PlacedBuilding): void {
+    this.createVisualForBuilding(building);
+
+    if (building.type === BuildingType.Barracks) {
+      for (let index = 0; index < building.cowboyHp.length; index++) {
+        if (building.cowboyHp[index] > 0) {
+          this.spawnCowboyUnit(building, index);
+        }
+      }
+    } else if (building.type === BuildingType.Horsery) {
+      for (let index = 0; index < building.mountedCowboyHp.length; index++) {
+        if (building.mountedCowboyHp[index] > 0) {
+          this.spawnMountedCowboyUnit(building, index);
+        }
+      }
+    }
   }
 
   private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
@@ -3500,6 +3558,41 @@ export class MainScene extends Phaser.Scene {
 
       this.resetRaidState();
       this.resetMerchantState();
+      this.lastAutosaveDayNumber = -1;
+    });
+  }
+
+  /**
+   * Phase 52: Save/Load + Autosave's scene-side half. state/persistence.ts
+   * owns the actual (de)serialization and localStorage plumbing; this only
+   * reacts to its 'game-loaded' event (rebuilding every building/villager/
+   * garrisoned-unit visual from the now-populated gameState, mirroring how
+   * setupGameReset tears them down) and drives the once-per-dawn autosave off
+   * the existing day/night clock.
+   */
+  private setupSaveLoad(): void {
+    gameEvents.on('game-loaded', () => {
+      this.redrawAllVegetation();
+      for (const building of getPlacedBuildings()) {
+        this.restoreBuildingVisual(building);
+      }
+      this.redrawMinimap();
+      this.suppressNextAutosaveCheck = true;
+    });
+
+    gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
+      if (this.suppressNextAutosaveCheck) {
+        this.suppressNextAutosaveCheck = false;
+        return;
+      }
+      // getElapsedSeconds() > 0 excludes resetGame's own synthetic "Day 1,
+      // day" event, always fired at elapsedSeconds 0 for a brand new run -
+      // not a real dawn worth autosaving.
+      if (phase === 'day' && dayNumber !== this.lastAutosaveDayNumber && getElapsedSeconds() > 0) {
+        this.lastAutosaveDayNumber = dayNumber;
+        saveToSlot(AUTOSAVE_SLOT);
+        addNotification('Autosaved.', 'info', getElapsedSeconds());
+      }
     });
   }
 

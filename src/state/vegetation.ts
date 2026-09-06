@@ -199,4 +199,32 @@ export function resetVegetation(): void {
   generateVegetation();
 }
 
+/** Phase 52: plain-data snapshot of every live entity, for a save payload - see persistence.ts. */
+export function serializeVegetation(): VegetationEntity[] {
+  return vegetation.map((entity) => ({ ...entity }));
+}
+
+/**
+ * Phase 52: the inverse of serializeVegetation. Replaces the whole entity
+ * list/index wholesale (rather than diffing against the current map) - called
+ * once, right after gameState's resetGame() has already reseeded a fresh
+ * random layout via resetVegetation(), so that random layout is discarded in
+ * favor of the loaded one. `nextVegetationId` is re-derived from the highest
+ * restored id so a subsequent plantVegetation() (Forestry replanting) can
+ * never mint a colliding id.
+ */
+export function restoreVegetationEntities(entities: readonly VegetationEntity[]): void {
+  vegetation = entities.map((entity) => ({ ...entity }));
+  vegetationByTile.clear();
+  nextVegetationId = 0;
+
+  for (const entity of vegetation) {
+    vegetationByTile.set(tileKey(entity.tileX, entity.tileY), entity);
+    const idNumber = Number(entity.id.split('-')[1]);
+    if (Number.isFinite(idNumber) && idNumber >= nextVegetationId) {
+      nextVegetationId = idNumber + 1;
+    }
+  }
+}
+
 generateVegetation();

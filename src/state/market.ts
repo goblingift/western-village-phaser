@@ -47,10 +47,19 @@ import {
  * itself mid-tick, which would make a Trading Post order chase its own tail.
  */
 
-interface MerchantDeal {
+export interface MerchantDeal {
   key: MarketableResourceKey;
   multiplier: number;
   expiresAtElapsedSeconds: number;
+}
+
+/** Phase 52: everything this module owns, for a save payload - see persistence.ts. */
+export interface MarketSaveState {
+  baselinePrice: Record<MarketableResourceKey, number>;
+  currentPrice: Record<MarketableResourceKey, number>;
+  volumeWindow: Record<MarketableResourceKey, number[]>;
+  pendingVolume: Partial<Record<MarketableResourceKey, number>>;
+  merchantDeal: MerchantDeal | null;
 }
 
 function emptyVolumeWindows(): Record<MarketableResourceKey, number[]> {
@@ -145,4 +154,28 @@ export function runMarketTick(elapsedSeconds: number): void {
   }
 
   pendingVolume = {};
+}
+
+/** Phase 52: snapshot for a save payload - see persistence.ts. */
+export function serializeMarket(): MarketSaveState {
+  return {
+    baselinePrice: { ...baselinePrice },
+    currentPrice: { ...currentPrice },
+    volumeWindow: Object.fromEntries(
+      MARKETABLE_RESOURCE_KEYS.map((key) => [key, [...volumeWindow[key]]]),
+    ) as Record<MarketableResourceKey, number[]>,
+    pendingVolume: { ...pendingVolume },
+    merchantDeal: merchantDeal ? { ...merchantDeal } : null,
+  };
+}
+
+/** Phase 52: the inverse of serializeMarket, called from persistence.deserializeGameState after resetGame's own resetMarket() has already run. */
+export function restoreMarket(state: MarketSaveState): void {
+  baselinePrice = { ...state.baselinePrice };
+  currentPrice = { ...state.currentPrice };
+  volumeWindow = Object.fromEntries(
+    MARKETABLE_RESOURCE_KEYS.map((key) => [key, [...(state.volumeWindow[key] ?? [])]]),
+  ) as Record<MarketableResourceKey, number[]>;
+  pendingVolume = { ...state.pendingVolume };
+  merchantDeal = state.merchantDeal ? { ...state.merchantDeal } : null;
 }

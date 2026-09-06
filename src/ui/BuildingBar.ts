@@ -11,6 +11,7 @@ import { gameEvents } from '../state/gameEvents';
 import { canAfford, describeUnlockRequirement, getMoney, isBuildingUnlocked } from '../state/gameState';
 import { getAudioVolume, isAudioMuted, setAudioMuted, setAudioVolume } from '../audio/sound';
 import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
+import { MANUAL_SAVE_SLOT, hasSaveSlot, loadFromSlot, saveToSlot } from '../state/persistence';
 
 /**
  * Phase 33: the bar used to be a single wrapping row of 20+ text buttons -
@@ -36,6 +37,7 @@ export class BuildingBar {
   private demolishButton: HTMLButtonElement;
   private muteButton!: HTMLButtonElement;
   private volumeSlider!: HTMLInputElement;
+  private loadButton!: HTMLButtonElement;
   private activeCategory: BuildingCategory = BuildingCategory.Infrastructure;
   private demolishMode = false;
 
@@ -69,6 +71,7 @@ export class BuildingBar {
     topRow.appendChild(this.createSpeedControls());
     topRow.appendChild(this.createAudioControls());
     topRow.appendChild(this.createStatsButton());
+    topRow.appendChild(this.createSaveLoadControls());
     bar.appendChild(topRow);
 
     for (const category of Object.values(BuildingCategory)) {
@@ -232,6 +235,52 @@ export class BuildingBar {
     button.title = 'Toggle the Statistics & Efficiency panel (V)';
     button.addEventListener('click', () => gameEvents.emit('toggle-statistics-panel'));
     return button;
+  }
+
+  /**
+   * Phase 52: manual Save/Load, operating on the 'manual' slot only -
+   * autosave (the 'autosave' slot) is a silent, MainScene-driven day-boundary
+   * timer, wholly separate from these buttons. Load starts disabled/grey
+   * exactly like an unaffordable building button (Phase 33's convention)
+   * rather than being hidden, so "there's nothing to load yet" is visible
+   * rather than the button just not existing.
+   */
+  private createSaveLoadControls(): HTMLDivElement {
+    const group = document.createElement('div');
+    group.className = 'speed-group';
+
+    const saveButton = document.createElement('button');
+    saveButton.className = 'speed';
+    saveButton.textContent = 'Save';
+    saveButton.title = 'Save the current game to the manual slot';
+    saveButton.addEventListener('click', () => {
+      saveToSlot(MANUAL_SAVE_SLOT);
+      this.refreshLoadButton();
+    });
+    group.appendChild(saveButton);
+
+    this.loadButton = document.createElement('button');
+    this.loadButton.className = 'speed';
+    this.loadButton.textContent = 'Load';
+    this.loadButton.title = 'Load the manually saved game';
+    this.loadButton.addEventListener('click', () => {
+      if (!hasSaveSlot(MANUAL_SAVE_SLOT)) {
+        return;
+      }
+      loadFromSlot(MANUAL_SAVE_SLOT);
+    });
+    group.appendChild(this.loadButton);
+
+    this.refreshLoadButton();
+    return group;
+  }
+
+  private refreshLoadButton(): void {
+    const available = hasSaveSlot(MANUAL_SAVE_SLOT);
+    this.loadButton.disabled = !available;
+    this.loadButton.title = available
+      ? 'Load the manually saved game'
+      : 'No manual save yet - click Save first';
   }
 
   private setSpeed(speed: number, button: HTMLButtonElement): void {

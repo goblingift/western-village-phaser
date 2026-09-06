@@ -81,6 +81,11 @@
         padding: 5px 6px;
         font-size: 12px;
       }
+      /* Phase 52: Load button disabled state - no manual save exists yet. */
+      #building-bar button.speed:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
       /* The speed group takes margin-left:auto to push the right-hand controls
          over; the audio group follows it, so it must not claim that margin
          again or it would push itself onto its own edge. */
@@ -588,6 +593,24 @@
       }
       #difficulty-select-panel button#start-run-button:hover {
         background: #5cbf60;
+      }
+      /* Phase 52: Save/Load - "Continue" sits above the difficulty/mode
+         pickers (it skips them entirely) and gets its own accent color so it
+         reads as a distinct action from "Start New Game" below. */
+      #difficulty-select-panel button#continue-run-button {
+        display: block;
+        width: 100%;
+        margin-bottom: 16px;
+        background: #2979ff;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      #difficulty-select-panel button#continue-run-button:hover {
+        background: #448aff;
       }
     </style>
   </head>

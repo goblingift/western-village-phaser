@@ -84,6 +84,18 @@ export interface GameEventMap {
    * 'toggle-chain-view'-style UI toggles elsewhere stay self-contained.
    */
   'toggle-statistics-panel': () => void;
+  /**
+   * Phase 52: fired once, after a loaded save has fully repopulated gameState
+   * (buildings/vegetation/market/resources/clock all restored) but before
+   * `updateConnections()` runs - MainScene is the only listener, and it
+   * synchronously (re)creates every building/villager/garrisoned-unit visual
+   * from `getPlacedBuildings()` so that the subsequent `connections-updated`
+   * (from `updateConnections()`) has a fully-populated `buildingVisuals` map
+   * to draw outlines/fence-lines against. Distinct from 'game-reset' (which
+   * fires earlier in the same load, wiping the *previous* run's visuals) -
+   * this is the "and now build the new ones" half.
+   */
+  'game-loaded': () => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

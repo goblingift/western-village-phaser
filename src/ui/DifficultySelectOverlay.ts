@@ -1,6 +1,7 @@
 import { Difficulty, DIFFICULTY_SETTINGS, RunMode } from '../config/constants';
 import { resetGame } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
+import { getMostRecentSaveSlotName, loadFromSlot } from '../state/persistence';
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   easy: 'Easy',
@@ -52,6 +53,10 @@ export class DifficultySelectOverlay {
     this.render();
 
     gameEvents.on('request-run-restart', () => {
+      // Phase 52: re-render rather than just un-hiding - a save may have been
+      // made (manually, or via autosave) since this overlay's HTML was last
+      // built, and the "Continue" button's presence depends on that.
+      this.render();
       this.overlay.hidden = false;
     });
   }
@@ -71,15 +76,25 @@ export class DifficultySelectOverlay {
       })
       .join('');
 
+    // Phase 52: "Continue" only appears when a save (manual or autosave)
+    // actually exists - loads whichever of the two slots is most recent,
+    // skipping the difficulty/mode pick entirely (the save already carries
+    // its own).
+    const mostRecentSlot = getMostRecentSaveSlotName();
+    const continueButton = mostRecentSlot
+      ? `<button id="continue-run-button">Continue</button>`
+      : '';
+
     this.content.innerHTML = `
       <h2>Western Village</h2>
+      ${continueButton}
       <h3>Difficulty</h3>
       <div class="option-row">${difficultyButtons}</div>
       <div class="stat">${DIFFICULTY_DESCRIPTIONS[this.selectedDifficulty]}</div>
       <h3>Run Length</h3>
       <div class="option-row">${modeButtons}</div>
       <div class="stat">${MODE_DESCRIPTIONS[this.selectedMode]}</div>
-      <button id="start-run-button">Start</button>
+      <button id="start-run-button">Start New Game</button>
     `;
 
     this.content.querySelectorAll<HTMLButtonElement>('.difficulty-option').forEach((button) => {
@@ -93,6 +108,13 @@ export class DifficultySelectOverlay {
         this.selectedMode = button.dataset.mode as RunMode;
         this.render();
       });
+    });
+    this.content.querySelector('#continue-run-button')?.addEventListener('click', () => {
+      if (!mostRecentSlot) {
+        return;
+      }
+      this.overlay.hidden = true;
+      loadFromSlot(mostRecentSlot);
     });
     this.content.querySelector('#start-run-button')?.addEventListener('click', () => {
       this.overlay.hidden = true;
