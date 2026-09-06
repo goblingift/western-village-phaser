@@ -2,6 +2,7 @@ import {
   BANK_INTEREST_RATE,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  GRAVEL_MAX_DISTANCE_TILES,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
@@ -34,6 +35,9 @@ export enum BuildingType {
   Bank = 'Bank',
   CactusMilker = 'CactusMilker',
   Watchtower = 'Watchtower',
+  Quarry = 'Quarry',
+  IronMine = 'IronMine',
+  Blacksmith = 'Blacksmith',
 }
 
 /**
@@ -67,7 +71,10 @@ export type ResourceKey =
   | 'wood'
   | 'potatoes'
   | 'liquor'
-  | 'agaveJuice';
+  | 'agaveJuice'
+  | 'stone'
+  | 'iron'
+  | 'tools';
 
 /**
  * Phase 32: per-unit cash value used to price the resource stock inside net
@@ -86,6 +93,12 @@ export const RESOURCE_VALUES: Record<ResourceKey, number> = {
   potatoes: 2,
   liquor: 12,
   agaveJuice: 6,
+  // Phase 50: stone/iron are cheap raw extraction (same tier as logs/potatoes);
+  // tools is the chain's tier-3 manufactured good, priced above every other
+  // sellable resource since it also doubles as a building material.
+  stone: 3,
+  iron: 6,
+  tools: 20,
 };
 
 export interface BuildingProduction {
@@ -448,7 +461,9 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Warehouse,
     label: 'Warehouse',
     cost: 150,
-    materials: { wood: 8 },
+    // Phase 50: Tools added alongside the existing Wood cost (not replacing
+    // it) - see the Blacksmith chain doc comment further down this file.
+    materials: { wood: 8, tools: 2 },
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
     category: BuildingCategory.Infrastructure,
@@ -564,7 +579,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Saloon,
     label: 'Saloon',
     cost: 200,
-    materials: { wood: 10 },
+    materials: { wood: 10, tools: 3 },
     size: { width: 2, height: 2 },
     color: 0xefebe9,
     category: BuildingCategory.Commerce,
@@ -577,7 +592,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Horsery,
     label: 'Horsery',
     cost: 220,
-    materials: { wood: 10 },
+    materials: { wood: 10, tools: 4 },
     size: { width: 2, height: 2 },
     color: 0x795548,
     category: BuildingCategory.Military,
@@ -590,7 +605,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Bank,
     label: 'Bank',
     cost: 200,
-    materials: { wood: 8 },
+    materials: { wood: 8, tools: 3 },
     size: { width: 2, height: 2 },
     color: 0x9e9e9e,
     category: BuildingCategory.Commerce,
@@ -628,7 +643,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Watchtower,
     label: 'Watchtower',
     cost: 130,
-    materials: { wood: 6 },
+    materials: { wood: 6, tools: 2 },
     size: { width: 1, height: 1 },
     color: 0x5d4037,
     category: BuildingCategory.Military,
@@ -636,6 +651,60 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     requiresWorkers: true,
     maxHp: 60,
     unlockRequirement: { dayAtLeast: 2, populationAtLeast: 10 },
+  },
+  /**
+   * Phase 50: Stone/Iron -> Blacksmith Tools Chain, the sixth production
+   * chain following the exact Forestry->WoodCutter / PotatoField->Liquor
+   * Still shape - two flat raw producers (Quarry/Iron Mine, gated to Gravel
+   * terrain via getGravelDistance in gameState.ts, the same hard-placement-
+   * gate pattern Phase 30's Well uses for water) feeding one processor
+   * (Blacksmith). Tools then close the loop as both a new sellable good
+   * (SUPERMARKET_SELL_RATES) and a new build material required by five
+   * existing Wave-2/3 buildings below (Warehouse/Bank/Saloon/Horsery/
+   * Watchtower), added alongside their existing Wood cost, not replacing it.
+   */
+  [BuildingType.Quarry]: {
+    type: BuildingType.Quarry,
+    label: 'Quarry',
+    cost: 110,
+    // Raw extraction, like Forestry/PotatoField - material-free so the chain
+    // it starts isn't itself gated on a chain that doesn't exist yet.
+    size: { width: 2, height: 2 },
+    color: 0x8a8172,
+    category: BuildingCategory.Farming,
+    upkeep: 1,
+    production: { outputs: { stone: 1.2 } },
+    maxHp: 80,
+    unlockRequirement: { populationAtLeast: 8 },
+  },
+  [BuildingType.IronMine]: {
+    type: BuildingType.IronMine,
+    label: 'Iron Mine',
+    cost: 160,
+    size: { width: 2, height: 2 },
+    color: 0x8d6e63,
+    category: BuildingCategory.Farming,
+    upkeep: 1.2,
+    // Iron is the rarer/slower half of the pair - half Quarry's stone rate.
+    production: { outputs: { iron: 0.6 } },
+    maxHp: 80,
+    unlockRequirement: { populationAtLeast: 10 },
+  },
+  [BuildingType.Blacksmith]: {
+    type: BuildingType.Blacksmith,
+    label: 'Blacksmith',
+    cost: 180,
+    // The processor of the pair, like Sewery/WoodCutter/Liquor Still -
+    // material-costed in Wood rather than the Stone/Iron it consumes as
+    // production inputs.
+    materials: { wood: 6 },
+    size: { width: 2, height: 2 },
+    color: 0x455a64,
+    category: BuildingCategory.Industry,
+    upkeep: 1.5,
+    production: { inputs: { stone: 2, iron: 1 }, outputs: { tools: 1 } },
+    maxHp: 80,
+    unlockRequirement: { populationAtLeast: 12 },
   },
 };
 
@@ -680,7 +749,7 @@ export function getWorkersRequired(type: BuildingType): number {
  * BuildingProduction because selling reads/writes the resource pool and
  * Money directly rather than following the input->output production shape.
  */
-export type SupermarketSellableKey = 'meat' | 'eggs' | 'potatoes' | 'wood' | 'clothes';
+export type SupermarketSellableKey = 'meat' | 'eggs' | 'potatoes' | 'wood' | 'clothes' | 'tools';
 
 export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: number; price: number }> = {
   meat: { amount: 2, price: 5 },
@@ -688,6 +757,12 @@ export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: nu
   potatoes: { amount: 2, price: 2 },
   wood: { amount: 2, price: 3 },
   clothes: { amount: 2, price: 15 },
+  // Phase 50: Tools is the chain's tier-3 manufactured good and also a build
+  // material (see BUILDING_DEFINITIONS' Phase 50 doc comment) - priced above
+  // every other sellable, widening SupermarketSellableKey rather than
+  // hardcoding a second table, per the "widen the union, don't hardcode"
+  // approach Phase 26 established for this exact table.
+  tools: { amount: 2, price: 20 },
 };
 
 /**
@@ -872,6 +947,9 @@ export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   potatoes: 'Potatoes',
   liquor: 'Liquor',
   agaveJuice: 'Agave Juice',
+  stone: 'Stone',
+  iron: 'Iron',
+  tools: 'Tools',
 };
 
 /** Exported (Phase 37): also used to format a building's `materials` cost for tooltips/the building bar. */
@@ -910,6 +988,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Well) {
     parts.push(`Must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water; output falls off with distance`);
+  }
+  if (definition.type === BuildingType.Quarry || definition.type === BuildingType.IronMine) {
+    parts.push(`Must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`);
   }
   if (definition.animal) {
     const { animalLabel, costPerAnimal, maxAnimals, outputPerAnimal } = definition.animal;

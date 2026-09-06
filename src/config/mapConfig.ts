@@ -216,9 +216,51 @@ export function isBuildableTerrain(tileX: number, tileY: number): boolean {
 }
 
 /**
+ * Phase 50: generalized out of the original water-only `distanceToNearestWater`
+ * so the Quarry/Iron Mine's "must be on or near Gravel" gate (same shape as
+ * Phase 30's Well/water gate, just a different TileType and a distance-0
+ * ring that can actually match - a building can legally sit ON Gravel,
+ * unlike on Water) doesn't duplicate the ring-search logic. Chebyshev
+ * distance in tiles from a footprint to the nearest tile of `tileType`,
+ * searched outward only as far as maxDistance, returning null when none is
+ * in range. Ring 0 is the footprint itself (harmless for water - a
+ * buildable footprint can never contain a water tile - but load-bearing for
+ * Gravel).
+ */
+export function distanceToNearestTileType(
+  tileType: TileType,
+  tileX: number,
+  tileY: number,
+  width: number,
+  height: number,
+  maxDistance: number,
+): number | null {
+  for (let distance = 0; distance <= maxDistance; distance++) {
+    for (let y = tileY - distance; y < tileY + height + distance; y++) {
+      for (let x = tileX - distance; x < tileX + width + distance; x++) {
+        const insideX = x >= tileX - distance + 1 && x < tileX + width + distance - 1;
+        const insideY = y >= tileY - distance + 1 && y < tileY + height + distance - 1;
+        // Only the newly-added ring is examined each pass; inner rings were
+        // already covered by a previous (smaller) distance.
+        if (insideX && insideY) {
+          continue;
+        }
+        if (getTileTypeAt(x, y) === tileType) {
+          return distance;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Chebyshev distance in tiles from a footprint to the nearest water tile,
  * searched outward only as far as maxDistance (Wells are the sole caller and
  * only care about a 3-tile band), returning null when none is in range.
+ * Thin wrapper over distanceToNearestTileType, starting its search at
+ * distance 1 exactly like before - a buildable footprint can never contain a
+ * water tile, so checking ring 0 for Water would be dead work every call.
  */
 export function distanceToNearestWater(
   tileX: number,
@@ -232,8 +274,6 @@ export function distanceToNearestWater(
       for (let x = tileX - distance; x < tileX + width + distance; x++) {
         const insideX = x >= tileX - distance + 1 && x < tileX + width + distance - 1;
         const insideY = y >= tileY - distance + 1 && y < tileY + height + distance - 1;
-        // Only the newly-added ring is examined each pass; inner rings were
-        // already covered by a previous (smaller) distance.
         if (insideX && insideY) {
           continue;
         }

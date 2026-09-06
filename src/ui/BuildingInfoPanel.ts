@@ -17,6 +17,7 @@ import {
   BANK_TRANSACTION_AMOUNT,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  GRAVEL_MAX_DISTANCE_TILES,
   HOUSE_TIER_HYSTERESIS_TICKS,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
@@ -29,6 +30,7 @@ import {
   buyAnimal,
   demolishBuilding,
   depositToBank,
+  getGravelDistance,
   getHarvestCenterTile,
   getLaborShortfall,
   getMoney,
@@ -159,6 +161,23 @@ export class BuildingInfoPanel {
           : `Water ${wellDistance} tile${wellDistance === 1 ? '' : 's'} away`
         : null;
 
+    // Phase 50: Quarry/Iron Mine are hard-gated on Gravel at placement time
+    // (getGravelDistance/getPlacementRejection in gameState.ts), so this is
+    // purely informational - always "in range" for an already-placed one -
+    // but it mirrors the Well's distance readout for the same terrain-gated
+    // building family.
+    const isGravelGated = this.selected.type === BuildingType.Quarry || this.selected.type === BuildingType.IronMine;
+    const gravelDistance = isGravelGated
+      ? getGravelDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const gravelText = isGravelGated
+      ? gravelDistance === null
+        ? `No Gravel within ${GRAVEL_MAX_DISTANCE_TILES} tiles`
+        : gravelDistance === 0
+          ? 'Built on Gravel'
+          : `Gravel ${gravelDistance} tile${gravelDistance === 1 ? '' : 's'} away`
+      : null;
+
     // Phase 46: House tier/needs/population/tax block. Houses have no
     // `production`/`animal`/`harvest` config, so none of the lines above
     // apply to them - this is the entirety of a House's panel content besides
@@ -177,6 +196,7 @@ export class BuildingInfoPanel {
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}
+      ${gravelText ? `<div>${gravelText}</div>` : ''}
       ${houseTierText ? `<div>${houseTierText}</div>` : ''}
       ${houseNeedsText ? `<div>${houseNeedsText}</div>` : ''}
       ${houseProgressText ? `<div>${houseProgressText}</div>` : ''}

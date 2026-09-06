@@ -209,3 +209,13 @@ export const MAX_NOTIFICATION_LOG_ENTRIES = 50;
  * building happened to drain the pool a moment earlier.
  */
 export const HOUSE_TIER_HYSTERESIS_TICKS = 5;
+
+/**
+ * Phase 50: Stone/Iron -> Blacksmith Tools Chain. Quarry and Iron Mine both
+ * need to sit on or near Gravel, mirroring WELL_MAX_WATER_DISTANCE_TILES's
+ * hard placement gate exactly (same distanceToNearestTileType search in
+ * mapConfig.ts, just a different TileType) - but unlike a Well's yield, their
+ * output doesn't fall off with distance, so there's no WELL_OUTPUT_BY_DISTANCE
+ * equivalent here.
+ */
+export const GRAVEL_MAX_DISTANCE_TILES = 2;

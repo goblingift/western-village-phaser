@@ -13,6 +13,7 @@ import {
   DIFFICULTY_SETTINGS,
   ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
+  GRAVEL_MAX_DISTANCE_TILES,
   HOUSE_TIER_HYSTERESIS_TICKS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -48,7 +49,7 @@ import {
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
-import { distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
+import { TileType, distanceToNearestTileType, distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
 import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import {
   countVegetationInRadius,
@@ -75,6 +76,9 @@ export interface Resources {
   potatoes: number;
   liquor: number;
   agaveJuice: number;
+  stone: number;
+  iron: number;
+  tools: number;
 }
 
 /**
@@ -160,6 +164,9 @@ function emptyResources(): Resources {
     potatoes: 0,
     liquor: 0,
     agaveJuice: 0,
+    stone: 0,
+    iron: 0,
+    tools: 0,
   };
 }
 
@@ -555,6 +562,18 @@ function wellOutputMultiplier(building: PlacedBuilding): number {
 }
 
 /**
+ * Phase 50: Quarry/Iron Mine need Gravel underfoot or nearby, the same
+ * hard-placement-gate shape as getWellWaterDistance above, just against
+ * TileType.Gravel via the now-generalized distanceToNearestTileType. Unlike
+ * a Well, output doesn't scale with this distance - it's a pass/fail gate
+ * only, so there is no equivalent of wellOutputMultiplier here.
+ */
+export function getGravelDistance(tileX: number, tileY: number, type: BuildingType): number | null {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  return distanceToNearestTileType(TileType.Gravel, tileX, tileY, width, height, GRAVEL_MAX_DISTANCE_TILES);
+}
+
+/**
  * Phase 30: the single source of truth for "why can't I put this here",
  * returning a player-facing reason string (or null when placement is legal).
  * canPlaceBuilding is now a thin boolean wrapper over it so the preview
@@ -579,6 +598,12 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
   }
   if (type === BuildingType.Well && getWellWaterDistance(tileX, tileY, type) === null) {
     return `Well must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water`;
+  }
+  if (
+    (type === BuildingType.Quarry || type === BuildingType.IronMine) &&
+    getGravelDistance(tileX, tileY, type) === null
+  ) {
+    return `${BUILDING_DEFINITIONS[type].label} must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`;
   }
   if (money < BUILDING_DEFINITIONS[type].cost) {
     return `Not enough money ($${BUILDING_DEFINITIONS[type].cost})`;

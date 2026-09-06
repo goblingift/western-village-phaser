@@ -747,6 +747,84 @@ const WATCHTOWER_SPRITE: PixelSprite = {
   ],
 };
 
+const QUARRY_SPRITE: PixelSprite = {
+  // No building walls, like Forestry/Well - an open rock-face pit rather
+  // than a facade. Jagged grey rock outcrops (G light face, D dark shadow/
+  // cracks) form the pit's back wall over an open dig floor, and a pile of
+  // broken stone (P chunks) with a leaning pickaxe (K handle, A steel head)
+  // sits in the yard where Forestry has its log pile.
+  palette: { G: 0x9e9e9e, D: 0x616161, S: 0x8a8172, P: 0xbdbdbd, K: 0x6d4c41, A: 0xcfd8dc },
+  pattern: [
+    '..G.....G....G..',
+    '..G.....G....G..',
+    '.GGG...GGG..GGG.',
+    '.DDD...DDD..DDD.',
+    '.GGG...GGG..GGG.',
+    'GGGGG.GGGGGGGGGG',
+    'DDDDD.DDDDDDDDDD',
+    'GGGGG.GGGGGGGGGG',
+    '................',
+    '................',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSPPPPKAPPPPPPSS',
+    'SPPPPPPPPPPPPPPS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const IRON_MINE_SPRITE: PixelSprite = {
+  // Dark mine-shaft entrance (D) with visible ore chunks (O) set in the wall
+  // in place of Butcher's cleaver/WoodCutter's saw blade; the yard swaps the
+  // fence/log line for an ore-cart rail (K ties, O spilled ore between them).
+  palette: { S: 0x3e2723, R: 0x8d6e63, B: 0xa1887f, P: 0x8a7266, D: 0x212121, O: 0xbf360c, K: 0x5d4037 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPDODDBPBPBPS',
+    'SBPBPDDODBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+    'KK..KK..KK..KK..',
+    '..OO........OO..',
+    '................',
+    'KK..KK..KK..KK..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
+const BLACKSMITH_SPRITE: PixelSprite = {
+  // Butcher-shaped (same wall/roof skeleton): a slate-grey roof instead of
+  // Butcher's red one, an anvil (A/N) in place of the cleaver, and a glowing
+  // forge (F embers, G bright core) in place of the white counter - a
+  // "makes tools from ore" read rather than "sells meat".
+  palette: { S: 0x3e2723, R: 0x757575, B: 0xa1887f, P: 0x8a7266, A: 0x212121, N: 0x616161, F: 0xff7043, G: 0xffd54f, D: 0x2b1d12 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBAABPBPBPBS',
+    'SBPBPAAAABPBPBPS',
+    'SBPBPBNNBPBPBPBS',
+    'SBPBPBNNBPBPBPBS',
+    'SBPBPFFFFBPBPBPS',
+    'SBPBPGGGGBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SBPBPDDDDBPBPBPS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -770,6 +848,9 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Bank]: BANK_SPRITE,
   [BuildingType.CactusMilker]: CACTUS_MILKER_SPRITE,
   [BuildingType.Watchtower]: WATCHTOWER_SPRITE,
+  [BuildingType.Quarry]: QUARRY_SPRITE,
+  [BuildingType.IronMine]: IRON_MINE_SPRITE,
+  [BuildingType.Blacksmith]: BLACKSMITH_SPRITE,
 };
 
 /**
@@ -822,6 +903,20 @@ const RESOURCE_ICON_SPRITES: Record<ResourceKey, PixelSprite> = {
   agaveJuice: {
     palette: { G: 0x7cb342, J: 0xaed581, C: 0xd7ccc8 },
     pattern: ['..CC..', '..GG..', '.GJJG.', 'GJJJJG', 'GJJJJG', 'GGGGGG'],
+  },
+  // Phase 50: Stone/Iron -> Blacksmith Tools Chain icons.
+  stone: {
+    palette: { R: 0x9e9e9e, D: 0x616161 },
+    pattern: ['.RRRR.', 'RRDRRR', 'RRRRDR', 'RDRRRR', 'RRRDRR', '.RRRR.'],
+  },
+  iron: {
+    palette: { O: 0xbf360c, D: 0x3e2723 },
+    pattern: ['.OOOO.', 'ODOOOO', 'OOOODO', 'ODOOOO', 'OOOODO', '.OOOO.'],
+  },
+  tools: {
+    // A small hammer silhouette: grey head (H) over a brown handle (W).
+    palette: { H: 0x616161, W: 0x8d6e4a },
+    pattern: ['..HH..', '..HH..', '.HHHH.', '..WW..', '..WW..', '..WW..'],
   },
 };
 
