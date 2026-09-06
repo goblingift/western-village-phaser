@@ -70,12 +70,15 @@ import {
   RAIDER_DEFINITIONS,
   RaiderDefinition,
   RaiderFaction,
+  ResourceKey,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
+  formatResourceMap,
   getWorkersRequired,
+  isLinePlacementBuilding,
   raiderTextureKey,
 } from '../config/buildingConfig';
 import {
@@ -436,6 +439,14 @@ export class MainScene extends Phaser.Scene {
   private pointerDownY = 0;
   private selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
+  /** Phase 43: pooled preview tiles for a drag-to-place line (Road/Fence), indexed by position along the line; grown on demand, never shrunk (extras past the current line length are just hidden). */
+  private linePreviewImages: Phaser.GameObjects.Image[] = [];
+  /** Phase 43: running cost tag ("6/8 Road - $60") shown near the drag's end tile while a line preview is active. */
+  private lineCostText!: Phaser.GameObjects.Text;
+  /** Phase 43: held to keep the placement tool active after a placement (single click or line) instead of exiting - see applyShiftRepeatPolicy. */
+  private shiftKey: Phaser.Input.Keyboard.Key | null = null;
+  /** Phase 43: previous pointermove's line-drag state, so hideLinePreview only runs on the drag-ended transition rather than every idle mousemove. */
+  private lineDragWasActive = false;
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
   private raiders: Raider[] = [];
@@ -686,19 +697,46 @@ export class MainScene extends Phaser.Scene {
       // doc ("is _any_ button... considered as being down"), so panning now
       // needs the same explicit rightButtonDown()/leftButtonDown() checks the
       // rest of this file already uses elsewhere (e.g. setupBuildingPlacement).
+      //
+      // Phase 43: left-drag is the SAME gesture Phase 25 uses for the unit
+      // box-select, branched here on placement-mode state so the two never
+      // fire together - box-select's own branch below already requires
+      // `this.selectedType === null`, so a line-friendly building being
+      // selected (Road/Fence) automatically routes left-drag into the line
+      // preview instead, with no separate mode flag needed on the box-select
+      // side.
+      const dxFromDown = pointer.x - this.pointerDownX;
+      const dyFromDown = pointer.y - this.pointerDownY;
+      const dragDistance = Math.sqrt(dxFromDown * dxFromDown + dyFromDown * dyFromDown);
+      const isLineDragging =
+        this.selectedType !== null &&
+        isLinePlacementBuilding(this.selectedType) &&
+        pointer.leftButtonDown() &&
+        dragDistance > CLICK_MOVE_THRESHOLD;
+
       if (pointer.rightButtonDown() && this.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
         const dy = pointer.y - this.lastPointerY;
         this.cameras.main.scrollX -= dx;
         this.cameras.main.scrollY -= dy;
         this.redrawMinimapViewportThrottled();
+      } else if (isLineDragging) {
+        this.updateLinePreview(pointer);
       } else if (pointer.leftButtonDown() && this.selectedType === null) {
         this.updateSelectionRectangle(pointer);
       }
+
+      if (!isLineDragging && this.lineDragWasActive) {
+        this.hideLinePreview();
+      }
+      this.lineDragWasActive = isLineDragging;
+
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
       this.updateInfoText(pointer);
-      this.updatePreview(pointer);
+      if (!isLineDragging) {
+        this.updatePreview(pointer);
+      }
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
@@ -820,6 +858,18 @@ export class MainScene extends Phaser.Scene {
         fontSize: '12px',
         color: '#ffffff',
         backgroundColor: '#c62828dd',
+        padding: { x: 4, y: 2 },
+      })
+      .setDepth(PLACEMENT_HINT_DEPTH)
+      .setVisible(false);
+
+    // Phase 43: world-space like placementHintText, above it while a line
+    // drag is active (the two are never shown at once - see updateLinePreview).
+    this.lineCostText = this.add
+      .text(0, 0, '', {
+        fontSize: '12px',
+        color: '#ffffff',
+        backgroundColor: '#2e7d32dd',
         padding: { x: 4, y: 2 },
       })
       .setDepth(PLACEMENT_HINT_DEPTH)
@@ -1071,6 +1121,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupBuildingPlacement(): void {
     this.input.mouse?.disableContextMenu();
+    this.shiftKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT) ?? null;
 
     gameEvents.on('select-building', (type: BuildingType) => {
       this.selectedType = type;
@@ -1093,9 +1144,30 @@ export class MainScene extends Phaser.Scene {
         gameEvents.emit('cancel-placement');
         return;
       }
-      if (this.selectedType !== null && pointer.leftButtonDown()) {
+      // Phase 43: line-friendly types (Road/Fence) place on pointerup instead
+      // (see commitLinePlacement below) so a plain click and a drag-to-line
+      // can share one code path - committing immediately here would place a
+      // building before we even know whether this click is about to become a
+      // drag.
+      if (
+        this.selectedType !== null &&
+        pointer.leftButtonDown() &&
+        !isLinePlacementBuilding(this.selectedType)
+      ) {
         this.tryPlaceAt(pointer);
       }
+    });
+
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (
+        this.selectedType === null ||
+        !isLinePlacementBuilding(this.selectedType) ||
+        !pointer.leftButtonReleased() ||
+        this.isPointerInMinimap(pointer)
+      ) {
+        return;
+      }
+      this.commitLinePlacement(pointer);
     });
   }
 
@@ -1149,6 +1221,206 @@ export class MainScene extends Phaser.Scene {
     this.previewImage?.destroy();
     this.previewImage = null;
     this.placementHintText?.setVisible(false);
+    this.hideLinePreview();
+    this.lineDragWasActive = false;
+  }
+
+  /** Phase 43: hides every pooled line-preview tile plus the running cost tag; the pooled Images themselves are never destroyed, just reused next drag. */
+  private hideLinePreview(): void {
+    for (const image of this.linePreviewImages) {
+      image.setVisible(false);
+    }
+    this.lineCostText?.setVisible(false);
+  }
+
+  private isShiftHeld(): boolean {
+    return this.shiftKey?.isDown ?? false;
+  }
+
+  /**
+   * Phase 43: placement previously always stayed active until an explicit
+   * Escape/right-click cancel (see cancelPlacement's call sites), so a single
+   * House click already behaved like "repeat placement" with no way to place
+   * just one without a manual cancel afterwards. This flips the default to
+   * match the literal ask ("shift-click keeps the tool active for repeat
+   * placement"): a plain placement now exits placement mode immediately,
+   * and holding Shift is what keeps it selected for the next tile/line.
+   *
+   * Emits 'cancel-placement' rather than calling this.cancelPlacement()
+   * directly - BuildingBar's active-button highlight is driven purely by
+   * that event (see its 'select-building'/'cancel-placement' listeners), so
+   * calling the local cleanup straight would silently desync the bar from
+   * the scene's actual placement state.
+   */
+  private applyShiftRepeatPolicy(): void {
+    if (!this.isShiftHeld()) {
+      gameEvents.emit('cancel-placement');
+    }
+  }
+
+  /**
+   * Phase 43: dominant-axis-first straight line from start to end, bending
+   * once into an L rather than a staircase - the common RTS wall-drag
+   * convention. rangeInclusive collapses to a single value when start===end
+   * on that axis, and slice(1) on the second leg drops its first tile (the
+   * corner), which the first leg already added - this also means a
+   * zero-length drag (start === end on both axes) degrades to exactly one
+   * tile, so a plain click without any drag still places a single building.
+   */
+  private computeLineTiles(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+  ): { tileX: number; tileY: number }[] {
+    const rangeInclusive = (from: number, to: number): number[] => {
+      const step = from <= to ? 1 : -1;
+      const values: number[] = [];
+      for (let value = from; step > 0 ? value <= to : value >= to; value += step) {
+        values.push(value);
+      }
+      return values;
+    };
+
+    const tiles: { tileX: number; tileY: number }[] = [];
+    if (Math.abs(endX - startX) >= Math.abs(endY - startY)) {
+      for (const x of rangeInclusive(startX, endX)) {
+        tiles.push({ tileX: x, tileY: startY });
+      }
+      for (const y of rangeInclusive(startY, endY).slice(1)) {
+        tiles.push({ tileX: endX, tileY: y });
+      }
+    } else {
+      for (const y of rangeInclusive(startY, endY)) {
+        tiles.push({ tileX: startX, tileY: y });
+      }
+      for (const x of rangeInclusive(startX, endX).slice(1)) {
+        tiles.push({ tileX: x, tileY: endY });
+      }
+    }
+    return tiles;
+  }
+
+  private worldToTile(worldX: number, worldY: number): { tileX: number; tileY: number } {
+    return {
+      tileX: Math.floor(worldX / TILE_SIZE),
+      tileY: Math.floor(worldY / TILE_SIZE),
+    };
+  }
+
+  private getOrCreateLinePreviewImage(index: number, type: BuildingType): Phaser.GameObjects.Image {
+    const existing = this.linePreviewImages[index];
+    if (existing) {
+      existing.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(type));
+      return existing;
+    }
+    const image = this.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(type));
+    image.setOrigin(0, 0);
+    image.setAlpha(0.6);
+    image.setDepth(500);
+    this.linePreviewImages[index] = image;
+    return image;
+  }
+
+  /**
+   * Phase 43: renders every tile of the in-progress line simultaneously
+   * (green/red per tile via getPlacementRejection, same rule placeBuilding
+   * itself gates on) plus a running "N/total Label - cost" tag near the
+   * drag's current end. The single-tile hover preview (previewImage) is
+   * hidden for the duration - see the pointermove branch in setupCameraDrag.
+   */
+  private updateLinePreview(pointer: Phaser.Input.Pointer): void {
+    const type = this.selectedType;
+    if (type === null) {
+      return;
+    }
+
+    this.previewImage?.setVisible(false);
+
+    const startTile = this.worldToTile(this.dragStartWorldX, this.dragStartWorldY);
+    const endTile = this.pointerToTile(pointer);
+    const tiles = this.computeLineTiles(startTile.tileX, startTile.tileY, endTile.tileX, endTile.tileY);
+    const definition = BUILDING_DEFINITIONS[type];
+
+    let validCount = 0;
+    let totalMoney = 0;
+    const totalMaterials: Partial<Record<ResourceKey, number>> = {};
+
+    tiles.forEach((tile, index) => {
+      const rejection = getPlacementRejection(tile.tileX, tile.tileY, type);
+      const image = this.getOrCreateLinePreviewImage(index, type);
+      image.setPosition(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE);
+      image.setVisible(true);
+      image.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
+
+      if (rejection === null) {
+        validCount++;
+        totalMoney += definition.cost;
+        if (definition.materials) {
+          for (const [key, amount] of Object.entries(definition.materials) as [ResourceKey, number][]) {
+            totalMaterials[key] = (totalMaterials[key] ?? 0) + amount;
+          }
+        }
+      }
+    });
+
+    for (let index = tiles.length; index < this.linePreviewImages.length; index++) {
+      this.linePreviewImages[index].setVisible(false);
+    }
+
+    const costLabel =
+      Object.keys(totalMaterials).length > 0
+        ? `$${totalMoney} + ${formatResourceMap(totalMaterials)}`
+        : `$${totalMoney}`;
+    const lastTile = tiles[tiles.length - 1];
+    this.lineCostText.setText(`${validCount}/${tiles.length} ${definition.label} - ${costLabel}`);
+    this.lineCostText.setPosition(
+      lastTile.tileX * TILE_SIZE,
+      (lastTile.tileY + definition.size.height) * TILE_SIZE + 4,
+    );
+    this.lineCostText.setVisible(true);
+    this.placementHintText.setVisible(false);
+    this.harvestRingGraphics.clear();
+  }
+
+  /**
+   * Phase 43: places on every tile of the line that passes
+   * getPlacementRejection AT THE TIME IT IS REACHED (not the preview's
+   * earlier snapshot) - placeBuildingAt re-checks via placeBuilding/
+   * canPlaceBuilding per tile, so money/materials spent on tile N are
+   * already gone by the time tile N+1 is attempted. A drag that outruns the
+   * player's money therefore just stops placing partway through rather than
+   * aborting the whole line or overspending.
+   */
+  private commitLinePlacement(pointer: Phaser.Input.Pointer): void {
+    const type = this.selectedType;
+    if (type === null) {
+      return;
+    }
+
+    const startTile = this.worldToTile(this.dragStartWorldX, this.dragStartWorldY);
+    const endTile = this.pointerToTile(pointer);
+    const tiles = this.computeLineTiles(startTile.tileX, startTile.tileY, endTile.tileX, endTile.tileY);
+
+    let placedCount = 0;
+    for (const tile of tiles) {
+      if (this.placeBuildingAt(tile.tileX, tile.tileY)) {
+        placedCount++;
+      }
+    }
+
+    this.hideLinePreview();
+    this.lineDragWasActive = false;
+
+    if (placedCount > 0) {
+      playPlacementSound();
+    }
+
+    this.applyShiftRepeatPolicy();
+    if (this.selectedType !== null) {
+      this.previewImage?.setVisible(true);
+      this.updatePreview(pointer);
+    }
   }
 
   /**
@@ -1399,15 +1671,23 @@ export class MainScene extends Phaser.Scene {
     this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
   }
 
-  private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
+  /**
+   * Phase 43: extracted from tryPlaceAt so commitLinePlacement can call it
+   * once per tile of a drag-line - returns whether a building was actually
+   * placed (a tile failing getPlacementRejection just returns false, letting
+   * the line skip it silently) rather than void, and deliberately does NOT
+   * play the placement sound itself, since a multi-tile line plays it once
+   * for the whole line instead of once per tile (see tryPlaceAt/
+   * commitLinePlacement, the two callers).
+   */
+  private placeBuildingAt(tileX: number, tileY: number): boolean {
     if (this.selectedType === null) {
-      return;
+      return false;
     }
 
-    const { tileX, tileY } = this.pointerToTile(pointer);
     const building = placeBuilding(tileX, tileY, this.selectedType);
     if (!building) {
-      return;
+      return false;
     }
 
     const image = this.add
@@ -1439,7 +1719,21 @@ export class MainScene extends Phaser.Scene {
     if (building.type === BuildingType.House) {
       this.spawnVillagersForHouse(building);
     }
+    return true;
+  }
+
+  private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
+    if (this.selectedType === null) {
+      return;
+    }
+
+    const { tileX, tileY } = this.pointerToTile(pointer);
+    if (!this.placeBuildingAt(tileX, tileY)) {
+      return;
+    }
+
     playPlacementSound();
+    this.applyShiftRepeatPolicy();
   }
 
   /** Building-type-gated idle-animation accents (Phase 19); only these 5 types get one, everything else gets nothing. */

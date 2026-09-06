@@ -532,6 +532,23 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
 };
 
 /**
+ * Phase 43: 1x1 buildings that make sense to drag out as a line rather than
+ * placed one tile at a time. Deliberately NOT every 1x1 building - House,
+ * Well and Watchtower are each a meaningfully singular placement (one Well
+ * per water source, one Watchtower covering a chokepoint), so a line-drag of
+ * ten of them would almost never be what the player wants. Road and Fence
+ * are the two that are actually laid out as runs in practice.
+ */
+export const LINE_PLACEMENT_BUILDING_TYPES: ReadonlySet<BuildingType> = new Set([
+  BuildingType.Road,
+  BuildingType.Fence,
+]);
+
+export function isLinePlacementBuilding(type: BuildingType): boolean {
+  return LINE_PLACEMENT_BUILDING_TYPES.has(type);
+}
+
+/**
  * Buildings with a production chain, or explicitly flagged via
  * `requiresWorkers` (e.g. Warehouse, which has no production of its own but
  * still needs staff to operate), need workers. Demand scales with footprint
