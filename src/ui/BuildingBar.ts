@@ -9,7 +9,14 @@ import {
 import { GAME_SPEEDS } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
 import { canAfford, describeUnlockRequirement, getMoney, isBuildingUnlocked } from '../state/gameState';
-import { getAudioVolume, isAudioMuted, setAudioMuted, setAudioVolume } from '../audio/sound';
+import {
+  getAudioVolume,
+  getMusicVolume,
+  isAudioMuted,
+  setAudioMuted,
+  setAudioVolume,
+  setMusicVolume,
+} from '../audio/sound';
 import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
 import { MANUAL_SAVE_SLOT, hasSaveSlot, loadFromSlot, saveToSlot } from '../state/persistence';
 
@@ -37,6 +44,7 @@ export class BuildingBar {
   private demolishButton: HTMLButtonElement;
   private muteButton!: HTMLButtonElement;
   private volumeSlider!: HTMLInputElement;
+  private musicVolumeSlider!: HTMLInputElement;
   private loadButton!: HTMLButtonElement;
   private activeCategory: BuildingCategory = BuildingCategory.Infrastructure;
   private demolishMode = false;
@@ -182,6 +190,13 @@ export class BuildingBar {
    * right now") and share the top row's chrome. The audio engine owns the
    * actual state; this is a view over it, which is why the initial values are
    * read back from the engine rather than duplicated here.
+   *
+   * Phase 59: a second slider drives the independent music-bus volume
+   * (ambient loop + wind/cricket soundscape) added in audio/sound.ts. It
+   * shares the single mute button/state with SFX rather than getting its own
+   * mute - "Mute / unmute all sound" already answers "is anything playing at
+   * all", and a second mute toggle for one of two buses would just be a
+   * second way to ask the same question.
    */
   private createAudioControls(): HTMLDivElement {
     const group = document.createElement('div');
@@ -202,7 +217,7 @@ export class BuildingBar {
     this.volumeSlider.max = '100';
     this.volumeSlider.value = `${Math.round(getAudioVolume() * 100)}`;
     this.volumeSlider.className = 'volume';
-    this.volumeSlider.title = 'Volume';
+    this.volumeSlider.title = 'Sound effects volume';
     this.volumeSlider.addEventListener('input', () => {
       setAudioVolume(Number(this.volumeSlider.value) / 100);
       // Dragging the slider off 0 is an unambiguous "I want sound".
@@ -212,6 +227,22 @@ export class BuildingBar {
       this.refreshAudioControls();
     });
     group.appendChild(this.volumeSlider);
+
+    this.musicVolumeSlider = document.createElement('input');
+    this.musicVolumeSlider.type = 'range';
+    this.musicVolumeSlider.min = '0';
+    this.musicVolumeSlider.max = '100';
+    this.musicVolumeSlider.value = `${Math.round(getMusicVolume() * 100)}`;
+    this.musicVolumeSlider.className = 'volume music-volume';
+    this.musicVolumeSlider.title = 'Music & ambience volume';
+    this.musicVolumeSlider.addEventListener('input', () => {
+      setMusicVolume(Number(this.musicVolumeSlider.value) / 100);
+      if (isAudioMuted() && Number(this.musicVolumeSlider.value) > 0) {
+        setAudioMuted(false);
+      }
+      this.refreshAudioControls();
+    });
+    group.appendChild(this.musicVolumeSlider);
 
     this.refreshAudioControls();
     return group;

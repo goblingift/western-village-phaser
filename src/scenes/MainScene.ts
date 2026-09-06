@@ -133,6 +133,7 @@ import {
 import {
   installAudioUnlock,
   playPlacementSound,
+  playRaidStinger,
   playUiSound,
   playWorldSound,
   setAudioGameSpeed,
@@ -4367,6 +4368,9 @@ export class MainScene extends Phaser.Scene {
     this.raidWarningTimer?.remove();
     this.raidWarningTimer = null;
     this.showRaidNotice(faction, count, threat, sourceCamp !== null);
+    // Phase 59: one tension stinger per wave, ducking the ambient music bus
+    // briefly so it reads clearly - see audio/sound.ts's playRaidStinger.
+    playRaidStinger();
     const origin = sourceCamp ? { x: sourceCamp.x, y: sourceCamp.y } : undefined;
     for (let i = 0; i < count; i++) {
       this.spawnRaider(faction, hpMultiplier, origin);

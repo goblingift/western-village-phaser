@@ -1,3 +1,5 @@
+import { DAY_NIGHT_TRANSITION_MS } from '../config/constants';
+import { DayPhase, DayPhaseChange, getDayPhase } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
 
 /**
@@ -31,10 +33,36 @@ import { gameEvents } from '../state/gameEvents';
  *    engine deliberately does NOT scale trigger rates - the callers are
  *    already firing more often because the timers they hang off are running
  *    faster, and multiplying that again is what makes fast-forward unbearable.
+ *
+ * Phase 59: ambient soundtrack & soundscape.
+ *
+ * Everything above is a *transient* voice: one-shot, budget-limited, and
+ * triggered by a discrete event (a click, a shot, a footstep). Music and
+ * ambience are the opposite - always-on, self-scheduling background layers -
+ * so they get their own bus (`musicGain`, a second GainNode feeding
+ * `ctx.destination` alongside `masterGain`, mixed at a lower default volume
+ * than SFX) and deliberately bypass `play()`/`MAX_CONCURRENT_VOICES`/
+ * `activeVoices` entirely: that budget exists so a raid volley can't clip
+ * into mush, not to throttle a background loop that should never be dropped
+ * just because a firefight is using up SFX voice slots. Under `musicGain` sit
+ * four crossfade sub-buses (`musicMelodyBus`/`musicAmbientBus`, each with a
+ * `day`/`night` GainNode) - both variants of the melody and both variants of
+ * the wind/cricket texture are always scheduling notes, just silent at
+ * gain 0, so a day/night boundary is a gain ramp on already-running loops
+ * (mirroring `NightOverlay.ts`'s alpha-tween crossfade, over the same
+ * `DAY_NIGHT_TRANSITION_MS`) rather than a stop/restart that could glitch.
+ * Music only starts once `installAudioUnlock`'s first resume() actually
+ * succeeds - same gate as SFX, so there is no attempted autoplay before a
+ * user gesture. A raid's opening stinger reuses the ordinary SFX voice path
+ * (it IS a discrete one-shot) but additionally ducks `musicGain` for its
+ * duration via `duckMusicForStinger`, then restores it, so the sting reads
+ * clearly over the ambient loop instead of fighting it.
  */
 
 const MASTER_VOLUME_DEFAULT = 0.6;
-/** Hard ceiling on simultaneously-playing voices; new requests past it are dropped, not queued. */
+/** Music/ambience sit under SFX in the mix - a loop should never compete with a gunshot for attention. */
+const MUSIC_VOLUME_DEFAULT = 0.32;
+/** Hard ceiling on simultaneously-playing SFX voices; new requests past it are dropped, not queued. Music/ambience notes never touch this counter - see the Phase 59 doc comment above. */
 const MAX_CONCURRENT_VOICES = 12;
 /** Beyond this many pixels left/right of the viewport centre, a sound is panned fully to that side. */
 const PAN_FULL_AT_PX = 480;
@@ -51,7 +79,8 @@ export type SoundName =
   | 'footstep'
   | 'animalChicken'
   | 'animalPig'
-  | 'animalCow';
+  | 'animalCow'
+  | 'raidStinger';
 
 interface SoundDefinition {
   /** Base gain before master volume; kept per-sound so a gunshot doesn't drown a footstep. */
@@ -65,6 +94,7 @@ let audioContext: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 let muted = false;
 let volume = MASTER_VOLUME_DEFAULT;
+let musicVolume = MUSIC_VOLUME_DEFAULT;
 let gameSpeed = 1;
 let activeVoices = 0;
 let unlockInstalled = false;
@@ -72,6 +102,20 @@ const lastPlayedAt = new Map<SoundName, number>();
 
 /** Camera worldView, pushed in by MainScene each frame; null until the scene runs. */
 let listenerRect: { x: number; y: number; width: number; height: number } | null = null;
+
+/** Phase 59: one GainNode per crossfaded pair, e.g. the day melody loop and the night melody loop sharing one bus. */
+interface CrossfadeBus {
+  day: GainNode;
+  night: GainNode;
+}
+
+/** Phase 59: music/ambience state. All null until the graph is lazily built in ensureMusicGraph. */
+let musicGain: GainNode | null = null;
+let musicMelodyBus: CrossfadeBus | null = null;
+let musicAmbientBus: CrossfadeBus | null = null;
+let musicStarted = false;
+const melodyTimers: Record<DayPhase, ReturnType<typeof setTimeout> | null> = { day: null, night: null };
+const ambientTimers: Record<DayPhase, ReturnType<typeof setTimeout> | null> = { day: null, night: null };
 
 function getAudioContext(): AudioContext | null {
   if (audioContext) {
@@ -87,11 +131,16 @@ function getAudioContext(): AudioContext | null {
   masterGain = audioContext.createGain();
   masterGain.gain.value = effectiveMasterGain();
   masterGain.connect(audioContext.destination);
+  ensureMusicGraph(audioContext);
   return audioContext;
 }
 
 function effectiveMasterGain(): number {
   return muted || gameSpeed === 0 ? 0 : volume;
+}
+
+function effectiveMusicGain(): number {
+  return muted || gameSpeed === 0 ? 0 : musicVolume;
 }
 
 function applyMasterGain(): void {
@@ -101,6 +150,80 @@ function applyMasterGain(): void {
   // Short ramp instead of a step so muting mid-voice doesn't click.
   masterGain.gain.setTargetAtTime(effectiveMasterGain(), audioContext.currentTime, 0.02);
 }
+
+function applyMusicGain(): void {
+  if (!musicGain || !audioContext) {
+    return;
+  }
+  musicGain.gain.setTargetAtTime(effectiveMusicGain(), audioContext.currentTime, 0.02);
+}
+
+/**
+ * Phase 59: builds the always-on music/ambience graph once, the first time an
+ * AudioContext exists. Both day and night sub-buses of both loops are created
+ * up front (rather than created/torn down per phase) so a day/night boundary
+ * is a gain ramp on already-running nodes, not a start/stop that could pop.
+ * Seeded from gameState's current phase (not a hardcoded 'day') so resuming
+ * mid-run doesn't start the graph silently crossfaded to the wrong variant.
+ */
+function ensureMusicGraph(ctx: AudioContext): void {
+  if (musicGain) {
+    return;
+  }
+  musicGain = ctx.createGain();
+  musicGain.gain.value = effectiveMusicGain();
+  musicGain.connect(ctx.destination);
+
+  const phase = getDayPhase();
+  musicMelodyBus = { day: ctx.createGain(), night: ctx.createGain() };
+  musicAmbientBus = { day: ctx.createGain(), night: ctx.createGain() };
+  for (const bus of [musicMelodyBus, musicAmbientBus]) {
+    bus.day.gain.value = phase === 'day' ? 1 : 0;
+    bus.night.gain.value = phase === 'night' ? 1 : 0;
+    bus.day.connect(musicGain);
+    bus.night.connect(musicGain);
+  }
+}
+
+/** Ramps both GainNodes of a crossfade bus toward the given phase; `immediate` snaps (used on game-reset, matching NightOverlay's own reset handling). */
+function crossfadeBusToPhase(bus: CrossfadeBus, phase: DayPhase, ctx: AudioContext, immediate: boolean): void {
+  rampGain(bus.day, phase === 'day' ? 1 : 0, ctx, immediate);
+  rampGain(bus.night, phase === 'night' ? 1 : 0, ctx, immediate);
+}
+
+function rampGain(node: GainNode, target: number, ctx: AudioContext, immediate: boolean): void {
+  const now = ctx.currentTime;
+  node.gain.cancelScheduledValues(now);
+  node.gain.setValueAtTime(node.gain.value, now);
+  if (immediate) {
+    node.gain.setValueAtTime(target, now);
+  } else {
+    node.gain.linearRampToValueAtTime(target, now + DAY_NIGHT_TRANSITION_MS / 1000);
+  }
+}
+
+// Phase 59: these two listeners live at module scope (registered exactly once
+// per page load, same as every other module-level `const` here) rather than
+// inside a function some caller has to remember to invoke - the crossfade
+// must react to every phase change for the life of the page, not just while
+// some scene happens to be listening.
+gameEvents.on('day-phase-changed', ({ phase }: DayPhaseChange) => {
+  if (!audioContext || !musicMelodyBus || !musicAmbientBus) {
+    return;
+  }
+  crossfadeBusToPhase(musicMelodyBus, phase, audioContext, false);
+  crossfadeBusToPhase(musicAmbientBus, phase, audioContext, false);
+});
+gameEvents.on('game-reset', () => {
+  // Mirrors NightOverlay: resetGame emits 'day-phase-changed' (day 1, day)
+  // right before 'game-reset', which would otherwise crossfade out of last
+  // run's midnight over 20s. A new run starts in daylight immediately.
+  if (!audioContext || !musicMelodyBus || !musicAmbientBus) {
+    return;
+  }
+  crossfadeBusToPhase(musicMelodyBus, 'day', audioContext, true);
+  crossfadeBusToPhase(musicAmbientBus, 'day', audioContext, true);
+});
 
 /**
  * Installed once, on the first call from anywhere. Browsers start an
@@ -116,8 +239,13 @@ export function installAudioUnlock(): void {
 
   const resume = () => {
     const ctx = getAudioContext();
-    if (ctx && ctx.state === 'suspended') {
-      void ctx.resume();
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state === 'suspended') {
+      void ctx.resume().then(() => startMusicIfNeeded(ctx));
+    } else {
+      startMusicIfNeeded(ctx);
     }
   };
 
@@ -133,7 +261,8 @@ export function installAudioUnlock(): void {
 export function setAudioMuted(next: boolean): void {
   muted = next;
   applyMasterGain();
-  gameEvents.emit('audio-settings-changed', { muted, volume });
+  applyMusicGain();
+  gameEvents.emit('audio-settings-changed', { muted, volume, musicVolume });
 }
 
 export function isAudioMuted(): boolean {
@@ -143,17 +272,29 @@ export function isAudioMuted(): boolean {
 export function setAudioVolume(next: number): void {
   volume = Math.max(0, Math.min(1, next));
   applyMasterGain();
-  gameEvents.emit('audio-settings-changed', { muted, volume });
+  gameEvents.emit('audio-settings-changed', { muted, volume, musicVolume });
 }
 
 export function getAudioVolume(): number {
   return volume;
 }
 
+/** Phase 59: independent from SFX volume - the building bar's second slider drives this. */
+export function setMusicVolume(next: number): void {
+  musicVolume = Math.max(0, Math.min(1, next));
+  applyMusicGain();
+  gameEvents.emit('audio-settings-changed', { muted, volume, musicVolume });
+}
+
+export function getMusicVolume(): number {
+  return musicVolume;
+}
+
 /** 0 (paused) mutes outright; other speeds only affect gain via this same check. */
 export function setAudioGameSpeed(speed: number): void {
   gameSpeed = speed;
   applyMasterGain();
+  applyMusicGain();
 }
 
 export function setAudioListenerRect(rect: { x: number; y: number; width: number; height: number }): void {
@@ -254,6 +395,16 @@ export function playPlacementSound(): void {
   playUiSound('placement');
 }
 
+/**
+ * Phase 59: fired once when a raid wave starts (MainScene.startRaid). Routed
+ * through the ordinary SFX voice path - it IS a discrete one-shot, budget and
+ * throttle included - but additionally ducks the separate music bus for the
+ * sting's duration so it reads clearly over the ambient loop.
+ */
+export function playRaidStinger(): void {
+  playUiSound('raidStinger');
+}
+
 function createNoiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
   const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
@@ -323,6 +474,57 @@ function renderTone(
   releaseVoiceOn(oscillator);
   oscillator.start();
   oscillator.stop(ctx.currentTime + options.duration);
+}
+
+/** Duration of the raid-stinger chord itself, shared by its render and its music-duck window. */
+const RAID_STINGER_DURATION_S = 1.1;
+/** How far musicGain dips during a stinger, as a fraction of its current target level. */
+const MUSIC_DUCK_LEVEL_FACTOR = 0.25;
+/** Extra tail after the stinger ends before the music bus is back at full level - an instant snap-back reads as choppy. */
+const MUSIC_DUCK_RELEASE_S = 0.6;
+
+/** Phase 59: briefly pulls the whole music bus down and back up around a stinger, independent of the day/night crossfade weights (which are left untouched). */
+function duckMusicForStinger(ctx: AudioContext): void {
+  if (!musicGain) {
+    return;
+  }
+  const now = ctx.currentTime;
+  const target = effectiveMusicGain();
+  musicGain.gain.cancelScheduledValues(now);
+  musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+  musicGain.gain.linearRampToValueAtTime(target * MUSIC_DUCK_LEVEL_FACTOR, now + 0.1);
+  musicGain.gain.linearRampToValueAtTime(target, now + RAID_STINGER_DURATION_S + MUSIC_DUCK_RELEASE_S);
+}
+
+/**
+ * A tense, dissonant dyad (a minor second apart) both sliding upward reads as
+ * "trouble incoming" without needing a sampled sting - the same
+ * envelope-plus-oscillator recipe as renderTone, just two detuned voices.
+ */
+function renderRaidStingerChord(ctx: AudioContext, destination: AudioNode, gain: number): void {
+  const duration = RAID_STINGER_DURATION_S;
+  const envelope = ctx.createGain();
+  envelope.gain.setValueAtTime(0.0001, ctx.currentTime);
+  envelope.gain.exponentialRampToValueAtTime(gain, ctx.currentTime + 0.06);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+  envelope.connect(destination);
+
+  const frequencies = [196, 207.65];
+  frequencies.forEach((freq, index) => {
+    const oscillator = ctx.createOscillator();
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(freq, ctx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(freq * 1.4, ctx.currentTime + duration);
+    oscillator.connect(envelope);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + duration);
+    if (index === frequencies.length - 1) {
+      // One release call per play() invocation, exactly like every other
+      // multi-node SoundDefinition in this file - the budget slot is per
+      // *call*, not per oscillator.
+      releaseVoiceOn(oscillator);
+    }
+  });
 }
 
 const SOUND_DEFINITIONS: Record<SoundName, SoundDefinition> = {
@@ -412,4 +614,224 @@ const SOUND_DEFINITIONS: Record<SoundName, SoundDefinition> = {
     render: (ctx, destination, gain) =>
       renderTone(ctx, destination, gain, { type: 'sawtooth', from: 180, to: 110, duration: 0.5 }),
   },
+  // Phase 59: one per raid wave (throttled to at most one per 3s so an
+  // escalated multi-camp raid can't stack chords), duck-then-chord as
+  // described in the file-level Phase 59 doc comment.
+  raidStinger: {
+    gain: 0.24,
+    minGapMs: 3000,
+    render: (ctx, destination, gain) => {
+      duckMusicForStinger(ctx);
+      renderRaidStingerChord(ctx, destination, gain);
+    },
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Phase 59: procedural western ambient loop + wind/cricket soundscape.
+//
+// Both live entirely outside the SOUND_DEFINITIONS/play() machinery above:
+// they are self-rescheduling (via plain setTimeout, deliberately NOT
+// Phaser's this.time so this module stays scene-independent, matching the
+// existing "listenerRect is pushed in, never read from a scene reference"
+// convention), always running once started, and never touch activeVoices.
+// ---------------------------------------------------------------------------
+
+/** A minor pentatonic across roughly an octave and a third - reads as "western" without needing a full harmonic model. */
+const PENTATONIC_SCALE_HZ = [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33];
+
+interface MelodyVariantConfig {
+  beatMsRange: [number, number];
+  /** Sparse on purpose - most beats rest, so this is closer to a wind chime than a tune. */
+  noteProbability: number;
+  scaleHz: number[];
+  noteDuration: number;
+  oscType: OscillatorType;
+}
+
+const MELODY_VARIANTS: Record<DayPhase, MelodyVariantConfig> = {
+  // Day: brighter (upper octave) and slightly faster/denser.
+  day: {
+    beatMsRange: [650, 950],
+    noteProbability: 0.55,
+    scaleHz: PENTATONIC_SCALE_HZ.map((hz) => hz * 2),
+    noteDuration: 0.9,
+    oscType: 'triangle',
+  },
+  // Night: slower, sparser, dropped a register - ambient rather than melodic.
+  night: {
+    beatMsRange: [1100, 1650],
+    noteProbability: 0.3,
+    scaleHz: PENTATONIC_SCALE_HZ,
+    noteDuration: 1.6,
+    oscType: 'sine',
+  },
+};
+
+/** Per-note peak gain before the crossfade bus / music bus scale it down further. */
+const MUSIC_NOTE_GAIN = 0.09;
+
+/**
+ * A short attack + exponentially-decaying lowpass sweep reads as a plucked
+ * string rather than a held organ tone - the same "envelope on an oscillator"
+ * idea as renderTone, with an extra filter sweep for warmth.
+ */
+function renderPluckedNote(
+  ctx: AudioContext,
+  destination: AudioNode,
+  gain: number,
+  options: { frequency: number; duration: number; oscType: OscillatorType },
+): void {
+  const oscillator = ctx.createOscillator();
+  oscillator.type = options.oscType;
+  oscillator.frequency.setValueAtTime(options.frequency, ctx.currentTime);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(options.frequency * 4, ctx.currentTime);
+  filter.frequency.exponentialRampToValueAtTime(options.frequency * 1.2, ctx.currentTime + options.duration);
+
+  const envelope = ctx.createGain();
+  envelope.gain.setValueAtTime(0.0001, ctx.currentTime);
+  envelope.gain.linearRampToValueAtTime(gain, ctx.currentTime + 0.012);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + options.duration);
+
+  oscillator.connect(filter);
+  filter.connect(envelope);
+  envelope.connect(destination);
+
+  oscillator.start();
+  oscillator.stop(ctx.currentTime + options.duration);
+  // Deliberately no releaseVoiceOn/activeVoices bookkeeping - see the
+  // file-level Phase 59 doc comment: music is a separate always-on bus, not
+  // a transient competing for the SFX budget.
+}
+
+function scheduleMelodyLoop(phase: DayPhase): void {
+  const config = MELODY_VARIANTS[phase];
+  const [minMs, maxMs] = config.beatMsRange;
+  const delayMs = minMs + Math.random() * (maxMs - minMs);
+  melodyTimers[phase] = setTimeout(() => {
+    playMelodyBeat(phase, config);
+    scheduleMelodyLoop(phase);
+  }, delayMs);
+}
+
+function playMelodyBeat(phase: DayPhase, config: MelodyVariantConfig): void {
+  const ctx = audioContext;
+  const bus = musicMelodyBus?.[phase];
+  // Suspended (not yet unlocked, or tab backgrounded) or missing graph: skip
+  // this beat only, the chain keeps rescheduling so it resumes seamlessly.
+  if (!ctx || !bus || ctx.state !== 'running') {
+    return;
+  }
+  if (Math.random() > config.noteProbability) {
+    return;
+  }
+  const frequency = config.scaleHz[Math.floor(Math.random() * config.scaleHz.length)];
+  renderPluckedNote(ctx, bus, MUSIC_NOTE_GAIN, {
+    frequency,
+    duration: config.noteDuration,
+    oscType: config.oscType,
+  });
+}
+
+interface AmbientVariantConfig {
+  intervalMsRange: [number, number];
+  render: (ctx: AudioContext, destination: AudioNode) => void;
+}
+
+/** Peak gain of an ambience texture burst - quieter than a music note, this is background-of-background. */
+const AMBIENT_NOTE_GAIN = 0.05;
+
+/** A gentle bandpass-filtered noise swell - the "filtered noise burst" recipe already used for gunshots/collapses, just slow and quiet instead of sharp and loud. */
+function renderWindGust(ctx: AudioContext, destination: AudioNode): void {
+  const duration = 2 + Math.random() * 1.5;
+  const source = ctx.createBufferSource();
+  source.buffer = createNoiseBuffer(ctx, duration);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(280 + Math.random() * 220, ctx.currentTime);
+  filter.Q.value = 0.6;
+
+  const envelope = ctx.createGain();
+  envelope.gain.setValueAtTime(0.0001, ctx.currentTime);
+  envelope.gain.linearRampToValueAtTime(AMBIENT_NOTE_GAIN, ctx.currentTime + duration * 0.4);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+
+  source.connect(filter);
+  filter.connect(envelope);
+  envelope.connect(destination);
+
+  source.start();
+  source.stop(ctx.currentTime + duration);
+}
+
+/** A cricket chirp is a handful of short high-pitched pulses back-to-back, not one long tone. */
+function renderCricketChirp(ctx: AudioContext, destination: AudioNode): void {
+  const pulses = 2 + Math.floor(Math.random() * 3);
+  const pulseDuration = 0.05;
+  const gap = 0.07;
+
+  for (let i = 0; i < pulses; i++) {
+    const start = ctx.currentTime + i * (pulseDuration + gap);
+    const oscillator = ctx.createOscillator();
+    oscillator.type = 'square';
+    oscillator.frequency.setValueAtTime(2600 + Math.random() * 400, start);
+
+    const envelope = ctx.createGain();
+    envelope.gain.setValueAtTime(0.0001, start);
+    envelope.gain.linearRampToValueAtTime(AMBIENT_NOTE_GAIN * 0.8, start + 0.008);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, start + pulseDuration);
+
+    oscillator.connect(envelope);
+    envelope.connect(destination);
+    oscillator.start(start);
+    oscillator.stop(start + pulseDuration);
+  }
+}
+
+const AMBIENT_VARIANTS: Record<DayPhase, AmbientVariantConfig> = {
+  // Day: a light, infrequent wind texture.
+  day: { intervalMsRange: [4000, 8000], render: renderWindGust },
+  // Night: crickets, noticeably more frequent than the day's wind.
+  night: { intervalMsRange: [1500, 4000], render: renderCricketChirp },
+};
+
+function scheduleAmbientLoop(phase: DayPhase): void {
+  const config = AMBIENT_VARIANTS[phase];
+  const [minMs, maxMs] = config.intervalMsRange;
+  const delayMs = minMs + Math.random() * (maxMs - minMs);
+  ambientTimers[phase] = setTimeout(() => {
+    playAmbientBeat(phase, config);
+    scheduleAmbientLoop(phase);
+  }, delayMs);
+}
+
+function playAmbientBeat(phase: DayPhase, config: AmbientVariantConfig): void {
+  const ctx = audioContext;
+  const bus = musicAmbientBus?.[phase];
+  if (!ctx || !bus || ctx.state !== 'running') {
+    return;
+  }
+  config.render(ctx, bus);
+}
+
+/**
+ * Starts all four self-rescheduling loops (day/night melody, day/night
+ * ambience) exactly once, the first time the context is confirmed 'running'
+ * rather than merely constructed - matching the SFX engine's own rule that
+ * nothing plays before the user's first gesture actually unlocks audio.
+ */
+function startMusicIfNeeded(ctx: AudioContext): void {
+  if (musicStarted) {
+    return;
+  }
+  musicStarted = true;
+  ensureMusicGraph(ctx);
+  scheduleMelodyLoop('day');
+  scheduleMelodyLoop('night');
+  scheduleAmbientLoop('day');
+  scheduleAmbientLoop('night');
+}
