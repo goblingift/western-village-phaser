@@ -248,6 +248,78 @@
       #game-over-panel button:hover {
         background: #5cbf60;
       }
+      /* Phase 39: difficulty/mode picker shown before a run starts (and again
+         between a game-over and the next Start click), sharing the game-over
+         overlay's full-screen dimmed backdrop for visual consistency. */
+      #difficulty-select-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+        font-family: sans-serif;
+      }
+      #difficulty-select-overlay[hidden] {
+        display: none;
+      }
+      #difficulty-select-panel {
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 8px;
+        padding: 24px 32px;
+        min-width: 320px;
+        text-align: center;
+      }
+      #difficulty-select-panel h2 {
+        margin-top: 0;
+      }
+      #difficulty-select-panel h3 {
+        margin-bottom: 4px;
+        font-size: 13px;
+        color: #aaa;
+      }
+      #difficulty-select-panel .stat {
+        color: #ffd54f;
+        font-size: 12px;
+        margin: 4px 0 12px;
+      }
+      #difficulty-select-panel .option-row {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+      }
+      #difficulty-select-panel button.option-button {
+        background: #5b3a29;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 8px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #difficulty-select-panel button.option-button:hover {
+        background: #714a35;
+      }
+      #difficulty-select-panel button.option-button.active {
+        background: #4caf50;
+        border-color: #4caf50;
+      }
+      #difficulty-select-panel button#start-run-button {
+        margin-top: 16px;
+        background: #4caf50;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      #difficulty-select-panel button#start-run-button:hover {
+        background: #5cbf60;
+      }
     </style>
   </head>
   <body>

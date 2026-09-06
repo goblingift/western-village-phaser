@@ -1,5 +1,5 @@
 import { BUILDING_DEFINITIONS, BuildingType } from '../config/buildingConfig';
-import { GameOverSummary, resetGame } from '../state/gameState';
+import { GameOverSummary } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
 
 export class GameOverOverlay {
@@ -62,7 +62,9 @@ export class GameOverOverlay {
 
     this.content.querySelector('#play-again-button')?.addEventListener('click', () => {
       this.overlay.hidden = true;
-      resetGame();
+      // Phase 39: Play Again re-opens the difficulty/mode picker rather than
+      // silently restarting with whatever settings the previous run used.
+      gameEvents.emit('request-run-restart');
     });
 
     this.overlay.hidden = false;

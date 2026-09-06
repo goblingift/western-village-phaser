@@ -9,6 +9,9 @@ import {
   DAY_COUNT,
   DAY_PHASE_SECONDS,
   DEMOLISH_REFUND_FRACTION,
+  Difficulty,
+  DIFFICULTY_SETTINGS,
+  ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -17,6 +20,7 @@ import {
   MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
   REPAIR_COST_FRACTION,
+  RunMode,
   STARTING_MONEY,
   THREAT_NET_WORTH_FULL,
   VEGETATION_CLEAR_CACTUS_JUICE,
@@ -138,6 +142,13 @@ let totalMeatProduced = 0;
 let elapsedSeconds = 0;
 let gameOver = false;
 let totalPopulation = 0;
+/**
+ * Phase 39: chosen on the pre-game (and post-game-over) difficulty/mode
+ * picker and passed into resetGame; defaults reproduce the pre-Phase-39
+ * behaviour exactly so nothing downstream needs a "was this ever set" check.
+ */
+let currentDifficulty: Difficulty = 'normal';
+let currentRunMode: RunMode = 'fixed';
 let employedPopulation = 0;
 let idlePopulation = 0;
 
@@ -175,8 +186,22 @@ export function getPhaseAtElapsed(seconds: number): DayPhase {
   return seconds % CYCLE_SECONDS < DAY_PHASE_SECONDS ? 'day' : 'night';
 }
 
+/**
+ * Phase 39: fixed-mode keeps the original DAY_COUNT ceiling (a run is exactly
+ * that many cycles, and the buzzer fires at the last one), but Endless mode
+ * has no ceiling to cap against - the header just keeps counting up.
+ */
 export function getDayNumberAtElapsed(seconds: number): number {
-  return Math.min(DAY_COUNT, Math.floor(seconds / CYCLE_SECONDS) + 1);
+  const day = Math.floor(seconds / CYCLE_SECONDS) + 1;
+  return currentRunMode === 'fixed' ? Math.min(DAY_COUNT, day) : day;
+}
+
+export function getCurrentDifficulty(): Difficulty {
+  return currentDifficulty;
+}
+
+export function getCurrentRunMode(): RunMode {
+  return currentRunMode;
 }
 
 export function getDayPhase(): DayPhase {
@@ -1062,12 +1087,17 @@ function runSaloonSales(): void {
  * of being destroyed - a cash crisis idles your town, it doesn't bulldoze it.
  * Recomputed from scratch every tick (like assignWorkforce), so the moment
  * money comes back in, the same buildings switch themselves on again.
+ *
+ * Phase 39: each building's base upkeep is scaled by the run's chosen
+ * difficulty (Easy cheaper, Hard pricier) rather than by editing the base
+ * BUILDING_DEFINITIONS values, keeping those the Normal baseline.
  */
 function runUpkeep(): number {
   let paid = 0;
+  const upkeepMultiplier = DIFFICULTY_SETTINGS[currentDifficulty].upkeepMultiplier;
 
   for (const building of placedBuildings) {
-    const { upkeep } = BUILDING_DEFINITIONS[building.type];
+    const upkeep = BUILDING_DEFINITIONS[building.type].upkeep * upkeepMultiplier;
     if (upkeep <= 0 || !building.staffed) {
       building.disabled = false;
       continue;
@@ -1266,6 +1296,11 @@ export function runProductionTick(): void {
  * detected by comparing the derived phase before and after the increment
  * rather than by maintaining a second, separately-decremented counter that
  * could fall out of sync with the day count.
+ *
+ * Phase 39: the DAY_COUNT buzzer is Fixed-mode only. Endless mode never hits
+ * this branch, so elapsedSeconds just keeps counting up and the day/night
+ * cycle keeps repeating - the only way an Endless run ends is the existing
+ * 'destroyed' path in removeBuilding.
  */
 export function tickTimer(): void {
   if (gameOver) {
@@ -1278,7 +1313,7 @@ export function tickTimer(): void {
   elapsedSeconds += 1;
   gameEvents.emit('timer-changed', getPhaseRemainingSeconds());
 
-  if (elapsedSeconds >= GAME_DURATION_SECONDS) {
+  if (currentRunMode === 'fixed' && elapsedSeconds >= GAME_DURATION_SECONDS) {
     endGame('time');
     return;
   }
@@ -1331,9 +1366,28 @@ export function computeNetWorth(): NetWorthBreakdown {
  * which no longer exists as a monotonically-shrinking value) onto elapsed run
  * time. Behaviour is identical to Phase 31's over a full run - 0 at the start,
  * 1 at the buzzer - but it no longer breaks the moment the clock repeats.
+ *
+ * Phase 39: the time-based half of the blend is now mode/difficulty-aware.
+ * Fixed mode keeps dividing by GAME_DURATION_SECONDS (scaled by the
+ * difficulty's raidEscalationMultiplier - 1 for Normal reproduces the exact
+ * pre-Phase-39 curve). Endless mode has no total run length to divide
+ * against, so it saturates asymptotically against completed day/night
+ * cycles instead (see ENDLESS_THREAT_RAMP_CYCLES) rather than hitting the old
+ * fixed-mode ceiling once and sitting flat at 1 for the rest of what could be
+ * an hours-long run.
  */
 export function getThreatLevel(): number {
-  const elapsedFraction = Math.min(1, elapsedSeconds / GAME_DURATION_SECONDS);
+  const raidEscalationMultiplier = DIFFICULTY_SETTINGS[currentDifficulty].raidEscalationMultiplier;
+
+  let elapsedFraction: number;
+  if (currentRunMode === 'endless') {
+    const cyclesElapsed = (elapsedSeconds / CYCLE_SECONDS) * raidEscalationMultiplier;
+    elapsedFraction = cyclesElapsed / (cyclesElapsed + ENDLESS_THREAT_RAMP_CYCLES);
+  } else {
+    const scaledDuration = GAME_DURATION_SECONDS / raidEscalationMultiplier;
+    elapsedFraction = Math.min(1, elapsedSeconds / scaledDuration);
+  }
+
   const wealthFraction = Math.min(1, computeNetWorth().total / THREAT_NET_WORTH_FULL);
   return Math.min(1, elapsedFraction * 0.5 + wealthFraction * 0.5);
 }
@@ -1367,8 +1421,17 @@ function endGame(reason: GameOverReason): void {
   });
 }
 
-export function resetGame(): void {
-  money = STARTING_MONEY;
+/**
+ * Phase 39: options default to Fixed/Normal so any caller that doesn't pass
+ * them (there are none left, but this keeps the function regression-safe as
+ * a public API) reproduces the exact pre-Phase-39 run. The
+ * DifficultySelectOverlay's Start button is the only real caller, passing the
+ * player's picked mode/difficulty.
+ */
+export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty }): void {
+  currentRunMode = options?.mode ?? 'fixed';
+  currentDifficulty = options?.difficulty ?? 'normal';
+  money = Math.round(STARTING_MONEY * DIFFICULTY_SETTINGS[currentDifficulty].startingMoneyMultiplier * 100) / 100;
   Object.assign(resources, emptyResources());
   resourceTrends = emptyResources();
   totalMeatProduced = 0;

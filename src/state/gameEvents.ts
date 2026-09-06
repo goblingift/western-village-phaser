@@ -42,6 +42,13 @@ export interface GameEventMap {
   'day-phase-changed': (change: DayPhaseChange) => void;
   /** Phase 34: audio master mute/volume, owned by the audio engine, driven from the building bar. */
   'audio-settings-changed': (settings: { muted: boolean; volume: number }) => void;
+  /**
+   * Phase 39: GameOverOverlay's Play Again button no longer calls resetGame()
+   * directly with whatever difficulty/mode the last run used - it emits this,
+   * and DifficultySelectOverlay is what re-opens itself and eventually calls
+   * resetGame with the player's freshly chosen settings.
+   */
+  'request-run-restart': () => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

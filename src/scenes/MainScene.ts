@@ -446,6 +446,7 @@ export class MainScene extends Phaser.Scene {
     this.setupRaidSystem();
     this.setupGameOverHalt();
     this.setupGameReset();
+    this.pauseForPreGameSelection();
   }
 
   update(): void {
@@ -1893,6 +1894,22 @@ export class MainScene extends Phaser.Scene {
       this.tweens.timeScale = 0;
       setAudioGameSpeed(0);
     });
+  }
+
+  /**
+   * Phase 39: the difficulty/mode picker sits in front of the world before a
+   * run starts, and again between a game-over and the next Start click.
+   * Reuses setupGameOverHalt's exact pause primitive (time/tween timeScale 0)
+   * so nothing - production, the clock, raid scheduling, wander tweens -
+   * advances behind it. setupGameReset's existing 'game-reset' handler is
+   * what un-pauses this back to this.gameSpeed; DifficultySelectOverlay's
+   * Start button calls resetGame(), which fires that same event, so no
+   * separate un-pause path is needed for either the first run or a restart.
+   */
+  private pauseForPreGameSelection(): void {
+    this.time.timeScale = 0;
+    this.tweens.timeScale = 0;
+    setAudioGameSpeed(0);
   }
 
   private tileCenter(building: PlacedBuilding): { x: number; y: number } {

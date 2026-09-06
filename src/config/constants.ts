@@ -139,3 +139,40 @@ export const VEGETATION_CLEAR_CACTUS_JUICE = 1;
  */
 export const WATCHTOWER_RANGE_TILES = 6;
 export const WATCHTOWER_DAMAGE = 6;
+
+/**
+ * Phase 39: Endless Mode & Difficulty Select. Difficulty is a small runtime
+ * multiplier bundle rather than mutated base constants - everything above
+ * this line stays the Normal baseline, and gameState reads whichever
+ * DifficultySettings the pre-game picker chose (resetGame/runUpkeep/
+ * getThreatLevel), so Normal + Fixed reproduces the pre-Phase-39 numbers
+ * exactly.
+ */
+export type Difficulty = 'easy' | 'normal' | 'hard';
+
+export interface DifficultySettings {
+  startingMoneyMultiplier: number;
+  upkeepMultiplier: number;
+  /** Multiplies how fast getThreatLevel's time-based component ramps toward 1. */
+  raidEscalationMultiplier: number;
+}
+
+export const DIFFICULTY_SETTINGS: Record<Difficulty, DifficultySettings> = {
+  easy: { startingMoneyMultiplier: 1.5, upkeepMultiplier: 0.75, raidEscalationMultiplier: 0.7 },
+  normal: { startingMoneyMultiplier: 1, upkeepMultiplier: 1, raidEscalationMultiplier: 1 },
+  hard: { startingMoneyMultiplier: 0.65, upkeepMultiplier: 1.3, raidEscalationMultiplier: 1.4 },
+};
+
+/** Fixed keeps the original DAY_COUNT-cycle buzzer; Endless repeats the day/night cycle forever, ending only via the 'destroyed' reason. */
+export type RunMode = 'fixed' | 'endless';
+
+/**
+ * Endless mode has no total-run length for getThreatLevel's time component to
+ * divide elapsed seconds against, so instead it saturates asymptotically
+ * against *completed day/night cycles*: fraction = cycles / (cycles + this),
+ * which crosses 0.5 at ENDLESS_THREAT_RAMP_CYCLES elapsed cycles (scaled by
+ * the difficulty's raidEscalationMultiplier) and keeps creeping toward 1
+ * forever after, rather than hitting the old GAME_DURATION_SECONDS ceiling
+ * once and going flat for the remainder of a potentially unbounded run.
+ */
+export const ENDLESS_THREAT_RAMP_CYCLES = DAY_COUNT;
