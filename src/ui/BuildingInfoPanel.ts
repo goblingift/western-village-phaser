@@ -1,8 +1,10 @@
 import {
   AnimalConfig,
   AutoSale,
+  BRAWLER_TRAIN_MATERIALS,
   BUILDING_DEFINITIONS,
   BuildingType,
+  DYNAMITER_TRAIN_MATERIALS,
   HOUSE_TIER_CONFIG,
   HarvestConfig,
   MARKETABLE_RESOURCE_KEYS,
@@ -11,6 +13,7 @@ import {
   RESOURCE_LABELS,
   ResourceKey,
   TradeOrderConfig,
+  UNIT_KIND_LABELS,
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -18,8 +21,12 @@ import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import { countVegetationInRadius } from '../state/vegetation';
 import {
   BANK_TRANSACTION_AMOUNT,
+  BRAWLER_MAX_PER_BARRACKS,
+  BRAWLER_TRAIN_COST,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  DYNAMITER_MAX_PER_BARRACKS,
+  DYNAMITER_TRAIN_COST,
   GRAVEL_MAX_DISTANCE_TILES,
   HOUSE_TIER_HYSTERESIS_TICKS,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
@@ -46,12 +53,15 @@ import {
   getMoney,
   getNearestStaffedWaterTowerDistance,
   getRepairCost,
+  getResources,
   getWellWaterDistance,
   hasAdjacentFence,
   repairBuilding,
   setBuildingPriority,
   setTradingPostOrder,
+  trainBrawler,
   trainCowboy,
+  trainDynamiter,
   trainMountedCowboy,
   withdrawFromBank,
 } from '../state/gameState';
@@ -159,6 +169,11 @@ export class BuildingInfoPanel {
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
     const cowboyText = isBarracks ? `Cowboys: ${this.selected.cowboyCount}/${COWBOY_MAX_PER_BARRACKS}` : null;
+    // Phase 58: Barracks now trains two more kinds alongside Cowboy.
+    const brawlerText = isBarracks ? `Brawlers: ${this.selected.brawlerCount}/${BRAWLER_MAX_PER_BARRACKS}` : null;
+    const dynamiterText = isBarracks
+      ? `Dynamiters: ${this.selected.dynamiterCount}/${DYNAMITER_MAX_PER_BARRACKS}`
+      : null;
     const mountedCowboyText = isHorsery
       ? `Cowboys on Horse: ${this.selected.mountedCowboyCount}/${MOUNTED_COWBOY_MAX_PER_HORSERY}`
       : null;
@@ -280,6 +295,8 @@ export class BuildingInfoPanel {
       ${understaffedText ? `<div class="hp-disabled">${understaffedText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
       ${cowboyText ? `<div>${cowboyText}</div>` : ''}
+      ${brawlerText ? `<div>${brawlerText}</div>` : ''}
+      ${dynamiterText ? `<div>${dynamiterText}</div>` : ''}
       ${mountedCowboyText ? `<div>${mountedCowboyText}</div>` : ''}
       ${trainingQueueText ? `<div>${trainingQueueText}</div>` : ''}
       ${rallyPointText ? `<div>${rallyPointText}</div>` : ''}
@@ -294,6 +311,8 @@ export class BuildingInfoPanel {
     }
     if (isBarracks) {
       this.renderTrainCowboyButton(this.selected);
+      this.renderTrainBrawlerButton(this.selected);
+      this.renderTrainDynamiterButton(this.selected);
     }
     if (isHorsery) {
       this.renderTrainMountedCowboyButton(this.selected);
@@ -639,17 +658,93 @@ export class BuildingInfoPanel {
   }
 
   /**
+   * Phase 58: training a Brawler also costs BRAWLER_TRAIN_MATERIALS (Tools) on
+   * top of money, so it gets its own resources-affordability check that
+   * trainCowboy/trainMountedCowboy don't need. Mirrors renderTrainCowboyButton
+   * otherwise.
+   */
+  private renderTrainBrawlerButton(building: PlacedBuilding): void {
+    const resources = getResources();
+    const lacksMaterials = (Object.entries(BRAWLER_TRAIN_MATERIALS) as [ResourceKey, number][]).some(
+      ([key, amount]) => resources[key] < amount,
+    );
+    const blockReason =
+      building.hp <= 0
+        ? 'disabled'
+        : building.brawlerCount + building.trainingQueue.length >= BRAWLER_MAX_PER_BARRACKS
+          ? 'at max brawlers'
+          : getMoney() < BRAWLER_TRAIN_COST
+            ? "can't afford"
+            : lacksMaterials
+              ? 'not enough materials'
+              : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Train Brawler ($${BRAWLER_TRAIN_COST} + ${this.formatResourceMap(BRAWLER_TRAIN_MATERIALS)})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      trainBrawler(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /** Mirrors renderTrainBrawlerButton exactly, gated on DYNAMITER_MAX_PER_BARRACKS/DYNAMITER_TRAIN_COST/DYNAMITER_TRAIN_MATERIALS instead. */
+  private renderTrainDynamiterButton(building: PlacedBuilding): void {
+    const resources = getResources();
+    const lacksMaterials = (Object.entries(DYNAMITER_TRAIN_MATERIALS) as [ResourceKey, number][]).some(
+      ([key, amount]) => resources[key] < amount,
+    );
+    const blockReason =
+      building.hp <= 0
+        ? 'disabled'
+        : building.dynamiterCount + building.trainingQueue.length >= DYNAMITER_MAX_PER_BARRACKS
+          ? 'at max dynamiters'
+          : getMoney() < DYNAMITER_TRAIN_COST
+            ? "can't afford"
+            : lacksMaterials
+              ? 'not enough materials'
+              : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Train Dynamiter ($${DYNAMITER_TRAIN_COST} + ${this.formatResourceMap(DYNAMITER_TRAIN_MATERIALS)})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      trainDynamiter(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /**
    * Phase 53: "Cowboy (2 ticks left), Cowboy (5 ticks left)" - only the front
    * job's remainingTicks actually counts down (gameState.runTrainingQueues),
    * so every later job in the list still shows its full COWBOY_TRAIN_TICKS/
-   * MOUNTED_COWBOY_TRAIN_TICKS seed until its turn comes.
+   * MOUNTED_COWBOY_TRAIN_TICKS/BRAWLER_TRAIN_TICKS/DYNAMITER_TRAIN_TICKS seed
+   * until its turn comes. Phase 58: label now comes from the shared
+   * UNIT_KIND_LABELS lookup instead of a two-way ternary, since a Barracks
+   * queue can now mix three kinds.
    */
   private formatTrainingQueueText(building: PlacedBuilding): string | null {
     if (building.trainingQueue.length === 0) {
       return null;
     }
     const parts = building.trainingQueue.map((job) => {
-      const label = job.kind === 'cowboy' ? 'Cowboy' : 'Cowboy on Horse';
+      const label = UNIT_KIND_LABELS[job.kind];
       return `${label} (${job.remainingTicks} tick${job.remainingTicks === 1 ? '' : 's'} left)`;
     });
     return `Training: ${parts.join(', ')}`;

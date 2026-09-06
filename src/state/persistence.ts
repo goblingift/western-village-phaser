@@ -36,9 +36,10 @@ import { RaiderCampSaveState, getRaiderCamps, restoreRaiderCamps } from './raide
  *  - SAVED: money, the resource pool, elapsedSeconds (and therefore day
  *    number/phase), difficulty, run mode, total meat produced, every
  *    PlacedBuilding (including per-building HP, animals, bank balance,
- *    garrisoned Cowboy/Cowboy-on-Horse counts+HP, house tier, trade orders,
- *    Phase 53's in-progress trainingQueue (a queued job's remainingTicks
- *    resumes counting down exactly where it left off) and rallyPoint, etc.),
+ *    garrisoned Cowboy/Cowboy-on-Horse/Brawler/Dynamiter (Phase 58) counts+HP,
+ *    house tier, trade orders, Phase 53's in-progress trainingQueue (a queued
+ *    job's remainingTicks resumes counting down exactly where it left off)
+ *    and rallyPoint, etc.),
  *    every live vegetation entity, and the full fluctuating-market state
  *    (baseline prices, pressure windows, any active merchant deal).
  *  - SAVED (Phase 56 addition): the active/queued Objectives / Quest Chain
@@ -108,6 +109,10 @@ function cloneBuilding(building: PlacedBuilding): PlacedBuilding {
     ...building,
     cowboyHp: [...building.cowboyHp],
     mountedCowboyHp: [...building.mountedCowboyHp],
+    // Phase 58: Brawler/Dynamiter's own parallel HP arrays, same
+    // anti-aliasing reason as cowboyHp/mountedCowboyHp above.
+    brawlerHp: [...building.brawlerHp],
+    dynamiterHp: [...building.dynamiterHp],
     houseNeedsStatus: building.houseNeedsStatus.map((entry) => ({ ...entry })),
     tradeOrders: { ...building.tradeOrders },
     // Phase 53: trainingQueue's job objects and rallyPoint's {x,y} are their

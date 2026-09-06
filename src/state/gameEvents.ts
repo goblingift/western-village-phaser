@@ -39,6 +39,9 @@ export interface GameEventMap {
   'animal-bought': (building: PlacedBuilding) => void;
   'cowboy-trained': (building: PlacedBuilding) => void;
   'mounted-cowboy-trained': (building: PlacedBuilding) => void;
+  /** Phase 58: fired by gameState's runTrainingQueues on a completed Brawler/Dynamiter job, mirroring 'cowboy-trained'/'mounted-cowboy-trained' exactly - MainScene spawns the garrisoned unit's visual from it. */
+  'brawler-trained': (building: PlacedBuilding) => void;
+  'dynamiter-trained': (building: PlacedBuilding) => void;
   'building-removed': (payload: BuildingRemovedPayload) => void;
   'building-repaired': (building: PlacedBuilding) => void;
   'vegetation-added': (entity: VegetationEntity) => void;

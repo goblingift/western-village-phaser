@@ -6,12 +6,18 @@ import {
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
   AnimalKind,
+  BRAWLERS_ATLAS_KEY,
+  BRAWLER_SPRITE_SIZE,
+  BRAWLER_TEXTURE_KEY,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  DYNAMITERS_ATLAS_KEY,
+  DYNAMITER_SPRITE_SIZE,
+  DYNAMITER_TEXTURE_KEY,
   MOUNTED_COWBOYS_ATLAS_KEY,
   MOUNTED_COWBOY_SPRITE_HEIGHT,
   MOUNTED_COWBOY_SPRITE_WIDTH,
@@ -1093,6 +1099,30 @@ const MOUNTED_COWBOY_SPRITE: PixelSprite = {
 };
 
 /**
+ * Phase 58 Brawler: a bulky, hatless silhouette distinct from every other
+ * small-unit sprite so far - a short dark buzz-cut (H) instead of a brimmed
+ * hat, a wide torso (V) and, unique to this sprite, two bright knuckle
+ * pixels (K) punched out to the left/right edges of the torso row to read as
+ * fists held out at the sides - the "fists" motif the phase spec asked for.
+ */
+const BRAWLER_SPRITE: PixelSprite = {
+  palette: { H: 0x3e2723, F: 0xd7a266, V: 0x5d4037, K: 0xffca28, L: 0x3e2723 },
+  pattern: ['.HHHH.', '.FFFF.', 'VVVVVV', 'KVVVVK', '.L..L.', '.L..L.'],
+};
+
+/**
+ * Phase 58 Dynamiter: a satchel (S patch across the torso, standing in for a
+ * bandolier of charges) plus a single bright fuse-spark pixel (P) above the
+ * hat brim - the "satchel/lit-fuse" motif - on an otherwise Cowboy-shaped
+ * silhouette so it still reads as a person carrying gear, not a different
+ * creature entirely.
+ */
+const DYNAMITER_SPRITE: PixelSprite = {
+  palette: { H: 0x37474f, F: 0xffcb8e, V: 0x6d4c41, S: 0x8d6e4a, P: 0xff7043, L: 0x3e2723 },
+  pattern: ['..P...', '.HHHH.', '.FFFF.', 'VVSSVV', '.L..L.', '.L..L.'],
+};
+
+/**
  * Phase 23 Outlaw: a near-black hat and a kerchief mask (M) drawn straight
  * across the face row - no visible skin tone at all - reads as a masked
  * bandit and keeps this raider's palette clearly darker/more muted than the
@@ -1202,6 +1232,8 @@ export class BootScene extends Phaser.Scene {
     this.generateVillagerAtlas();
     this.generateCowboyAtlas();
     this.generateMountedCowboyAtlas();
+    this.generateBrawlerAtlas();
+    this.generateDynamiterAtlas();
     this.generateRaiderAtlas();
     this.generateRaiderCampAtlas();
     this.generateVegetationAtlas();
@@ -1420,6 +1452,30 @@ export class BootScene extends Phaser.Scene {
       MOUNTED_COWBOY_SPRITE_WIDTH,
       MOUNTED_COWBOY_SPRITE_HEIGHT,
     );
+  }
+
+  /** Phase 58: single-frame atlas, same technique as generateCowboyAtlas - Brawler is square at the same COWBOY_SPRITE_SIZE (=BRAWLER_SPRITE_SIZE). */
+  private generateBrawlerAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, BRAWLER_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(BRAWLERS_ATLAS_KEY, BRAWLER_SPRITE_SIZE, BRAWLER_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(BRAWLERS_ATLAS_KEY);
+    texture.add(BRAWLER_TEXTURE_KEY, 0, 0, 0, BRAWLER_SPRITE_SIZE, BRAWLER_SPRITE_SIZE);
+  }
+
+  /** Mirrors generateBrawlerAtlas exactly for the Dynamiter's own square single-frame atlas. */
+  private generateDynamiterAtlas(): void {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    drawPixelSprite(graphics, 0, 0, DYNAMITER_SPRITE, ANIMAL_PIXEL_SIZE);
+
+    graphics.generateTexture(DYNAMITERS_ATLAS_KEY, DYNAMITER_SPRITE_SIZE, DYNAMITER_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(DYNAMITERS_ATLAS_KEY);
+    texture.add(DYNAMITER_TEXTURE_KEY, 0, 0, 0, DYNAMITER_SPRITE_SIZE, DYNAMITER_SPRITE_SIZE);
   }
 
   /** Tile-sized frames (vegetation owns a whole tile), so the uniform-grid layout is stepped by TILE_SIZE rather than the small-unit size. */

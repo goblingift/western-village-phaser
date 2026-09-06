@@ -366,3 +366,43 @@ export const RAIDER_CAMP_LOOT_MONEY = 150;
 export const RAIDER_CAMP_LOOT_TOOLS = 10;
 /** Slightly larger than MainScene's RAIDER_ATTACK_HIT_RADIUS_PX, matching the camp's bigger sprite footprint. */
 export const RAIDER_CAMP_ATTACK_HIT_RADIUS_PX = 14;
+
+/**
+ * Phase 58: Unit Roster Expansion with Counters. Brawler and Dynamiter are
+ * trained at the same Barracks that already trains Cowboy (see buildingConfig
+ * .ts's UnitKind/PlacedBuilding doc comments for why they're three parallel
+ * count/HP field pairs rather than one generic collection). Both get their
+ * own cost/cap/tick/combat constants mirroring the COWBOY_ and
+ * MOUNTED_COWBOY_ constant families above rather than sharing them, same
+ * rationale Phase 28 gave for Cowboy on
+ * Horse: each unit's numbers stay independently readable/tunable.
+ *
+ * Brawler: melee tank - adjacent-only range, high HP/damage, slow.
+ */
+export const BRAWLER_TRAIN_COST = 70;
+export const BRAWLER_MAX_PER_BARRACKS = 3;
+export const BRAWLER_TRAIN_TICKS = 5;
+export const BRAWLER_RANGE_TILES = 1;
+export const BRAWLER_MAX_HP = 60;
+export const BRAWLER_DAMAGE = 14;
+export const BRAWLER_WALK_SPEED_PX_PER_SEC = 35;
+
+/**
+ * Dynamiter: fragile lobber - long range and an AoE splash on hit
+ * (DYNAMITER_SPLASH_DAMAGE to every other live raider/camp within
+ * DYNAMITER_SPLASH_RADIUS_TILES of the primary target), but low HP and slow
+ * on foot. Fire rate is deliberately left uniform with every other unit
+ * (shared 2s combat-tick cadence via runRaidCombatTick) rather than given its
+ * own slower rate - a second per-unit timing axis on top of range/damage/
+ * splash would multiply the balancing surface for a fantasy ("lobs
+ * explosives") that already reads clearly through range + AoE alone.
+ */
+export const DYNAMITER_TRAIN_COST = 100;
+export const DYNAMITER_MAX_PER_BARRACKS = 2;
+export const DYNAMITER_TRAIN_TICKS = 6;
+export const DYNAMITER_RANGE_TILES = 6;
+export const DYNAMITER_MAX_HP = 18;
+export const DYNAMITER_DAMAGE = 10;
+export const DYNAMITER_SPLASH_DAMAGE = 5;
+export const DYNAMITER_SPLASH_RADIUS_TILES = 2;
+export const DYNAMITER_WALK_SPEED_PX_PER_SEC = 40;

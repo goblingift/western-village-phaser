@@ -1,7 +1,11 @@
 import {
   BANK_INTEREST_RATE,
+  BRAWLER_MAX_PER_BARRACKS,
+  BRAWLER_TRAIN_COST,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  DYNAMITER_MAX_PER_BARRACKS,
+  DYNAMITER_TRAIN_COST,
   GRAVEL_MAX_DISTANCE_TILES,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
@@ -306,19 +310,43 @@ export interface TradeOrderConfig {
 export type WorkerPriority = 'high' | 'normal' | 'low';
 
 /**
+ * Phase 58: the discriminant shared by CombatUnit (MainScene.ts),
+ * TrainingQueueJob.kind below and every per-kind PlacedBuilding field pair -
+ * previously declared three times over (once inline in MainScene, once
+ * inline in gameState's damageUnit, once inline here) and now consolidated to
+ * this single exported type so a new kind only has to be added in one place.
+ * Barracks trains 'cowboy'/'brawler'/'dynamiter'; Horsery trains
+ * 'cowboyOnHorse' - the only building each kind can ever come from.
+ */
+export type UnitKind = 'cowboy' | 'cowboyOnHorse' | 'brawler' | 'dynamiter';
+
+export const UNIT_KIND_LABELS: Record<UnitKind, string> = {
+  cowboy: 'Cowboy',
+  cowboyOnHorse: 'Cowboy on Horse',
+  brawler: 'Brawler',
+  dynamiter: 'Dynamiter',
+};
+
+/** Phase 58: Brawler/Dynamiter training costs money (like Cowboy/Cowboy-on-Horse) AND a Phase 37 material, deducted together the instant the job is enqueued - see gameState's trainBrawler/trainDynamiter. */
+export const BRAWLER_TRAIN_MATERIALS: Partial<Record<ResourceKey, number>> = { tools: 2 };
+export const DYNAMITER_TRAIN_MATERIALS: Partial<Record<ResourceKey, number>> = { tools: 3 };
+
+/**
  * Phase 53: Rally Points & Training Queue. A queued Barracks/Horsery training
- * job - money is deducted the instant trainCowboy/trainMountedCowboy enqueues
+ * job - money (and, since Phase 58, any per-kind `materials`) is deducted the
+ * instant trainCowboy/trainMountedCowboy/trainBrawler/trainDynamiter enqueues
  * it, and `remainingTicks` (seeded from COWBOY_TRAIN_TICKS/
- * MOUNTED_COWBOY_TRAIN_TICKS) only counts down for the job at the front of
- * `PlacedBuilding.trainingQueue` (gameState's runTrainingQueues) - a classic
- * one-at-a-time training queue, not N jobs finishing in parallel. `kind`
- * mirrors CombatUnit's discriminant in MainScene.ts; a single building's
- * queue is always homogeneous (Barracks only ever enqueues 'cowboy', Horsery
- * only ever 'cowboyOnHorse'), so nothing here needs to branch on it beyond
- * knowing which counter/HP array/spawn event to use on completion.
+ * MOUNTED_COWBOY_TRAIN_TICKS/BRAWLER_TRAIN_TICKS/DYNAMITER_TRAIN_TICKS) only
+ * counts down for the job at the front of `PlacedBuilding.trainingQueue`
+ * (gameState's runTrainingQueues) - a classic one-at-a-time training queue,
+ * not N jobs finishing in parallel. `kind` mirrors CombatUnit's discriminant
+ * in MainScene.ts; a single building's queue is homogeneous per building type
+ * (Barracks only ever enqueues 'cowboy'/'brawler'/'dynamiter', Horsery only
+ * ever 'cowboyOnHorse'), but a single Barracks CAN now mix all three of its
+ * kinds in one queue.
  */
 export interface TrainingQueueJob {
-  kind: 'cowboy' | 'cowboyOnHorse';
+  kind: UnitKind;
   remainingTicks: number;
 }
 
@@ -364,6 +392,19 @@ export interface PlacedBuilding {
   mountedCowboyCount: number;
   /** Only meaningful for Horsery: one HP value per trained Cowboy-on-Horse, index-aligned with its spawn slot - same pattern as cowboyHp above. */
   mountedCowboyHp: number[];
+  /**
+   * Phase 58: only meaningful for Barracks; trained Brawler count/HP, a third
+   * parallel pair alongside cowboyCount/cowboyHp above rather than a shared
+   * collection - a Barracks trains three kinds now, and keeping each kind its
+   * own count+array pair is a small, low-risk extension of the existing
+   * pattern rather than a Record<UnitKind, {count,hp[]}> refactor of every
+   * existing cowboyCount/mountedCowboyCount call site.
+   */
+  brawlerCount: number;
+  brawlerHp: number[];
+  /** Phase 58: only meaningful for Barracks; trained Dynamiter count/HP - same parallel-pair shape as brawlerCount/brawlerHp above. */
+  dynamiterCount: number;
+  dynamiterHp: number[];
   /** Only meaningful for Bank; starts at 0, grows via compounding interest each production tick (runBankInterest) and moves with deposit/withdraw. */
   bankBalance: number;
   /**
@@ -409,6 +450,57 @@ export interface PlacedBuilding {
    * lastSale/lastHarvest's "absent means not yet meaningful" convention.
    */
   rallyPoint?: { x: number; y: number };
+}
+
+/**
+ * Phase 58: the single place that knows which PlacedBuilding field pair a
+ * given UnitKind reads/writes - every kind-branching call site in
+ * gameState.ts (damageUnit, trainX, runTrainingQueues) and MainScene.ts
+ * (isCowboyUnitAlive, getUnitHp) goes through these three functions instead
+ * of re-deriving its own `kind === 'cowboy' ? building.cowboyHp : ...`
+ * ternary/switch, so a future fifth kind only has to extend the switch here.
+ */
+export function getUnitHpArray(building: PlacedBuilding, kind: UnitKind): number[] {
+  switch (kind) {
+    case 'cowboy':
+      return building.cowboyHp;
+    case 'cowboyOnHorse':
+      return building.mountedCowboyHp;
+    case 'brawler':
+      return building.brawlerHp;
+    case 'dynamiter':
+      return building.dynamiterHp;
+  }
+}
+
+export function getUnitCount(building: PlacedBuilding, kind: UnitKind): number {
+  switch (kind) {
+    case 'cowboy':
+      return building.cowboyCount;
+    case 'cowboyOnHorse':
+      return building.mountedCowboyCount;
+    case 'brawler':
+      return building.brawlerCount;
+    case 'dynamiter':
+      return building.dynamiterCount;
+  }
+}
+
+export function setUnitCount(building: PlacedBuilding, kind: UnitKind, value: number): void {
+  switch (kind) {
+    case 'cowboy':
+      building.cowboyCount = value;
+      break;
+    case 'cowboyOnHorse':
+      building.mountedCowboyCount = value;
+      break;
+    case 'brawler':
+      building.brawlerCount = value;
+      break;
+    case 'dynamiter':
+      building.dynamiterCount = value;
+      break;
+  }
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -1007,6 +1099,22 @@ export const MOUNTED_COWBOY_SPRITE_HEIGHT = 12;
 export const MOUNTED_COWBOY_TEXTURE_KEY = 'cowboy-on-horse';
 
 /**
+ * Phase 58: Brawler and Dynamiter are both square, same small-unit size class
+ * as the plain Cowboy (COWBOY_SPRITE_SIZE, itself ANIMAL_SPRITE_SIZE) - only
+ * Cowboy-on-Horse needs the wider non-square frame above, since it's the only
+ * kind drawn as horse+rider rather than a single figure. Each gets its own
+ * atlas (one frame apiece), same convention as COWBOYS_ATLAS_KEY/
+ * MOUNTED_COWBOYS_ATLAS_KEY.
+ */
+export const BRAWLERS_ATLAS_KEY = 'brawlers-atlas';
+export const BRAWLER_SPRITE_SIZE = COWBOY_SPRITE_SIZE;
+export const BRAWLER_TEXTURE_KEY = 'brawler';
+
+export const DYNAMITERS_ATLAS_KEY = 'dynamiters-atlas';
+export const DYNAMITER_SPRITE_SIZE = COWBOY_SPRITE_SIZE;
+export const DYNAMITER_TEXTURE_KEY = 'dynamiter';
+
+/**
  * Phase 23: threat factions for raid events. Fictional names by deliberate
  * design (Outlaws/Rustlers/Coyotes), not standing in for any real group.
  */
@@ -1059,6 +1167,39 @@ export const RAIDER_DEFINITIONS: Record<RaiderFaction, RaiderDefinition> = {
     targeting: 'farm-preferred',
   },
 };
+
+/**
+ * Phase 58: factions vs. player unit kinds. Default 1.0 (no relationship);
+ * only entries that deviate from that are listed per faction below. Picked
+ * asymmetry (all within the 0.75x-1.5x band the phase spec called for):
+ *  - Outlaws (tanky, any-target generalists) shrug off plain Cowboy fire
+ *    (0.85x) but a Brawler's fists count double against them (1.4x) - the
+ *    "armored generalist is weak to raw melee power" read.
+ *  - Rustlers (cattle thieves, prefer farm buildings) are the squishiest
+ *    against a Dynamiter's splash (1.35x) - already the least tanky raider
+ *    alongside Coyotes, and a lobbed charge into a herd-thinning raid reads
+ *    right thematically too.
+ *  - Coyotes (fast/fragile wildlife) take extra Dynamiter splash (1.3x) - a
+ *    wide-area weapon compensates for how hard a fast, scattering target is
+ *    to land a single well-aimed Cowboy/Brawler hit on - but are NOT given
+ *    any explicit Brawler resistance bonus here: their real counter to a
+ *    slow melee unit is the mobility already implicit in
+ *    RAIDER_DEFINITIONS.speedPxPerSec (75px/s vs. Outlaws/Rustlers' 50px/s) -
+ *    a Coyote that wants to avoid a Brawler can simply outrun it, which is a
+ *    fact about movement, not a damage multiplier to fake here.
+ * A camp's own `faction` field indexes this table identically to a raider's,
+ * so a unit fighting a Raider Camp gets the exact same counter relationships.
+ */
+export const FACTION_UNIT_DAMAGE_MULTIPLIER: Record<RaiderFaction, Partial<Record<UnitKind, number>>> = {
+  [RaiderFaction.Outlaws]: { cowboy: 0.85, brawler: 1.4 },
+  [RaiderFaction.Rustlers]: { dynamiter: 1.35 },
+  [RaiderFaction.Coyotes]: { dynamiter: 1.3 },
+};
+
+/** Looks up FACTION_UNIT_DAMAGE_MULTIPLIER, defaulting to 1.0 (no counter relationship) for any faction/kind pair not explicitly listed above. */
+export function getFactionUnitDamageMultiplier(faction: RaiderFaction, kind: UnitKind): number {
+  return FACTION_UNIT_DAMAGE_MULTIPLIER[faction][kind] ?? 1;
+}
 
 /**
  * Phase 33: one small icon per resource for the redesigned HUD panel. Its own
@@ -1191,6 +1332,12 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Barracks) {
     parts.push(`Cowboys: $${COWBOY_TRAIN_COST} each, up to ${COWBOY_MAX_PER_BARRACKS}`);
+    parts.push(
+      `Brawlers: $${BRAWLER_TRAIN_COST} + ${formatResourceMap(BRAWLER_TRAIN_MATERIALS)} each, up to ${BRAWLER_MAX_PER_BARRACKS}`,
+    );
+    parts.push(
+      `Dynamiters: $${DYNAMITER_TRAIN_COST} + ${formatResourceMap(DYNAMITER_TRAIN_MATERIALS)} each, up to ${DYNAMITER_MAX_PER_BARRACKS}`,
+    );
   }
   if (definition.type === BuildingType.Horsery) {
     parts.push(`Cowboys on Horse: $${MOUNTED_COWBOY_TRAIN_COST} each, up to ${MOUNTED_COWBOY_MAX_PER_HORSERY}`);

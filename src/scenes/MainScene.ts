@@ -1,5 +1,10 @@
 import Phaser from 'phaser';
 import {
+  BRAWLER_DAMAGE,
+  BRAWLER_MAX_HP,
+  BRAWLER_MAX_PER_BARRACKS,
+  BRAWLER_RANGE_TILES,
+  BRAWLER_WALK_SPEED_PX_PER_SEC,
   CAMERA_KEYBOARD_PAN_SPEED_PX_PER_SEC,
   CAMERA_MAX_ZOOM,
   CAMERA_MIN_ZOOM,
@@ -8,12 +13,19 @@ import {
   CATTLE_DISEASE_DURATION_MIN_SECONDS,
   COWBOY_DAMAGE,
   COWBOY_MAX_HP,
+  COWBOY_MAX_PER_BARRACKS,
   COWBOY_RANGE_TILES,
   DAY_PHASE_SECONDS,
   DROUGHT_DURATION_MAX_SECONDS,
   DROUGHT_DURATION_MIN_SECONDS,
   DUST_STORM_DURATION_MAX_SECONDS,
   DUST_STORM_DURATION_MIN_SECONDS,
+  DYNAMITER_DAMAGE,
+  DYNAMITER_MAX_HP,
+  DYNAMITER_RANGE_TILES,
+  DYNAMITER_SPLASH_DAMAGE,
+  DYNAMITER_SPLASH_RADIUS_TILES,
+  DYNAMITER_WALK_SPEED_PX_PER_SEC,
   GOLD_RUSH_DURATION_MAX_SECONDS,
   GOLD_RUSH_DURATION_MIN_SECONDS,
   MAP_HEIGHT_TILES,
@@ -79,6 +91,8 @@ import {
   AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
+  BRAWLERS_ATLAS_KEY,
+  BRAWLER_TEXTURE_KEY,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingCategory,
@@ -86,6 +100,8 @@ import {
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  DYNAMITERS_ATLAS_KEY,
+  DYNAMITER_TEXTURE_KEY,
   MARKETABLE_RESOURCE_KEYS,
   MOUNTED_COWBOYS_ATLAS_KEY,
   MOUNTED_COWBOY_SPRITE_HEIGHT,
@@ -100,12 +116,15 @@ import {
   RaiderDefinition,
   RaiderFaction,
   ResourceKey,
+  UnitKind,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
   formatResourceMap,
+  getFactionUnitDamageMultiplier,
+  getUnitHpArray,
   getWorkersRequired,
   isLinePlacementBuilding,
   raiderCampTextureKey,
@@ -518,21 +537,102 @@ interface Raider {
  */
 /**
  * Phase 28: the discriminant that lets a single CombatUnit type/tracking
- * array/selection system serve two unit kinds. Kept as a plain string union
- * plus one small lookup table (UNIT_KIND_CONFIG below) rather than a generic
- * "unit type registry" - only walk speed actually varies per kind in this
- * scene (combat range/damage are shared, per the phase spec), so that's all
- * the table carries.
+ * array/selection system serve every unit kind (Phase 58 adds Brawler/
+ * Dynamiter to the original Cowboy/Cowboy-on-Horse pair - the type itself now
+ * lives in buildingConfig.ts, shared with PlacedBuilding's per-kind field
+ * pairs and TrainingQueueJob.kind, rather than being redeclared here). Kept
+ * as a plain string union plus one small lookup table (UNIT_KIND_CONFIG
+ * below) rather than a generic "unit type registry" class.
+ *
+ * Phase 58: range/damage/splash are now genuinely per-kind too (previously
+ * only walk speed/max HP varied - Cowboy and Cowboy-on-Horse fought
+ * identically). This table is the "counters actually exist" core of the
+ * phase: every combat call site below reads a unit's range/damage from here
+ * instead of the old bare COWBOY_RANGE_TILES/COWBOY_DAMAGE constants, so a
+ * Brawler's melee range and a Dynamiter's splash are genuine per-unit
+ * properties rather than a single shared rule with two exceptions bolted on.
  */
-type UnitKind = 'cowboy' | 'cowboyOnHorse';
-
 interface UnitKindConfig {
   walkSpeedPxPerSec: number;
+  maxHp: number;
+  rangeTiles: number;
+  damage: number;
+  /** Dynamiter only: every other live raider/camp within this many tiles of the primary target also takes splashDamage (scaled by that target's own faction multiplier), on top of the primary hit. */
+  splashRadiusTiles?: number;
+  splashDamage?: number;
 }
 
 const UNIT_KIND_CONFIG: Record<UnitKind, UnitKindConfig> = {
-  cowboy: { walkSpeedPxPerSec: COWBOY_WALK_SPEED_PX_PER_SEC },
-  cowboyOnHorse: { walkSpeedPxPerSec: MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC },
+  cowboy: {
+    walkSpeedPxPerSec: COWBOY_WALK_SPEED_PX_PER_SEC,
+    maxHp: COWBOY_MAX_HP,
+    rangeTiles: COWBOY_RANGE_TILES,
+    damage: COWBOY_DAMAGE,
+  },
+  // Cowboy on Horse keeps the plain Cowboy's exact firepower (range/damage) -
+  // only speed/HP differ, per the original Phase 28 design - so it reuses the
+  // same constants rather than declaring its own equal-but-separate ones.
+  cowboyOnHorse: {
+    walkSpeedPxPerSec: MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
+    maxHp: MOUNTED_COWBOY_MAX_HP,
+    rangeTiles: COWBOY_RANGE_TILES,
+    damage: COWBOY_DAMAGE,
+  },
+  brawler: {
+    walkSpeedPxPerSec: BRAWLER_WALK_SPEED_PX_PER_SEC,
+    maxHp: BRAWLER_MAX_HP,
+    rangeTiles: BRAWLER_RANGE_TILES,
+    damage: BRAWLER_DAMAGE,
+  },
+  dynamiter: {
+    walkSpeedPxPerSec: DYNAMITER_WALK_SPEED_PX_PER_SEC,
+    maxHp: DYNAMITER_MAX_HP,
+    rangeTiles: DYNAMITER_RANGE_TILES,
+    damage: DYNAMITER_DAMAGE,
+    splashRadiusTiles: DYNAMITER_SPLASH_RADIUS_TILES,
+    splashDamage: DYNAMITER_SPLASH_DAMAGE,
+  },
+};
+
+/**
+ * Phase 58: per-kind sprite/atlas lookup so a single spawnUnitOfKind can
+ * create any of the four kinds instead of two near-duplicate
+ * spawnCowboyUnit/spawnMountedCowboyUnit functions. Brawler/Dynamiter share
+ * Cowboy's square small-unit depth band (COWBOY_SPRITE_DEPTH); only
+ * Cowboy-on-Horse's non-square frame needs its own slot-layout function
+ * (getMountedCowboySlotPosition) - the other three share
+ * getSquareUnitSlotPosition.
+ */
+interface UnitVisualConfig {
+  atlasKey: string;
+  textureKey: string;
+  depth: number;
+}
+
+const UNIT_VISUAL_CONFIG: Record<UnitKind, UnitVisualConfig> = {
+  cowboy: { atlasKey: COWBOYS_ATLAS_KEY, textureKey: COWBOY_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
+  cowboyOnHorse: {
+    atlasKey: MOUNTED_COWBOYS_ATLAS_KEY,
+    textureKey: MOUNTED_COWBOY_TEXTURE_KEY,
+    depth: MOUNTED_COWBOY_SPRITE_DEPTH,
+  },
+  brawler: { atlasKey: BRAWLERS_ATLAS_KEY, textureKey: BRAWLER_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
+  dynamiter: { atlasKey: DYNAMITERS_ATLAS_KEY, textureKey: DYNAMITER_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
+};
+
+/**
+ * Phase 58: a Barracks now trains three kinds sharing one square slot grid
+ * (getSquareUnitSlotPosition) - without an offset, a building's first-trained
+ * Brawler would render on top of its first-trained Cowboy (both "index 0").
+ * Reserves a fixed block of slots per kind, sized to that kind's own
+ * per-Barracks cap, so slots never collide regardless of training order.
+ * Cowboy-on-Horse isn't listed - Horsery only ever trains that one kind, so
+ * its slot index never needs an offset.
+ */
+const UNIT_KIND_SLOT_OFFSET: Partial<Record<UnitKind, number>> = {
+  cowboy: 0,
+  brawler: COWBOY_MAX_PER_BARRACKS,
+  dynamiter: COWBOY_MAX_PER_BARRACKS + BRAWLER_MAX_PER_BARRACKS,
 };
 
 /** Phase 45: a snapshot of where/until a building's minimap dot should flash after taking raid damage, kept independent of the building still existing so a killing blow's flash can outlive removeDestroyedBuildings() deleting the record. */
@@ -2139,29 +2239,31 @@ export class MainScene extends Phaser.Scene {
   /**
    * Phase 52: the load-time counterpart to placeBuildingAt. Builds the exact
    * same visual (createVisualForBuilding) but additionally re-spawns any
-   * garrisoned Cowboy/Cowboy-on-Horse units the restored building's
-   * cowboyHp/mountedCowboyHp arrays record - a freshly-placed building can
-   * never have these (see placeBuildingAt's comment), but a loaded one can.
-   * Spawned at the unit's static home slot (getCowboySlotPosition/
-   * getMountedCowboySlotPosition), not wherever it was standing when the save
-   * was made - see persistence.ts's doc comment for why live unit position is
-   * out of scope for this phase.
+   * garrisoned units the restored building's per-kind HP arrays record - a
+   * freshly-placed building can never have these (see placeBuildingAt's
+   * comment), but a loaded one can. Spawned at the unit's static home slot
+   * (spawnUnitOfKind), not wherever it was standing when the save was made -
+   * see persistence.ts's doc comment for why live unit position is out of
+   * scope for this phase. Phase 58: a Barracks now has three garrisoned kinds
+   * to restore instead of one.
    */
   private restoreBuildingVisual(building: PlacedBuilding): void {
     this.createVisualForBuilding(building);
 
+    const restoreKind = (kind: UnitKind, hpArray: number[]) => {
+      for (let index = 0; index < hpArray.length; index++) {
+        if (hpArray[index] > 0) {
+          this.spawnUnitOfKind(building, kind, index);
+        }
+      }
+    };
+
     if (building.type === BuildingType.Barracks) {
-      for (let index = 0; index < building.cowboyHp.length; index++) {
-        if (building.cowboyHp[index] > 0) {
-          this.spawnCowboyUnit(building, index);
-        }
-      }
+      restoreKind('cowboy', building.cowboyHp);
+      restoreKind('brawler', building.brawlerHp);
+      restoreKind('dynamiter', building.dynamiterHp);
     } else if (building.type === BuildingType.Horsery) {
-      for (let index = 0; index < building.mountedCowboyHp.length; index++) {
-        if (building.mountedCowboyHp[index] > 0) {
-          this.spawnMountedCowboyUnit(building, index);
-        }
-      }
+      restoreKind('cowboyOnHorse', building.mountedCowboyHp);
     }
   }
 
@@ -2531,7 +2633,7 @@ export class MainScene extends Phaser.Scene {
       if (hp === null) {
         continue;
       }
-      const maxHp = unit.kind === 'cowboy' ? COWBOY_MAX_HP : MOUNTED_COWBOY_MAX_HP;
+      const maxHp = UNIT_KIND_CONFIG[unit.kind].maxHp;
       if (hp >= maxHp) {
         continue;
       }
@@ -2556,8 +2658,7 @@ export class MainScene extends Phaser.Scene {
     if (!building) {
       return null;
     }
-    const hpArray = unit.kind === 'cowboy' ? building.cowboyHp : building.mountedCowboyHp;
-    return hpArray[unit.index] ?? null;
+    return getUnitHpArray(building, unit.kind)[unit.index] ?? null;
   }
 
   /**
@@ -3140,30 +3241,37 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setupCowboyVisuals(): void {
+    // Phase 24: training used to destroy-and-recreate the Barracks' whole cowboy
+    // sprite set (redrawCowboySprites), which was harmless while position was
+    // purely derived from index. Now that a unit can carry a live position and
+    // an in-flight move order, destroying siblings on every train would wipe
+    // that out - so every one of these only ever ADDS the one newly trained
+    // unit (its slot is always that kind's own hp array length - 1, the index
+    // gameState's trainX just pushed).
     gameEvents.on('cowboy-trained', (building: PlacedBuilding) => {
-      // Phase 24: training used to destroy-and-recreate the Barracks' whole cowboy
-      // sprite set (redrawCowboySprites), which was harmless while position was
-      // purely derived from index. Now that a Cowboy can carry a live position and
-      // an in-flight move order, destroying siblings on every train would wipe
-      // that out - so this only ever ADDS the one newly trained unit (its slot is
-      // always cowboyHp.length - 1, the index gameState.trainCowboy just pushed).
-      const unit = this.spawnCowboyUnit(building, building.cowboyHp.length - 1);
+      const unit = this.spawnUnitOfKind(building, 'cowboy', building.cowboyHp.length - 1);
       this.sendUnitToRallyPointIfSet(building, unit);
     });
-
-    // Same "only add the newly trained one" rule as 'cowboy-trained' above (Phase 24).
     gameEvents.on('mounted-cowboy-trained', (building: PlacedBuilding) => {
-      const unit = this.spawnMountedCowboyUnit(building, building.mountedCowboyHp.length - 1);
+      const unit = this.spawnUnitOfKind(building, 'cowboyOnHorse', building.mountedCowboyHp.length - 1);
+      this.sendUnitToRallyPointIfSet(building, unit);
+    });
+    // Phase 58: same "only add the newly trained one" rule as the two above.
+    gameEvents.on('brawler-trained', (building: PlacedBuilding) => {
+      const unit = this.spawnUnitOfKind(building, 'brawler', building.brawlerHp.length - 1);
+      this.sendUnitToRallyPointIfSet(building, unit);
+    });
+    gameEvents.on('dynamiter-trained', (building: PlacedBuilding) => {
+      const unit = this.spawnUnitOfKind(building, 'dynamiter', building.dynamiterHp.length - 1);
       this.sendUnitToRallyPointIfSet(building, unit);
     });
   }
 
   /**
-   * Phase 53: only wired to the 'cowboy-trained'/'mounted-cowboy-trained'
-   * spawn path above, deliberately NOT to restoreBuildingVisual's load-time
-   * respawn - a loaded save's already-garrisoned units should reappear
-   * standing at their slot, not immediately re-march to a rally point on
-   * every single load.
+   * Phase 53: only wired to the '*-trained' spawn paths above, deliberately
+   * NOT to restoreBuildingVisual's load-time respawn - a loaded save's
+   * already-garrisoned units should reappear standing at their slot, not
+   * immediately re-march to a rally point on every single load.
    */
   private sendUnitToRallyPointIfSet(building: PlacedBuilding, unit: CombatUnit): void {
     if (building.rallyPoint) {
@@ -3171,50 +3279,46 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  private spawnCowboyUnit(building: PlacedBuilding, index: number): CombatUnit {
-    const slot = this.getCowboySlotPosition(building, index);
-    const image = this.add
-      .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
-      .setDepth(COWBOY_SPRITE_DEPTH);
+  /**
+   * Phase 58: replaces the old spawnCowboyUnit/spawnMountedCowboyUnit pair -
+   * a single function driven by UNIT_VISUAL_CONFIG (atlas/texture/depth) and
+   * UNIT_KIND_SLOT_OFFSET (so Brawler/Dynamiter don't render on top of a
+   * Barracks' Cowboys) rather than two near-duplicate functions plus two more
+   * for the two new kinds.
+   */
+  private spawnUnitOfKind(building: PlacedBuilding, kind: UnitKind, index: number): CombatUnit {
+    const visual = UNIT_VISUAL_CONFIG[kind];
+    const slot =
+      kind === 'cowboyOnHorse'
+        ? this.getMountedCowboySlotPosition(building, index)
+        : this.getSquareUnitSlotPosition(building, (UNIT_KIND_SLOT_OFFSET[kind] ?? 0) + index);
+    const image = this.add.image(slot.x, slot.y, visual.atlasKey, visual.textureKey).setDepth(visual.depth);
     const unit: CombatUnit = {
       id: `unit-${this.unitIdCounter++}`,
       image,
       barracksId: building.id,
       index,
       moveTween: null,
-      kind: 'cowboy',
+      kind,
       attackTarget: null,
     };
     this.cowboyUnits.push(unit);
     return unit;
   }
 
-  /** Mirrors spawnCowboyUnit exactly, spawning at a Horsery's mounted-slot layout and tagging the unit 'cowboyOnHorse'. */
-  private spawnMountedCowboyUnit(building: PlacedBuilding, index: number): CombatUnit {
-    const slot = this.getMountedCowboySlotPosition(building, index);
-    const image = this.add
-      .image(slot.x, slot.y, MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_TEXTURE_KEY)
-      .setDepth(MOUNTED_COWBOY_SPRITE_DEPTH);
-    const unit: CombatUnit = {
-      id: `unit-${this.unitIdCounter++}`,
-      image,
-      barracksId: building.id,
-      index,
-      moveTween: null,
-      kind: 'cowboyOnHorse',
-      attackTarget: null,
-    };
-    this.cowboyUnits.push(unit);
-    return unit;
-  }
-
-  /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
-  private getCowboySlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
+  /**
+   * Same deterministic row/column slot layout the original Cowboy-only
+   * version used (still named after "square" rather than "cowboy" since
+   * Phase 58 has three square kinds sharing it now: Cowboy, Brawler,
+   * Dynamiter - all COWBOY_SPRITE_SIZE). `slotIndex` is the caller's already
+   * kind-offset index (see UNIT_KIND_SLOT_OFFSET), not a raw per-kind index.
+   */
+  private getSquareUnitSlotPosition(building: PlacedBuilding, slotIndex: number): { x: number; y: number } {
     const { width, height } = BUILDING_DEFINITIONS[building.type].size;
     const footprintPxWidth = width * TILE_SIZE;
     const columns = Math.max(1, Math.floor(footprintPxWidth / COWBOY_SLOT_STEP));
-    const col = index % columns;
-    const row = Math.floor(index / columns);
+    const col = slotIndex % columns;
+    const row = Math.floor(slotIndex / columns);
 
     const rowPxWidth = columns * COWBOY_SLOT_STEP - COWBOY_SLOT_GAP;
     const startX =
@@ -3227,7 +3331,7 @@ export class MainScene extends Phaser.Scene {
     };
   }
 
-  /** Same deterministic row/column slot layout as getCowboySlotPosition, but stepped by MOUNTED_COWBOY_SLOT_STEP_X/Y since its sprite frame isn't square. */
+  /** Same deterministic row/column slot layout as getSquareUnitSlotPosition, but stepped by MOUNTED_COWBOY_SLOT_STEP_X/Y since its sprite frame isn't square. */
   private getMountedCowboySlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
     const { width, height } = BUILDING_DEFINITIONS[building.type].size;
     const footprintPxWidth = width * TILE_SIZE;
@@ -3249,16 +3353,16 @@ export class MainScene extends Phaser.Scene {
   /**
    * A unit is combat-eligible/selectable only while both its training
    * building and its own HP slot are alive - dead/destroyed either way, it no
-   * longer defends. Branches on `kind` to read the correct parallel HP array
-   * (Barracks' cowboyHp vs Horsery's mountedCowboyHp) since the two never
-   * share an index space.
+   * longer defends. Phase 58: reads the correct parallel HP array via
+   * buildingConfig's getUnitHpArray instead of a two-way kind ternary, now
+   * that there are four kinds/arrays to pick from.
    */
   private isCowboyUnitAlive(unit: CombatUnit): boolean {
     const building = getBuildingById(unit.barracksId);
     if (!building || building.hp <= 0) {
       return false;
     }
-    const hp = unit.kind === 'cowboy' ? building.cowboyHp[unit.index] : building.mountedCowboyHp[unit.index];
+    const hp = getUnitHpArray(building, unit.kind)[unit.index];
     return (hp ?? 0) > 0;
   }
 
@@ -3528,14 +3632,16 @@ export class MainScene extends Phaser.Scene {
   /**
    * Shared by issueUnitAttackOrder (immediate feedback the moment the order is
    * given) and resolveUnitAttackOrders (the per-combat-tick refresh): if the
-   * unit is already within COWBOY_RANGE_TILES of the target position, stop
-   * closing the distance and hold position so resolveCowboyFire can start
-   * focus-firing it; otherwise (re)issue a move order toward it. Generalized
-   * (Phase 57) from a Raider-only version to a plain {x,y} since neither a
-   * raider's live position nor a camp's static one need any other field here.
+   * unit is already within its own kind's range (UNIT_KIND_CONFIG, Phase 58 -
+   * a Brawler needs to walk to melee range 1, a Dynamiter can hold much
+   * farther back) of the target position, stop closing the distance and hold
+   * position so resolveCowboyFire can start focus-firing it; otherwise
+   * (re)issue a move order toward it. Generalized (Phase 57) from a
+   * Raider-only version to a plain {x,y} since neither a raider's live
+   * position nor a camp's static one need any other field here.
    */
   private approachOrEngageTarget(unit: CombatUnit, position: { x: number; y: number }): void {
-    const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
+    const rangePx = UNIT_KIND_CONFIG[unit.kind].rangeTiles * TILE_SIZE;
     const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, position.x, position.y);
     if (distance <= rangePx) {
       unit.moveTween?.stop();
@@ -4620,16 +4726,17 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Every living unit (Cowboy or Cowboy-on-Horse - this.cowboyUnits holds
-   * both kinds, Phase 28) fires once per combat tick at its own nearest
-   * in-range raider - not shared/coordinated targeting. Phase 24: reads each
-   * unit's live image position instead of re-deriving a Barracks slot, so a
-   * unit moved away from its training building still defends from where it
-   * stands. Range/damage are shared across both kinds (only speed/HP differ,
-   * per the phase spec), so no kind-branching is needed here.
+   * Every living unit (this.cowboyUnits holds all four kinds) fires once per
+   * combat tick at its own nearest in-range raider - not shared/coordinated
+   * targeting. Phase 24: reads each unit's live image position instead of
+   * re-deriving a Barracks slot, so a unit moved away from its training
+   * building still defends from where it stands. Phase 58: range is now
+   * genuinely per-unit (UNIT_KIND_CONFIG) rather than one shared
+   * COWBOY_RANGE_TILES, and damage application is delegated to
+   * applyUnitDamage so a Dynamiter's splash and every kind's faction
+   * counter-multiplier apply uniformly regardless of who's firing.
    */
   private resolveCowboyFire(): void {
-    const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
     // Phase 34: shots are collected first and sounded once, so the audio layer
     // can decide between N staggered gunshots and a single volley voice
     // (playCombatVolley) with the full shot count in hand.
@@ -4640,20 +4747,13 @@ export class MainScene extends Phaser.Scene {
       if (!this.isCowboyUnitAlive(unit)) {
         continue;
       }
+      const rangePx = UNIT_KIND_CONFIG[unit.kind].rangeTiles * TILE_SIZE;
       const position = { x: unit.image.x, y: unit.image.y };
       const target = this.resolveUnitFireTarget(unit, position, rangePx);
       if (!target) {
         continue;
       }
-      // Phase 57: same damage-application pattern for either kind - a plain
-      // subtract-then-check-for-death, just against a Raider's local .hp or a
-      // RaiderCamp's module-owned hp (via damageCamp/state/raiderCamps.ts).
-      if (target.kind === 'raider') {
-        target.raider.hp -= COWBOY_DAMAGE;
-        this.spawnCowboyShotVisual(position, target.raider.image);
-      } else {
-        this.damageCamp(target.camp, COWBOY_DAMAGE, position);
-      }
+      this.applyUnitDamage(unit, target, position);
       shots.push(position);
       anyHit = true;
     }
@@ -4664,6 +4764,82 @@ export class MainScene extends Phaser.Scene {
       // throttle the rest anyway and they'd only muddy the volley.
       const first = shots[0];
       playWorldSound('raiderHit', first.x, first.y);
+    }
+  }
+
+  /**
+   * Phase 58: the single damage-application step every firing unit (Cowboy/
+   * Cowboy-on-Horse/Brawler/Dynamiter) routes through - resolves the primary
+   * target's faction counter-multiplier (getFactionUnitDamageMultiplier),
+   * applies it to the primary hit exactly like the old bare `-= COWBOY_DAMAGE`
+   * did, and - only for a Dynamiter - also lobs reduced splash damage at
+   * every other live raider/camp within DYNAMITER_SPLASH_RADIUS_TILES of the
+   * primary target's position (applyDynamiterSplash), each scaled by ITS OWN
+   * faction's multiplier rather than the primary target's.
+   */
+  private applyUnitDamage(
+    unit: CombatUnit,
+    target: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp },
+    shooterPosition: { x: number; y: number },
+  ): void {
+    const config = UNIT_KIND_CONFIG[unit.kind];
+    const primaryFaction = target.kind === 'raider' ? target.raider.faction : target.camp.faction;
+    const primaryDamage = config.damage * getFactionUnitDamageMultiplier(primaryFaction, unit.kind);
+
+    if (target.kind === 'raider') {
+      target.raider.hp -= primaryDamage;
+      this.spawnCowboyShotVisual(shooterPosition, target.raider.image);
+    } else {
+      this.damageCamp(target.camp, primaryDamage, shooterPosition);
+    }
+
+    if (unit.kind === 'dynamiter' && config.splashRadiusTiles && config.splashDamage) {
+      const centerX = target.kind === 'raider' ? target.raider.image.x : target.camp.x;
+      const centerY = target.kind === 'raider' ? target.raider.image.y : target.camp.y;
+      this.applyDynamiterSplash(centerX, centerY, target, config.splashRadiusTiles, config.splashDamage);
+    }
+  }
+
+  /**
+   * Phase 58: AoE half of a Dynamiter's hit - every OTHER live raider/camp
+   * (the primary target already took its full-strength hit in applyUnitDamage)
+   * within radiusTiles of the primary target's position takes baseSplashDamage
+   * scaled by ITS OWN faction's getFactionUnitDamageMultiplier (a splash
+   * landing among a mixed group should counter each target individually, not
+   * uniformly apply the primary target's multiplier to everyone caught in it).
+   */
+  private applyDynamiterSplash(
+    centerX: number,
+    centerY: number,
+    primary: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp },
+    radiusTiles: number,
+    baseSplashDamage: number,
+  ): void {
+    const radiusPx = radiusTiles * TILE_SIZE;
+
+    for (const raider of this.raiders) {
+      if (raider.hp <= 0 || (primary.kind === 'raider' && raider.id === primary.raider.id)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(centerX, centerY, raider.image.x, raider.image.y);
+      if (distance > radiusPx) {
+        continue;
+      }
+      raider.hp -= baseSplashDamage * getFactionUnitDamageMultiplier(raider.faction, 'dynamiter');
+    }
+
+    for (const camp of getRaiderCamps()) {
+      if (primary.kind === 'camp' && camp.id === primary.camp.id) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(centerX, centerY, camp.x, camp.y);
+      if (distance > radiusPx) {
+        continue;
+      }
+      this.damageCamp(camp, baseSplashDamage * getFactionUnitDamageMultiplier(camp.faction, 'dynamiter'), {
+        x: centerX,
+        y: centerY,
+      });
     }
   }
 

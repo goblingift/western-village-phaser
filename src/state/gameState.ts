@@ -2,6 +2,10 @@ import {
   BANK_INTEREST_RATE,
   BANK_TRANSACTION_AMOUNT,
   BASE_STORAGE_CAP,
+  BRAWLER_MAX_HP,
+  BRAWLER_MAX_PER_BARRACKS,
+  BRAWLER_TRAIN_COST,
+  BRAWLER_TRAIN_TICKS,
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
@@ -12,6 +16,10 @@ import {
   DEMOLISH_REFUND_FRACTION,
   Difficulty,
   DIFFICULTY_SETTINGS,
+  DYNAMITER_MAX_HP,
+  DYNAMITER_MAX_PER_BARRACKS,
+  DYNAMITER_TRAIN_COST,
+  DYNAMITER_TRAIN_TICKS,
   ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
   GRAVEL_MAX_DISTANCE_TILES,
@@ -45,8 +53,10 @@ import {
 } from '../config/constants';
 import { OBJECTIVE_DEFINITIONS, OBJECTIVE_DEFINITIONS_BY_ID, ObjectiveSnapshot, formatObjectiveReward } from '../config/objectives';
 import {
+  BRAWLER_TRAIN_MATERIALS,
   BUILDING_DEFINITIONS,
   BuildingType,
+  DYNAMITER_TRAIN_MATERIALS,
   HOUSE_TIER_CONFIG,
   HarvestConfig,
   HouseTier,
@@ -61,8 +71,12 @@ import {
   SupermarketSellableKey,
   TradeOrderConfig,
   TrainingQueueJob,
+  UnitKind,
   WorkerPriority,
+  getUnitCount,
+  getUnitHpArray,
   getWorkersRequired,
+  setUnitCount,
 } from '../config/buildingConfig';
 import { TileType, distanceToNearestTileType, distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
 import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
@@ -1028,6 +1042,10 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     cowboyHp: [],
     mountedCowboyCount: 0,
     mountedCowboyHp: [],
+    brawlerCount: 0,
+    brawlerHp: [],
+    dynamiterCount: 0,
+    dynamiterHp: [],
     bankBalance: 0,
     disabled: false,
     priority: 'normal',
@@ -1310,29 +1328,20 @@ export function repairBuilding(buildingId: string): boolean {
  * collapsed. Only the count is decremented, which is what the per-building
  * training cap reads - so a lost cowboy frees a slot to train a replacement.
  */
-export function damageUnit(
-  buildingId: string,
-  kind: 'cowboy' | 'cowboyOnHorse',
-  index: number,
-  amount: number,
-): number {
+export function damageUnit(buildingId: string, kind: UnitKind, index: number, amount: number): number {
   const building = buildingsById.get(buildingId);
   if (!building) {
     return 0;
   }
 
-  const hpArray = kind === 'cowboy' ? building.cowboyHp : building.mountedCowboyHp;
+  const hpArray = getUnitHpArray(building, kind);
   if (index < 0 || index >= hpArray.length || hpArray[index] <= 0) {
     return 0;
   }
 
   hpArray[index] = Math.max(0, hpArray[index] - amount);
   if (hpArray[index] === 0) {
-    if (kind === 'cowboy') {
-      building.cowboyCount = Math.max(0, building.cowboyCount - 1);
-    } else {
-      building.mountedCowboyCount = Math.max(0, building.mountedCowboyCount - 1);
-    }
+    setUnitCount(building, kind, Math.max(0, getUnitCount(building, kind) - 1));
   }
 
   return hpArray[index];
@@ -1500,6 +1509,75 @@ export function trainMountedCowboy(buildingId: string): boolean {
   return true;
 }
 
+/** Returns false (without deducting anything) the moment any single required material falls short - all-or-nothing, matching placeBuilding's own materials gate. */
+function hasEnoughResourcesFor(materials: Partial<Record<ResourceKey, number>>): boolean {
+  return (Object.entries(materials) as [ResourceKey, number][]).every(([key, amount]) => resources[key] >= amount);
+}
+
+function deductResources(materials: Partial<Record<ResourceKey, number>>): void {
+  for (const [key, amount] of Object.entries(materials) as [ResourceKey, number][]) {
+    resources[key] -= amount;
+  }
+}
+
+/**
+ * Phase 58: Brawler training - same hard buy-gate shape as trainCowboy, but
+ * (per the phase spec's "cost accordingly (money + Phase 37 materials)")
+ * also gated on and deducting BRAWLER_TRAIN_MATERIALS alongside the money
+ * cost, both taken immediately at enqueue time like placeBuilding's own
+ * materials deduction.
+ */
+export function trainBrawler(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Barracks) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.brawlerCount + building.trainingQueue.length >= BRAWLER_MAX_PER_BARRACKS) {
+    return false;
+  }
+  if (money < BRAWLER_TRAIN_COST || !hasEnoughResourcesFor(BRAWLER_TRAIN_MATERIALS)) {
+    return false;
+  }
+
+  money -= BRAWLER_TRAIN_COST;
+  deductResources(BRAWLER_TRAIN_MATERIALS);
+  building.trainingQueue.push({ kind: 'brawler', remainingTicks: BRAWLER_TRAIN_TICKS });
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('resources-changed', { ...resources });
+
+  return true;
+}
+
+/** Mirrors trainBrawler exactly, gated on DYNAMITER_MAX_PER_BARRACKS/DYNAMITER_TRAIN_COST/DYNAMITER_TRAIN_MATERIALS instead. */
+export function trainDynamiter(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Barracks) {
+    return false;
+  }
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.dynamiterCount + building.trainingQueue.length >= DYNAMITER_MAX_PER_BARRACKS) {
+    return false;
+  }
+  if (money < DYNAMITER_TRAIN_COST || !hasEnoughResourcesFor(DYNAMITER_TRAIN_MATERIALS)) {
+    return false;
+  }
+
+  money -= DYNAMITER_TRAIN_COST;
+  deductResources(DYNAMITER_TRAIN_MATERIALS);
+  building.trainingQueue.push({ kind: 'dynamiter', remainingTicks: DYNAMITER_TRAIN_TICKS });
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('resources-changed', { ...resources });
+
+  return true;
+}
+
 /**
  * Phase 53: ticks every Barracks/Horsery's training queue once per production
  * tick. Only the job at the FRONT of a building's queue counts down - a
@@ -1509,9 +1587,11 @@ export function trainMountedCowboy(buildingId: string): boolean {
  * understaffed/upkeep-unpaid all simply pause progress rather than losing the
  * job or refunding it). A completed job spawns the unit exactly as
  * trainCowboy/trainMountedCowboy used to do inline before this phase (bump
- * the count, push starting HP, fire the same 'cowboy-trained'/
- * 'mounted-cowboy-trained' event MainScene already listens to for the visual)
- * - only the timing moved, not the spawn shape.
+ * the count, push starting HP, fire the matching '*-trained' event MainScene
+ * already listens to for the visual) - only the timing moved, not the spawn
+ * shape. Phase 58: generalized from a two-way if/else to a switch over all
+ * four UnitKinds via getUnitHpArray/setUnitCount - a single Barracks' queue
+ * can now mix cowboy/brawler/dynamiter jobs.
  */
 function runTrainingQueues(): void {
   for (const building of placedBuildings) {
@@ -1534,14 +1614,24 @@ function runTrainingQueues(): void {
     // slot (there is no cancel path today, but this is the correct point
     // regardless) shouldn't count toward the "Train N Cowboys" objective.
     totalUnitsTrained += 1;
-    if (job.kind === 'cowboy') {
-      building.cowboyCount += 1;
-      building.cowboyHp.push(COWBOY_MAX_HP);
-      gameEvents.emit('cowboy-trained', building);
-    } else {
-      building.mountedCowboyCount += 1;
-      building.mountedCowboyHp.push(MOUNTED_COWBOY_MAX_HP);
-      gameEvents.emit('mounted-cowboy-trained', building);
+    setUnitCount(building, job.kind, getUnitCount(building, job.kind) + 1);
+    switch (job.kind) {
+      case 'cowboy':
+        building.cowboyHp.push(COWBOY_MAX_HP);
+        gameEvents.emit('cowboy-trained', building);
+        break;
+      case 'cowboyOnHorse':
+        building.mountedCowboyHp.push(MOUNTED_COWBOY_MAX_HP);
+        gameEvents.emit('mounted-cowboy-trained', building);
+        break;
+      case 'brawler':
+        building.brawlerHp.push(BRAWLER_MAX_HP);
+        gameEvents.emit('brawler-trained', building);
+        break;
+      case 'dynamiter':
+        building.dynamiterHp.push(DYNAMITER_MAX_HP);
+        gameEvents.emit('dynamiter-trained', building);
+        break;
     }
   }
 }
