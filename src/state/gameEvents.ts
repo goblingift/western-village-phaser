@@ -96,6 +96,17 @@ export interface GameEventMap {
    * this is the "and now build the new ones" half.
    */
   'game-loaded': () => void;
+  /** Phase 53: fired by gameState's setRallyPoint/clearRallyPoint whenever a Barracks/Horsery's rally point changes; MainScene redraws the flag marker, BuildingInfoPanel re-renders if that building is selected. */
+  'rally-point-changed': (building: PlacedBuilding) => void;
+  /**
+   * Phase 53: BuildingInfoPanel's "Set Rally Point" button arms a one-shot
+   * "next qualifying right-click on the ground sets this building's rally
+   * point" mode - `buildingId` is which building will receive it, `null`
+   * disarms (fired again by MainScene itself once the click lands, or by
+   * cancellation paths mirroring how demolish-mode-changed is cancelled by
+   * placement/selection).
+   */
+  'rally-point-mode-changed': (buildingId: string | null) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

@@ -125,6 +125,7 @@ import {
   isGameOver,
   placeBuilding,
   runProductionTick,
+  setRallyPoint,
   tickTimer,
 } from '../state/gameState';
 
@@ -327,6 +328,20 @@ const HARVEST_RING_EMPTY_COLOR = 0xef5350;
 const HARVEST_RING_FILL_ALPHA = 0.08;
 
 /**
+ * Phase 53: Rally Points & Training Queue. A rally point is drawn as a tiny
+ * flag-on-a-pole (a Graphics primitive, not a texture - same
+ * minimal-footprint style as the harvest ring above) at depth just above the
+ * ground/vegetation but below buildings, since it marks a point ON the map
+ * rather than something units interact with directly.
+ */
+const RALLY_POINT_DEPTH = 6.5;
+const RALLY_POINT_POLE_COLOR = 0x5d4037;
+const RALLY_POINT_FLAG_COLOR = 0xff7043;
+const RALLY_POINT_POLE_HEIGHT_PX = 16;
+const RALLY_POINT_FLAG_WIDTH_PX = 10;
+const RALLY_POINT_FLAG_HEIGHT_PX = 7;
+
+/**
  * Phase 34: understaffed / upkeep-unpaid badges. These sit at the HP bar's
  * depth band (they answer the same question - "why isn't this building
  * working") but slightly above it so a damaged AND understaffed building shows
@@ -484,6 +499,11 @@ export class MainScene extends Phaser.Scene {
   private phaseRemainingDisplay = DAY_PHASE_SECONDS;
   private nightOverlay!: NightOverlay;
   private harvestRingGraphics!: Phaser.GameObjects.Graphics;
+  /** Phase 53: shared Graphics redrawn from scratch over every building with a rallyPoint set, mirroring connectionGraphics'/fenceLineGraphics' one-Graphics-per-redraw discipline rather than a GameObject per flag. */
+  private rallyPointGraphics!: Phaser.GameObjects.Graphics;
+  /** Phase 53: non-null while a "Set Rally Point" button has armed the next qualifying right-click to set that building's rally point instead of issuing a unit move/attack order. */
+  private rallyPointModeBuildingId: string | null = null;
+  private rallyPointModeHintText!: Phaser.GameObjects.Text;
   private statusBadgeGraphics!: Phaser.GameObjects.Graphics;
   private lastFootstepAt = 0;
   private animalSoundTimer: Phaser.Time.TimerEvent | null = null;
@@ -602,6 +622,7 @@ export class MainScene extends Phaser.Scene {
     this.setupHouseTierVisuals();
     this.setupCowboyVisuals();
     this.setupUnitControl();
+    this.setupRallyPoints();
     this.setupHotkeys();
     this.setupHpBarVisuals();
     this.setupStatusBadges();
@@ -2521,6 +2542,90 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Phase 53: Rally Points & Training Queue. The flag itself is drawn for
+   * every Barracks/Horsery that currently has a rallyPoint set (not just the
+   * selected one - unlike the harvest ring, a rally point is standing town
+   * state a player wants to see at a glance, not a per-selection preview).
+   * The "arm a pick" mode is a separate concern from drawing: it's a single
+   * scalar (rallyPointModeBuildingId) consumed by setupUnitControl's
+   * pointerup handler, with its own hint text mirroring
+   * cowboySelectionHintText's bottom-anchored style.
+   */
+  private setupRallyPoints(): void {
+    this.rallyPointGraphics = this.add.graphics().setDepth(RALLY_POINT_DEPTH);
+    this.rallyPointModeHintText = this.add
+      .text(VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT - 8, 'Right-click the ground to set the rally point', {
+        fontSize: '14px',
+        color: '#ffffff',
+        backgroundColor: '#2b1d12cc',
+        padding: { x: 6, y: 4 },
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(1000)
+      .setVisible(false);
+
+    gameEvents.on('rally-point-mode-changed', (buildingId: string | null) => {
+      this.rallyPointModeBuildingId = buildingId;
+      this.rallyPointModeHintText.setVisible(buildingId !== null);
+    });
+    gameEvents.on('rally-point-changed', () => this.redrawRallyPoints());
+    gameEvents.on('building-removed', () => this.redrawRallyPoints());
+    gameEvents.on('game-loaded', () => this.redrawRallyPoints());
+    gameEvents.on('game-reset', () => {
+      this.rallyPointGraphics.clear();
+      this.cancelRallyPointMode();
+    });
+    // A different building's info panel opening, entering placement mode, or
+    // entering demolish mode all cancel an armed pick - the same
+    // mode-exclusivity rule setupDemolishMode already applies to itself.
+    gameEvents.on('building-selected', (building: PlacedBuilding | null) => {
+      if (this.rallyPointModeBuildingId !== null && building?.id !== this.rallyPointModeBuildingId) {
+        this.cancelRallyPointMode();
+      }
+    });
+    gameEvents.on('select-building', () => this.cancelRallyPointMode());
+    gameEvents.on('demolish-mode-changed', (active: boolean) => {
+      if (active) {
+        this.cancelRallyPointMode();
+      }
+    });
+  }
+
+  private cancelRallyPointMode(): void {
+    if (this.rallyPointModeBuildingId === null) {
+      return;
+    }
+    this.rallyPointModeBuildingId = null;
+    this.rallyPointModeHintText.setVisible(false);
+    gameEvents.emit('rally-point-mode-changed', null);
+  }
+
+  private redrawRallyPoints(): void {
+    this.rallyPointGraphics.clear();
+    for (const building of getPlacedBuildings()) {
+      if (building.rallyPoint) {
+        this.drawRallyFlag(building.rallyPoint.x, building.rallyPoint.y);
+      }
+    }
+  }
+
+  private drawRallyFlag(x: number, y: number): void {
+    const topY = y - RALLY_POINT_POLE_HEIGHT_PX;
+    this.rallyPointGraphics.lineStyle(2, RALLY_POINT_POLE_COLOR, 1);
+    this.rallyPointGraphics.lineBetween(x, y, x, topY);
+    this.rallyPointGraphics.fillStyle(RALLY_POINT_FLAG_COLOR, 1);
+    this.rallyPointGraphics.fillTriangle(
+      x,
+      topY,
+      x,
+      topY + RALLY_POINT_FLAG_HEIGHT_PX,
+      x + RALLY_POINT_FLAG_WIDTH_PX,
+      topY + RALLY_POINT_FLAG_HEIGHT_PX / 2,
+    );
+  }
+
+  /**
    * Phase 34: the day/night cycle's visual side. The cycle itself is state
    * (gameState owns dayNumber/phase/elapsed and emits 'day-phase-changed');
    * this only reacts to it - darken the screen, light the windows, cool the
@@ -2886,21 +2991,36 @@ export class MainScene extends Phaser.Scene {
       // an in-flight move order, destroying siblings on every train would wipe
       // that out - so this only ever ADDS the one newly trained unit (its slot is
       // always cowboyHp.length - 1, the index gameState.trainCowboy just pushed).
-      this.spawnCowboyUnit(building, building.cowboyHp.length - 1);
+      const unit = this.spawnCowboyUnit(building, building.cowboyHp.length - 1);
+      this.sendUnitToRallyPointIfSet(building, unit);
     });
 
     // Same "only add the newly trained one" rule as 'cowboy-trained' above (Phase 24).
     gameEvents.on('mounted-cowboy-trained', (building: PlacedBuilding) => {
-      this.spawnMountedCowboyUnit(building, building.mountedCowboyHp.length - 1);
+      const unit = this.spawnMountedCowboyUnit(building, building.mountedCowboyHp.length - 1);
+      this.sendUnitToRallyPointIfSet(building, unit);
     });
   }
 
-  private spawnCowboyUnit(building: PlacedBuilding, index: number): void {
+  /**
+   * Phase 53: only wired to the 'cowboy-trained'/'mounted-cowboy-trained'
+   * spawn path above, deliberately NOT to restoreBuildingVisual's load-time
+   * respawn - a loaded save's already-garrisoned units should reappear
+   * standing at their slot, not immediately re-march to a rally point on
+   * every single load.
+   */
+  private sendUnitToRallyPointIfSet(building: PlacedBuilding, unit: CombatUnit): void {
+    if (building.rallyPoint) {
+      this.issueUnitMoveOrder(unit, building.rallyPoint.x, building.rallyPoint.y);
+    }
+  }
+
+  private spawnCowboyUnit(building: PlacedBuilding, index: number): CombatUnit {
     const slot = this.getCowboySlotPosition(building, index);
     const image = this.add
       .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
       .setDepth(COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({
+    const unit: CombatUnit = {
       id: `unit-${this.unitIdCounter++}`,
       image,
       barracksId: building.id,
@@ -2908,16 +3028,18 @@ export class MainScene extends Phaser.Scene {
       moveTween: null,
       kind: 'cowboy',
       attackTargetRaiderId: null,
-    });
+    };
+    this.cowboyUnits.push(unit);
+    return unit;
   }
 
   /** Mirrors spawnCowboyUnit exactly, spawning at a Horsery's mounted-slot layout and tagging the unit 'cowboyOnHorse'. */
-  private spawnMountedCowboyUnit(building: PlacedBuilding, index: number): void {
+  private spawnMountedCowboyUnit(building: PlacedBuilding, index: number): CombatUnit {
     const slot = this.getMountedCowboySlotPosition(building, index);
     const image = this.add
       .image(slot.x, slot.y, MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_TEXTURE_KEY)
       .setDepth(MOUNTED_COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({
+    const unit: CombatUnit = {
       id: `unit-${this.unitIdCounter++}`,
       image,
       barracksId: building.id,
@@ -2925,7 +3047,9 @@ export class MainScene extends Phaser.Scene {
       moveTween: null,
       kind: 'cowboyOnHorse',
       attackTargetRaiderId: null,
-    });
+    };
+    this.cowboyUnits.push(unit);
+    return unit;
   }
 
   /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
@@ -3040,6 +3164,19 @@ export class MainScene extends Phaser.Scene {
       const dragDistance = Math.sqrt(dx * dx + dy * dy);
 
       if (pointer.rightButtonReleased()) {
+        // Phase 53: an armed rally-point pick takes over this right-click
+        // entirely, ahead of the unit move/attack-order logic below - a
+        // qualifying click (not a right-drag pan past the threshold) sets the
+        // rally point and disarms; anything else (a pan) leaves the mode
+        // armed for a later attempt.
+        if (this.rallyPointModeBuildingId !== null) {
+          if (dragDistance <= CLICK_MOVE_THRESHOLD) {
+            setRallyPoint(this.rallyPointModeBuildingId, pointer.worldX, pointer.worldY);
+            gameEvents.emit('rally-point-mode-changed', null);
+          }
+          return;
+        }
+
         if (dragDistance > CLICK_MOVE_THRESHOLD || this.selectedUnits.length === 0) {
           return;
         }

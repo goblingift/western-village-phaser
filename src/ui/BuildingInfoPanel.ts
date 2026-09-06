@@ -33,6 +33,7 @@ import {
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
 import {
   buyAnimal,
+  clearRallyPoint,
   demolishBuilding,
   depositToBank,
   getGravelDistance,
@@ -56,6 +57,14 @@ const WORKER_PRIORITIES: WorkerPriority[] = ['high', 'normal', 'low'];
 export class BuildingInfoPanel {
   private panel: HTMLDivElement;
   private selected: PlacedBuilding | null = null;
+  /**
+   * Phase 53: mirrors MainScene's own rallyPointModeBuildingId (the source of
+   * truth for which right-click actually gets intercepted) purely so the
+   * "Set Rally Point"/"Cancel" button label reflects whether a pick is
+   * currently armed for this building - the panel never decides the mode
+   * itself, only requests/cancels it via the 'rally-point-mode-changed' event.
+   */
+  private rallyPointArmedFor: string | null = null;
 
   constructor(container: HTMLElement) {
     this.panel = document.createElement('div');
@@ -68,6 +77,11 @@ export class BuildingInfoPanel {
       this.render();
     });
     gameEvents.on('production-tick', () => this.render());
+    gameEvents.on('rally-point-changed', () => this.render());
+    gameEvents.on('rally-point-mode-changed', (buildingId: string | null) => {
+      this.rallyPointArmedFor = buildingId;
+      this.render();
+    });
 
     // Phase 31: a building can now vanish while its panel is open (raid kill
     // or bulldozer), so the panel drops any reference to a removed building
@@ -143,6 +157,12 @@ export class BuildingInfoPanel {
     const mountedCowboyText = isHorsery
       ? `Cowboys on Horse: ${this.selected.mountedCowboyCount}/${MOUNTED_COWBOY_MAX_PER_HORSERY}`
       : null;
+    // Phase 53: training is now queued rather than instant; see
+    // formatTrainingQueueText for why a later job's tick count never moves
+    // until it reaches the front.
+    const trainingQueueText = isBarracks || isHorsery ? this.formatTrainingQueueText(this.selected) : null;
+    const rallyPointText =
+      isBarracks || isHorsery ? `Rally Point: ${this.selected.rallyPoint ? 'set' : 'not set'}` : null;
     const balanceText = isBank ? `Balance: $${this.selected.bankBalance}` : null;
     const isDamaged = this.selected.hp < definition.maxHp;
     const hpText = `HP: ${this.selected.hp}/${definition.maxHp}`;
@@ -217,6 +237,8 @@ export class BuildingInfoPanel {
       ${animalText ? `<div>${animalText}</div>` : ''}
       ${cowboyText ? `<div>${cowboyText}</div>` : ''}
       ${mountedCowboyText ? `<div>${mountedCowboyText}</div>` : ''}
+      ${trainingQueueText ? `<div>${trainingQueueText}</div>` : ''}
+      ${rallyPointText ? `<div>${rallyPointText}</div>` : ''}
       ${balanceText ? `<div>${balanceText}</div>` : ''}
     `;
 
@@ -231,6 +253,9 @@ export class BuildingInfoPanel {
     }
     if (isHorsery) {
       this.renderTrainMountedCowboyButton(this.selected);
+    }
+    if (isBarracks || isHorsery) {
+      this.renderRallyPointControls(this.selected);
     }
     if (isBank) {
       this.renderDepositButton(this.selected);
@@ -518,7 +543,7 @@ export class BuildingInfoPanel {
     const blockReason =
       building.hp <= 0
         ? 'disabled'
-        : building.cowboyCount >= COWBOY_MAX_PER_BARRACKS
+        : building.cowboyCount + building.trainingQueue.length >= COWBOY_MAX_PER_BARRACKS
           ? 'at max cowboys'
           : getMoney() < COWBOY_TRAIN_COST
             ? "can't afford"
@@ -546,7 +571,7 @@ export class BuildingInfoPanel {
     const blockReason =
       building.hp <= 0
         ? 'disabled'
-        : building.mountedCowboyCount >= MOUNTED_COWBOY_MAX_PER_HORSERY
+        : building.mountedCowboyCount + building.trainingQueue.length >= MOUNTED_COWBOY_MAX_PER_HORSERY
           ? 'at max cowboys on horse'
           : getMoney() < MOUNTED_COWBOY_TRAIN_COST
             ? "can't afford"
@@ -566,6 +591,58 @@ export class BuildingInfoPanel {
       hint.className = 'hint';
       hint.textContent = blockReason;
       this.panel.appendChild(hint);
+    }
+  }
+
+  /**
+   * Phase 53: "Cowboy (2 ticks left), Cowboy (5 ticks left)" - only the front
+   * job's remainingTicks actually counts down (gameState.runTrainingQueues),
+   * so every later job in the list still shows its full COWBOY_TRAIN_TICKS/
+   * MOUNTED_COWBOY_TRAIN_TICKS seed until its turn comes.
+   */
+  private formatTrainingQueueText(building: PlacedBuilding): string | null {
+    if (building.trainingQueue.length === 0) {
+      return null;
+    }
+    const parts = building.trainingQueue.map((job) => {
+      const label = job.kind === 'cowboy' ? 'Cowboy' : 'Cowboy on Horse';
+      return `${label} (${job.remainingTicks} tick${job.remainingTicks === 1 ? '' : 's'} left)`;
+    });
+    return `Training: ${parts.join(', ')}`;
+  }
+
+  /**
+   * Phase 53: "Set Rally Point" arms MainScene's one-shot next-right-click
+   * interception (see gameEvents' 'rally-point-mode-changed' doc comment);
+   * clicking it again while already armed for this exact building disarms it
+   * instead, so the button doubles as its own cancel. "Clear Rally Point"
+   * only appears once one is actually set.
+   */
+  private renderRallyPointControls(building: PlacedBuilding): void {
+    const isArmed = this.rallyPointArmedFor === building.id;
+
+    const setButton = document.createElement('button');
+    setButton.textContent = isArmed ? 'Cancel Rally Point Pick' : 'Set Rally Point';
+    setButton.addEventListener('click', () => {
+      gameEvents.emit('rally-point-mode-changed', isArmed ? null : building.id);
+    });
+    this.panel.appendChild(setButton);
+
+    if (isArmed) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'Right-click the ground to place it';
+      this.panel.appendChild(hint);
+    }
+
+    if (building.rallyPoint) {
+      const clearButton = document.createElement('button');
+      clearButton.textContent = 'Clear Rally Point';
+      clearButton.addEventListener('click', () => {
+        clearRallyPoint(building.id);
+        this.render();
+      });
+      this.panel.appendChild(clearButton);
     }
   }
 

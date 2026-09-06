@@ -33,8 +33,10 @@ import { VegetationEntity, getVegetation, restoreVegetationEntities } from './ve
  *    number/phase), difficulty, run mode, total meat produced, every
  *    PlacedBuilding (including per-building HP, animals, bank balance,
  *    garrisoned Cowboy/Cowboy-on-Horse counts+HP, house tier, trade orders,
- *    etc.), every live vegetation entity, and the full fluctuating-market
- *    state (baseline prices, pressure windows, any active merchant deal).
+ *    Phase 53's in-progress trainingQueue (a queued job's remainingTicks
+ *    resumes counting down exactly where it left off) and rallyPoint, etc.),
+ *    every live vegetation entity, and the full fluctuating-market state
+ *    (baseline prices, pressure windows, any active merchant deal).
  *  - NOT SAVED (reset to fresh-game defaults on load), by design:
  *      - `resourceHistory` (Phase 49's rolling sparkline buffers) - purely
  *        cosmetic, and re-populates itself over the next
@@ -88,6 +90,11 @@ function cloneBuilding(building: PlacedBuilding): PlacedBuilding {
     mountedCowboyHp: [...building.mountedCowboyHp],
     houseNeedsStatus: building.houseNeedsStatus.map((entry) => ({ ...entry })),
     tradeOrders: { ...building.tradeOrders },
+    // Phase 53: trainingQueue's job objects and rallyPoint's {x,y} are their
+    // own plain objects, not shared with the live building, for the same
+    // anti-aliasing reason as the arrays/records above.
+    trainingQueue: building.trainingQueue.map((job) => ({ ...job })),
+    rallyPoint: building.rallyPoint ? { ...building.rallyPoint } : undefined,
   };
 }
 

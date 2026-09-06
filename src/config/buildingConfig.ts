@@ -302,6 +302,23 @@ export interface TradeOrderConfig {
  */
 export type WorkerPriority = 'high' | 'normal' | 'low';
 
+/**
+ * Phase 53: Rally Points & Training Queue. A queued Barracks/Horsery training
+ * job - money is deducted the instant trainCowboy/trainMountedCowboy enqueues
+ * it, and `remainingTicks` (seeded from COWBOY_TRAIN_TICKS/
+ * MOUNTED_COWBOY_TRAIN_TICKS) only counts down for the job at the front of
+ * `PlacedBuilding.trainingQueue` (gameState's runTrainingQueues) - a classic
+ * one-at-a-time training queue, not N jobs finishing in parallel. `kind`
+ * mirrors CombatUnit's discriminant in MainScene.ts; a single building's
+ * queue is always homogeneous (Barracks only ever enqueues 'cowboy', Horsery
+ * only ever 'cowboyOnHorse'), so nothing here needs to branch on it beyond
+ * knowing which counter/HP array/spawn event to use on completion.
+ */
+export interface TrainingQueueJob {
+  kind: 'cowboy' | 'cowboyOnHorse';
+  remainingTicks: number;
+}
+
 export interface PlacedBuilding {
   id: string;
   type: BuildingType;
@@ -374,6 +391,21 @@ export interface PlacedBuilding {
   tradeOrders: Partial<Record<MarketableResourceKey, TradeOrderConfig>>;
   /** Only meaningful for Trading Post; last tick's autonomous sale from tradeOrders, mirroring lastSale/saloonSale. */
   tradingPostSale?: TradingPostSale;
+  /**
+   * Phase 53: only meaningful for Barracks/Horsery; pending training jobs,
+   * front-of-queue-only countdown (see TrainingQueueJob's doc comment).
+   * Always present (empty array, not undefined) on every PlacedBuilding, like
+   * cowboyHp/animalCount, so nothing needs an existence check before reading
+   * `.length`.
+   */
+  trainingQueue: TrainingQueueJob[];
+  /**
+   * Phase 53: only meaningful for Barracks/Horsery; a world point a freshly
+   * trained unit immediately walks to instead of standing at its spawn slot.
+   * Undefined (not a sentinel like {x:0,y:0}) when never set, matching
+   * lastSale/lastHarvest's "absent means not yet meaningful" convention.
+   */
+  rallyPoint?: { x: number; y: number };
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {

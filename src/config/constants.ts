@@ -39,6 +39,10 @@ export const MINIMAP_MARGIN = 8;
 // one building type ever has them and they carry their own HP, not output.
 export const COWBOY_TRAIN_COST = 40;
 export const COWBOY_MAX_PER_BARRACKS = 3;
+// Phase 53: Rally Points & Training Queue. Training is no longer instant -
+// trainCowboy enqueues a job that counts down this many production ticks
+// (gameState.runTrainingQueues) before the unit actually spawns.
+export const COWBOY_TRAIN_TICKS = 4;
 // Phase 23's combat system reads both: range for targeting the nearest
 // raider, max HP as the regen cap already applied in gameState.runHpRegen.
 export const COWBOY_RANGE_TILES = 5;
@@ -75,6 +79,9 @@ export const MOUNTED_COWBOY_MAX_PER_HORSERY = 2;
 export const MOUNTED_COWBOY_MAX_HP = 40;
 // 3x MainScene's COWBOY_WALK_SPEED_PX_PER_SEC (60px/sec), reflecting the horse's speed advantage.
 export const MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC = 180;
+// Phase 53: mirrors COWBOY_TRAIN_TICKS above; longer, since a mounted Cowboy
+// costs more than double a plain one.
+export const MOUNTED_COWBOY_TRAIN_TICKS = 6;
 
 // Phase 29: Bank. Fixed per-click deposit/withdraw increment; interest is a
 // flat compounding rate applied to a Bank's own bankBalance each production

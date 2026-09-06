@@ -5,6 +5,7 @@ import {
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  COWBOY_TRAIN_TICKS,
   CYCLE_SECONDS,
   DAY_COUNT,
   DAY_PHASE_SECONDS,
@@ -20,6 +21,7 @@ import {
   MOUNTED_COWBOY_MAX_HP,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  MOUNTED_COWBOY_TRAIN_TICKS,
   PRODUCTION_STALL_NOTIFY_TICKS,
   REPAIR_COST_FRACTION,
   RunMode,
@@ -50,6 +52,7 @@ import {
   SaloonSellableKey,
   SupermarketSellableKey,
   TradeOrderConfig,
+  TrainingQueueJob,
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -695,6 +698,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     houseNeedsUnmetStreak: 0,
     houseNeedsStatus: [],
     tradeOrders: {},
+    trainingQueue: [],
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -1093,11 +1097,17 @@ export function buyAnimal(buildingId: string): boolean {
 }
 
 /**
- * Training a Cowboy is a hard buy-gate like buyAnimal, but with no Fence
- * requirement (that rule is animal-specific): just the per-Barracks cap,
- * affordability, and (Phase 21) not training out of a disabled 0 HP
- * Barracks. Not gated on staffing - staffing only gates production, and a
- * Barracks has none of its own.
+ * Phase 53: training a Cowboy is still a hard buy-gate like buyAnimal (no
+ * Fence requirement - that rule is animal-specific), but no longer spawns the
+ * unit instantly: this only enqueues a TrainingQueueJob (deducting money
+ * immediately, matching every other buy-gate's "pay on click" convention) and
+ * runTrainingQueues below is what actually spawns it once the job's
+ * remainingTicks reaches 0. The per-Barracks cap counts cowboyCount PLUS
+ * everything already queued, since a queued job is a committed unit slot even
+ * before it exists. Not gated on staffing - staffing only gates production,
+ * and a Barracks has none of its own (the queue's own progress gate lives in
+ * runTrainingQueues instead, since staffing can change while a job is
+ * in-flight).
  */
 export function trainCowboy(buildingId: string): boolean {
   const building = buildingsById.get(buildingId);
@@ -1107,7 +1117,7 @@ export function trainCowboy(buildingId: string): boolean {
   if (building.hp <= 0) {
     return false;
   }
-  if (building.cowboyCount >= COWBOY_MAX_PER_BARRACKS) {
+  if (building.cowboyCount + building.trainingQueue.length >= COWBOY_MAX_PER_BARRACKS) {
     return false;
   }
   if (money < COWBOY_TRAIN_COST) {
@@ -1115,11 +1125,9 @@ export function trainCowboy(buildingId: string): boolean {
   }
 
   money -= COWBOY_TRAIN_COST;
-  building.cowboyCount += 1;
-  building.cowboyHp.push(COWBOY_MAX_HP);
+  building.trainingQueue.push({ kind: 'cowboy', remainingTicks: COWBOY_TRAIN_TICKS });
 
   gameEvents.emit('money-changed', money);
-  gameEvents.emit('cowboy-trained', building);
 
   return true;
 }
@@ -1133,7 +1141,7 @@ export function trainMountedCowboy(buildingId: string): boolean {
   if (building.hp <= 0) {
     return false;
   }
-  if (building.mountedCowboyCount >= MOUNTED_COWBOY_MAX_PER_HORSERY) {
+  if (building.mountedCowboyCount + building.trainingQueue.length >= MOUNTED_COWBOY_MAX_PER_HORSERY) {
     return false;
   }
   if (money < MOUNTED_COWBOY_TRAIN_COST) {
@@ -1141,12 +1149,82 @@ export function trainMountedCowboy(buildingId: string): boolean {
   }
 
   money -= MOUNTED_COWBOY_TRAIN_COST;
-  building.mountedCowboyCount += 1;
-  building.mountedCowboyHp.push(MOUNTED_COWBOY_MAX_HP);
+  building.trainingQueue.push({ kind: 'cowboyOnHorse', remainingTicks: MOUNTED_COWBOY_TRAIN_TICKS });
 
   gameEvents.emit('money-changed', money);
-  gameEvents.emit('mounted-cowboy-trained', building);
 
+  return true;
+}
+
+/**
+ * Phase 53: ticks every Barracks/Horsery's training queue once per production
+ * tick. Only the job at the FRONT of a building's queue counts down - a
+ * classic one-at-a-time training queue, so a job's `remainingTicks` in the
+ * UI only moves once every job ahead of it has finished - gated the same way
+ * a requiresWorkers building's own production would be (destroyed/
+ * understaffed/upkeep-unpaid all simply pause progress rather than losing the
+ * job or refunding it). A completed job spawns the unit exactly as
+ * trainCowboy/trainMountedCowboy used to do inline before this phase (bump
+ * the count, push starting HP, fire the same 'cowboy-trained'/
+ * 'mounted-cowboy-trained' event MainScene already listens to for the visual)
+ * - only the timing moved, not the spawn shape.
+ */
+function runTrainingQueues(): void {
+  for (const building of placedBuildings) {
+    if (building.trainingQueue.length === 0) {
+      continue;
+    }
+    if (building.hp <= 0 || !building.staffed || building.disabled) {
+      continue;
+    }
+
+    const job: TrainingQueueJob = building.trainingQueue[0];
+    job.remainingTicks -= 1;
+    if (job.remainingTicks > 0) {
+      continue;
+    }
+
+    building.trainingQueue.shift();
+    if (job.kind === 'cowboy') {
+      building.cowboyCount += 1;
+      building.cowboyHp.push(COWBOY_MAX_HP);
+      gameEvents.emit('cowboy-trained', building);
+    } else {
+      building.mountedCowboyCount += 1;
+      building.mountedCowboyHp.push(MOUNTED_COWBOY_MAX_HP);
+      gameEvents.emit('mounted-cowboy-trained', building);
+    }
+  }
+}
+
+/**
+ * Phase 53: player-set rally point for a Barracks/Horsery, consumed by
+ * MainScene's spawn handlers to walk a freshly-trained unit straight there
+ * instead of leaving it standing at its spawn slot. Gated to the two
+ * building types that can ever train anything - setting one on any other
+ * building would be silently meaningless.
+ */
+export function setRallyPoint(buildingId: string, worldX: number, worldY: number): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || (building.type !== BuildingType.Barracks && building.type !== BuildingType.Horsery)) {
+    return false;
+  }
+  building.rallyPoint = { x: worldX, y: worldY };
+  gameEvents.emit('rally-point-changed', building);
+  return true;
+}
+
+/** Mirrors setRallyPoint's gate, just clearing the field instead of setting it. */
+export function clearRallyPoint(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || (building.type !== BuildingType.Barracks && building.type !== BuildingType.Horsery)) {
+    return false;
+  }
+  if (!building.rallyPoint) {
+    return false;
+  }
+  building.rallyPoint = undefined;
+  gameEvents.emit('rally-point-changed', building);
   return true;
 }
 
@@ -1814,6 +1892,7 @@ export function runProductionTick(): void {
   runBankInterest();
   assignWorkforce();
   runUpkeep();
+  runTrainingQueues();
   const storageCap = getStorageCap();
 
   for (const building of placedBuildings) {
