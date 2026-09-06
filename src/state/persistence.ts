@@ -1,9 +1,10 @@
 import { CYCLE_SECONDS, Difficulty, RunMode } from '../config/constants';
-import { PlacedBuilding } from '../config/buildingConfig';
+import { BuildingType, PlacedBuilding } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 import {
   ObjectiveSaveState,
   Resources,
+  getBuildingsEverBuiltByType,
   getCurrentDifficulty,
   getCurrentRunMode,
   getDayNumber,
@@ -17,6 +18,7 @@ import {
   recomputeWorkforceNow,
   resetGame,
   restoreBuilding,
+  restoreBuildingsEverBuiltByType,
   restoreCoreState,
   restoreObjectivesState,
   serializeObjectivesState,
@@ -93,6 +95,16 @@ export interface SaveGameV1 {
   objectives?: ObjectiveSaveState;
   /** Phase 57: optional for the same backward-compatibility reason as objectives above - a pre-Phase-57 save simply keeps resetGame's fresh (empty) camp list instead of an error. */
   raiderCamps?: RaiderCampSaveState[];
+  /**
+   * Bug 2 fix: lifetime "ever placed" counts per BuildingType, so a Town-
+   * Destroyed game over after a load still reports what was actually built
+   * this run instead of resetting to zero. Optional for the same backward-
+   * compatibility reason as objectives/raiderCamps above - a pre-existing
+   * save without this field falls back to counting its own placedBuildings
+   * (the best available approximation: whatever's still standing) rather
+   * than starting the lifetime tally at zero.
+   */
+  buildingsEverBuiltByType?: Partial<Record<BuildingType, number>>;
 }
 
 export interface SaveSlotInfo {
@@ -138,6 +150,7 @@ export function serializeGameState(): SaveGameV1 {
     market: serializeMarket(),
     objectives: serializeObjectivesState(),
     raiderCamps: getRaiderCamps().map((camp) => ({ ...camp })),
+    buildingsEverBuiltByType: getBuildingsEverBuiltByType(),
   };
 }
 
@@ -186,6 +199,19 @@ export function deserializeGameState(save: SaveGameV1): void {
     }
     for (const building of save.placedBuildings) {
       restoreBuilding(cloneBuilding(building));
+    }
+    // Bug 2 fix: undefined on a save made before this fix shipped - fall back
+    // to counting the save's own placedBuildings (whatever's still standing)
+    // rather than starting the lifetime tally at zero, since that's the best
+    // approximation available for an old save.
+    if (save.buildingsEverBuiltByType) {
+      restoreBuildingsEverBuiltByType(save.buildingsEverBuiltByType);
+    } else {
+      const fallbackCounts: Partial<Record<BuildingType, number>> = {};
+      for (const building of save.placedBuildings) {
+        fallbackCounts[building.type] = (fallbackCounts[building.type] ?? 0) + 1;
+      }
+      restoreBuildingsEverBuiltByType(fallbackCounts);
     }
     // Phase 56: undefined on a pre-Phase-56 save - resetGame() above already
     // seeded a fresh rolling objective set via initObjectiveQueue(), so a

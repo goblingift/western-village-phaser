@@ -286,6 +286,14 @@ const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
 let totalMeatProduced = 0;
 /**
+ * Bug 2 fix: lifetime "ever placed" count per BuildingType, incremented in
+ * placeBuilding() and never decremented on removal - unlike placedBuildings/
+ * buildingsById (which drop a building's record the instant it's destroyed
+ * or bulldozed), this survives a Town-Destroyed wipe so endGame's summary can
+ * still report what was actually built during the run.
+ */
+let buildingsEverBuiltByType: Partial<Record<BuildingType, number>> = {};
+/**
  * Phase 34: the clock is now elapsed-forward rather than a single countdown.
  * Everything else about the cycle (which day, which phase, how long is left in
  * it) is derived from this one number, so there is no way for the day counter
@@ -1071,6 +1079,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   }
   placedBuildings.push(building);
   buildingsById.set(building.id, building);
+  buildingsEverBuiltByType[type] = (buildingsEverBuiltByType[type] ?? 0) + 1;
 
   gameEvents.emit('money-changed', money);
   if (definition.materials) {
@@ -1152,6 +1161,20 @@ export function restoreCoreState(state: {
   Object.assign(resources, state.resources);
   elapsedSeconds = state.elapsedSeconds;
   totalMeatProduced = state.totalMeatProduced;
+}
+
+/** Bug 2 fix: read-only snapshot for persistence's serializeGameState - a fresh copy so a save payload never aliases the live counter object. */
+export function getBuildingsEverBuiltByType(): Partial<Record<BuildingType, number>> {
+  return { ...buildingsEverBuiltByType };
+}
+
+/**
+ * Bug 2 fix: the load-time counterpart to getBuildingsEverBuiltByType - see
+ * persistence.ts's deserializeGameState for the backward-compat fallback used
+ * when an older save doesn't carry this field.
+ */
+export function restoreBuildingsEverBuiltByType(counts: Partial<Record<BuildingType, number>>): void {
+  buildingsEverBuiltByType = { ...counts };
 }
 
 /**
@@ -2133,6 +2156,24 @@ function runHouseNeeds(): void {
     }
 
     const tierConfig = HOUSE_TIER_CONFIG[building.houseTier];
+    const nextTier: HouseTier | null = building.houseTier < 3 ? ((building.houseTier + 1) as HouseTier) : null;
+    const nextTierConfig = nextTier !== null ? HOUSE_TIER_CONFIG[nextTier] : null;
+
+    // Growth eligibility is evaluated against the NEXT tier's needs (not the
+    // current tier's - that was Bug 1: checking the current tier's trivial
+    // needs let a house "grow" and then immediately fail the real needs of
+    // the tier it just entered). Checked against resource levels *before*
+    // this tick's own current-tier consumption below, so a tier's own draw
+    // doesn't double up against a differently-sized need for the same
+    // resource in the next tier's config.
+    const nextTierMet =
+      nextTierConfig !== null &&
+      nextTierConfig.needs.every((group) =>
+        (Object.entries(group.options) as [ResourceKey, number][]).some(
+          ([key, amount]) => resources[key] >= amount,
+        ),
+      );
+
     const status: { label: string; met: boolean }[] = [];
     const picks: [ResourceKey, number][] = [];
     let allMet = true;
@@ -2163,19 +2204,27 @@ function runHouseNeeds(): void {
       if (tierConfig.taxPerTick > 0) {
         money = Math.round((money + tierConfig.taxPerTick) * 100) / 100;
       }
-      building.houseNeedsMetStreak += 1;
       building.houseNeedsUnmetStreak = 0;
 
-      if (building.houseNeedsMetStreak >= HOUSE_TIER_HYSTERESIS_TICKS && building.houseTier < 3) {
-        building.houseTier = (building.houseTier + 1) as HouseTier;
+      if (nextTier !== null && nextTierMet) {
+        building.houseNeedsMetStreak += 1;
+
+        if (building.houseNeedsMetStreak >= HOUSE_TIER_HYSTERESIS_TICKS) {
+          building.houseTier = nextTier;
+          building.houseNeedsMetStreak = 0;
+          gameEvents.emit('house-tier-changed', { building, direction: 'upgrade' });
+          addNotification(
+            `A House grew to Tier ${building.houseTier} (population ${HOUSE_TIER_CONFIG[building.houseTier].population})`,
+            'info',
+            elapsedSeconds,
+            building.id,
+          );
+        }
+      } else {
+        // Current tier is satisfied but either already maxed (nextTier null)
+        // or the next tier's own needs aren't yet affordable - no progress
+        // toward growth this tick.
         building.houseNeedsMetStreak = 0;
-        gameEvents.emit('house-tier-changed', { building, direction: 'upgrade' });
-        addNotification(
-          `A House grew to Tier ${building.houseTier} (population ${HOUSE_TIER_CONFIG[building.houseTier].population})`,
-          'info',
-          elapsedSeconds,
-          building.id,
-        );
       }
     } else {
       building.houseNeedsUnmetStreak += 1;
@@ -2708,13 +2757,18 @@ export function getBuildingProductivity(buildingId: string): BuildingProductivit
   };
 }
 
+/**
+ * Bug 2 fix: feeds endGame's GameOverSummary from the lifetime
+ * buildingsEverBuiltByType counter rather than the live `placedBuildings`
+ * list - a Town-Destroyed ending fires the instant the last building's
+ * record is removed, so counting live buildings here always produced "None".
+ * This function has no other callers (verified), so it was safe to repurpose
+ * rather than adding a parallel one.
+ */
 function countBuildingsByType(): Record<BuildingType, number> {
   const counts = {} as Record<BuildingType, number>;
   for (const type of Object.values(BuildingType)) {
-    counts[type] = 0;
-  }
-  for (const building of placedBuildings) {
-    counts[building.type] += 1;
+    counts[type] = buildingsEverBuiltByType[type] ?? 0;
   }
   return counts;
 }
@@ -2760,6 +2814,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
 
   placedBuildings.length = 0;
   buildingsById.clear();
+  buildingsEverBuiltByType = {};
   for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
     occupancy[y].fill(null);
   }
