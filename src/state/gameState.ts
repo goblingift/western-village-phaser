@@ -78,6 +78,39 @@ export interface Resources {
 }
 
 /**
+ * Phase 49: one production tick's worth of a single resource's flow, kept in
+ * a rolling `RESOURCE_HISTORY_LENGTH`-entry buffer per `ResourceKey` so the
+ * Statistics panel can sparkline a trend instead of only ever showing the
+ * current instant (`getResourceTrends`, Phase 33, only ever held the *last*
+ * tick's net delta - a fine HUD readout, useless for "is this getting
+ * better or worse"). `produced`/`consumed` are gross flow for that tick
+ * (production outputs actually added to the pool, harvest yield, and
+ * whatever Supermarket/Saloon sales or House needs actually drew out); `net`
+ * mirrors `resourceTrends` for that same tick so the two never disagree.
+ */
+export interface ResourceHistoryEntry {
+  produced: number;
+  consumed: number;
+  net: number;
+}
+
+/**
+ * Phase 49: compact per-building productivity readout over a rolling window,
+ * independent of `PlacedBuilding` itself (kept in a side Map, the same
+ * pattern Phase 44's notification debounce state uses) so a building's shape
+ * doesn't grow with every future stat someone wants to observe. `blockReason`
+ * is only meaningful when the building is currently inactive - it's the
+ * reason attached to the most recent inactive tick, using the same
+ * destroyed -> understaffed -> upkeep unpaid -> no input/vegetation ->
+ * running priority order Phase 35's `describeHarvestStatus` established.
+ */
+export interface BuildingProductivity {
+  activeTicks: number;
+  totalTicks: number;
+  blockReason: string | null;
+}
+
+/**
  * Phase 32: the town is scored on what it's actually worth at the buzzer, not
  * on a single commodity it happened to produce. The breakdown is carried
  * alongside the total so the game-over screen can show where the value sits
@@ -134,6 +167,74 @@ let money = STARTING_MONEY;
 const resources: Resources = emptyResources();
 /** Phase 33: per-resource change over the last completed tick, for the HUD's +X.X/tick trend readout. */
 let resourceTrends: Resources = emptyResources();
+
+/**
+ * Phase 49: rolling per-resource produced/consumed/net history, capped at
+ * `RESOURCE_HISTORY_LENGTH` entries (oldest dropped via `.shift()` - cheap at
+ * this length, this runs once per 2s tick, not per frame). `tickResource*`
+ * are the current tick's in-progress accumulators, written to by every place
+ * in `runProductionTick`/`runSupermarketSales`/`runSaloonSales`/
+ * `runHouseNeeds` that actually mutates a resource amount; they're pure
+ * observation (`addProducedThisTick`/`addConsumedThisTick`), never read back
+ * into a gameplay decision, and reset at the top of every `runProductionTick`.
+ */
+const RESOURCE_HISTORY_LENGTH = 60;
+type ResourceHistoryBuffers = Record<ResourceKey, ResourceHistoryEntry[]>;
+function emptyResourceHistoryBuffers(): ResourceHistoryBuffers {
+  const buffers = {} as ResourceHistoryBuffers;
+  for (const key of Object.keys(emptyResources()) as ResourceKey[]) {
+    buffers[key] = [];
+  }
+  return buffers;
+}
+let resourceHistory: ResourceHistoryBuffers = emptyResourceHistoryBuffers();
+let tickResourceProduced: Partial<Record<ResourceKey, number>> = {};
+let tickResourceConsumed: Partial<Record<ResourceKey, number>> = {};
+
+function addProducedThisTick(key: ResourceKey, amount: number): void {
+  if (amount <= 0) {
+    return;
+  }
+  tickResourceProduced[key] = (tickResourceProduced[key] ?? 0) + amount;
+}
+
+function addConsumedThisTick(key: ResourceKey, amount: number): void {
+  if (amount <= 0) {
+    return;
+  }
+  tickResourceConsumed[key] = (tickResourceConsumed[key] ?? 0) + amount;
+}
+
+/**
+ * Phase 49: compact rolling active/inactive record per building, capped at
+ * `PRODUCTIVITY_WINDOW_TICKS` booleans (oldest dropped). Kept in a side Map
+ * keyed by buildingId - like Phase 44's `stalledInputTicks`/etc. - rather
+ * than on `PlacedBuilding` itself, so this optional UI feature doesn't grow
+ * every building record. Only buildings with a `production` or `harvest`
+ * config are tracked (see `recordProductivityTick`'s call sites in
+ * `runProductionTick`); everything else has no entry and
+ * `getBuildingProductivity` returns null for it.
+ */
+const PRODUCTIVITY_WINDOW_TICKS = 20;
+interface ProductivityRecord {
+  window: boolean[];
+  lastBlockReason: string | null;
+}
+const productivityRecords = new Map<string, ProductivityRecord>();
+
+function recordProductivityTick(buildingId: string, active: boolean, blockReason: string | null): void {
+  let record = productivityRecords.get(buildingId);
+  if (!record) {
+    record = { window: [], lastBlockReason: null };
+    productivityRecords.set(buildingId, record);
+  }
+  record.window.push(active);
+  if (record.window.length > PRODUCTIVITY_WINDOW_TICKS) {
+    record.window.shift();
+  }
+  record.lastBlockReason = active ? null : blockReason;
+}
+
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
@@ -631,6 +732,9 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
   stalledInputTicks.delete(building.id);
   stalledInputNotified.delete(building.id);
   upkeepDisabledNotified.delete(building.id);
+  // Phase 49: same reasoning - a destroyed-then-rebuilt building starts its
+  // productivity window fresh under its new id rather than inheriting one.
+  productivityRecords.delete(building.id);
 
   if (reason === 'destroyed') {
     addNotification(
@@ -1200,6 +1304,7 @@ function runSupermarketSales(): void {
     for (const [key, rate] of Object.entries(SUPERMARKET_SELL_RATES) as [SupermarketSellableKey, { amount: number; price: number }][]) {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
+      addConsumedThisTick(key, soldAmount);
       revenue += soldAmount * rate.price;
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
@@ -1241,6 +1346,7 @@ function runSaloonSales(): void {
     for (const [key, rate] of Object.entries(SALOON_SELL_RATES) as [SaloonSellableKey, { amount: number; price: number }][]) {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
+      addConsumedThisTick(key, soldAmount);
       revenue += soldAmount * rate.price;
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
@@ -1314,6 +1420,7 @@ function runHouseNeeds(): void {
     if (allMet) {
       for (const [key, amount] of picks) {
         resources[key] -= amount;
+        addConsumedThisTick(key, amount);
       }
       if (tierConfig.taxPerTick > 0) {
         money = Math.round((money + tierConfig.taxPerTick) * 100) / 100;
@@ -1494,6 +1601,11 @@ export function runProductionTick(): void {
   }
 
   const before: Resources = { ...resources };
+  // Phase 49: reset this tick's produced/consumed accumulators - every
+  // mutation of `resources` below (inputs, outputs, sales, house needs) also
+  // reports into these via addProducedThisTick/addConsumedThisTick.
+  tickResourceProduced = {};
+  tickResourceConsumed = {};
 
   runBankInterest();
   assignWorkforce();
@@ -1511,6 +1623,7 @@ export function runProductionTick(): void {
 
     if (building.hp <= 0) {
       building.active = false;
+      recordProductivityTick(building.id, false, 'Destroyed');
       continue;
     }
 
@@ -1518,6 +1631,7 @@ export function runProductionTick(): void {
     // understaffed one - no output, but no damage and no removal either.
     if (!building.staffed || building.disabled) {
       building.active = false;
+      recordProductivityTick(building.id, false, !building.staffed ? 'Understaffed' : 'Upkeep unpaid');
       continue;
     }
 
@@ -1526,6 +1640,7 @@ export function runProductionTick(): void {
     const animalConfig = definition.animal;
     if (animalConfig && building.animalCount === 0) {
       building.active = false;
+      recordProductivityTick(building.id, false, 'No animals owned');
       continue;
     }
 
@@ -1536,6 +1651,7 @@ export function runProductionTick(): void {
       harvestOutputs = runHarvest(building, harvest);
       if (!harvestOutputs) {
         building.active = false;
+        recordProductivityTick(building.id, false, 'No vegetation in range');
         continue;
       }
     }
@@ -1571,11 +1687,13 @@ export function runProductionTick(): void {
 
     if (!canRun) {
       building.active = false;
+      recordProductivityTick(building.id, false, 'Missing inputs');
       continue;
     }
 
     for (const [key, amount] of Object.entries(inputs) as [ResourceKey, number][]) {
       resources[key] -= amount;
+      addConsumedThisTick(key, amount);
     }
     let bonus = building.connected ? 1.1 : 1;
     // Phase 30: a Well's yield falls off with its distance to open water.
@@ -1593,6 +1711,7 @@ export function runProductionTick(): void {
       const before = resources[key];
       const after = Math.min(before + produced, storageCap);
       resources[key] = after;
+      addProducedThisTick(key, after - before);
       // Only score the amount that actually fit in storage; overflow is wasted output.
       if (key === 'meat') {
         totalMeatProduced += after - before;
@@ -1612,6 +1731,7 @@ export function runProductionTick(): void {
       }
     }
     building.active = true;
+    recordProductivityTick(building.id, true, null);
   }
 
   runSupermarketSales();
@@ -1630,6 +1750,7 @@ export function runProductionTick(): void {
   for (const key of Object.keys(resources) as ResourceKey[]) {
     resourceTrends[key] = Math.round((resources[key] - before[key]) * 10) / 10;
   }
+  pushResourceHistorySnapshot();
 
   checkBuildingUnlocks();
 
@@ -1745,6 +1866,53 @@ export function getResourceTrends(): Readonly<Resources> {
   return resourceTrends;
 }
 
+/**
+ * Phase 49: appends one entry per resource to `resourceHistory` from this
+ * tick's accumulators plus the already-computed `resourceTrends` (so `net`
+ * can never disagree with the HUD's own trend readout), then trims each
+ * buffer back down to `RESOURCE_HISTORY_LENGTH`. Called once, at the very end
+ * of runProductionTick's resource bookkeeping - after resourceTrends itself
+ * has just been recomputed from `before`/`resources`.
+ */
+function pushResourceHistorySnapshot(): void {
+  for (const key of Object.keys(resources) as ResourceKey[]) {
+    const entry: ResourceHistoryEntry = {
+      produced: Math.round((tickResourceProduced[key] ?? 0) * 100) / 100,
+      consumed: Math.round((tickResourceConsumed[key] ?? 0) * 100) / 100,
+      net: resourceTrends[key],
+    };
+    const buffer = resourceHistory[key];
+    buffer.push(entry);
+    if (buffer.length > RESOURCE_HISTORY_LENGTH) {
+      buffer.shift();
+    }
+  }
+}
+
+/** Phase 49: oldest-first rolling window (see `pushResourceHistorySnapshot`), for the Statistics panel's per-resource sparkline. */
+export function getResourceHistory(key: ResourceKey): readonly ResourceHistoryEntry[] {
+  return resourceHistory[key];
+}
+
+/**
+ * Phase 49: null means "not tracked" - only buildings with a `production` or
+ * `harvest` config are recorded (see `recordProductivityTick`'s call sites in
+ * runProductionTick), since a building with neither (Road, House, Warehouse,
+ * Bank, Barracks, Horsery, Watchtower, Supermarket, Saloon, ...) has no
+ * on/off production state for a percentage to describe.
+ */
+export function getBuildingProductivity(buildingId: string): BuildingProductivity | null {
+  const record = productivityRecords.get(buildingId);
+  if (!record) {
+    return null;
+  }
+  return {
+    activeTicks: record.window.filter(Boolean).length,
+    totalTicks: record.window.length,
+    blockReason: record.lastBlockReason,
+  };
+}
+
 function countBuildingsByType(): Record<BuildingType, number> {
   const counts = {} as Record<BuildingType, number>;
   for (const type of Object.values(BuildingType)) {
@@ -1783,6 +1951,10 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   money = Math.round(STARTING_MONEY * DIFFICULTY_SETTINGS[currentDifficulty].startingMoneyMultiplier * 100) / 100;
   Object.assign(resources, emptyResources());
   resourceTrends = emptyResources();
+  resourceHistory = emptyResourceHistoryBuffers();
+  tickResourceProduced = {};
+  tickResourceConsumed = {};
+  productivityRecords.clear();
   totalMeatProduced = 0;
   elapsedSeconds = 0;
   gameOver = false;

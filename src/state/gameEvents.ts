@@ -77,6 +77,13 @@ export interface GameEventMap {
    * own icon-highlight state in sync. `null` clears the selection.
    */
   'resource-selected': (key: ResourceKey | null) => void;
+  /**
+   * Phase 49: toggles the Statistics & Efficiency panel's visibility. Fired by
+   * MainScene's 'V' hotkey and by BuildingBar's "Stats" button; the panel
+   * itself owns its shown/hidden state and is the only listener, matching how
+   * 'toggle-chain-view'-style UI toggles elsewhere stay self-contained.
+   */
+  'toggle-statistics-panel': () => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

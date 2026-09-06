@@ -68,6 +68,7 @@ export class BuildingBar {
 
     topRow.appendChild(this.createSpeedControls());
     topRow.appendChild(this.createAudioControls());
+    topRow.appendChild(this.createStatsButton());
     bar.appendChild(topRow);
 
     for (const category of Object.values(BuildingCategory)) {
@@ -217,6 +218,20 @@ export class BuildingBar {
     const muted = isAudioMuted();
     this.muteButton.textContent = muted ? 'Muted' : 'Sound';
     this.muteButton.classList.toggle('active', !muted);
+  }
+
+  /**
+   * Phase 49: opens the opt-in Statistics & Efficiency panel. The button
+   * itself holds no shown/hidden state - it just emits the same toggle event
+   * the 'V' hotkey does, and StatisticsPanel is the sole listener.
+   */
+  private createStatsButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'speed';
+    button.textContent = 'Stats';
+    button.title = 'Toggle the Statistics & Efficiency panel (V)';
+    button.addEventListener('click', () => gameEvents.emit('toggle-statistics-panel'));
+    return button;
   }
 
   private setSpeed(speed: number, button: HTMLButtonElement): void {

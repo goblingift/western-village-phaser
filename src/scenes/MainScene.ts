@@ -3222,6 +3222,14 @@ export class MainScene extends Phaser.Scene {
         this.toggleChainViewVisibility();
         event.preventDefault();
       }
+
+      // Phase 49: 'V' ("view stats") toggles the Statistics & Efficiency
+      // panel. MainScene owns no state for it - the panel itself is the only
+      // listener - so this is a bare emit, same shape as the 'C' hotkey above.
+      if (event.code === 'KeyV') {
+        gameEvents.emit('toggle-statistics-panel');
+        event.preventDefault();
+      }
     });
   }
 
