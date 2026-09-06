@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { BuildingCategory, BuildingType, PlacedBuilding } from '../config/buildingConfig';
 import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
+import type { NotificationEntry } from './notifications';
 import type { VegetationEntity } from './vegetation';
 
 /**
@@ -51,6 +52,15 @@ export interface GameEventMap {
   'request-run-restart': () => void;
   /** Phase 41: fired by MainScene's bare-number-key building-category hotkey; BuildingBar is the only listener. */
   'select-category': (category: BuildingCategory) => void;
+  /** Phase 44: a new entry was appended to the notification log (see state/notifications.ts); NotificationLogPanel is the only listener. */
+  'notification-added': (entry: NotificationEntry) => void;
+  /**
+   * Phase 44: NotificationLogPanel is a DOM overlay with no camera of its
+   * own, so a clicked log entry with a `buildingId` asks MainScene (the only
+   * listener) to pan there instead of duplicating tile->world math in the
+   * panel.
+   */
+  'camera-focus-requested': (worldX: number, worldY: number) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

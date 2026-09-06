@@ -19,6 +19,7 @@ import {
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
+  PRODUCTION_STALL_NOTIFY_TICKS,
   REPAIR_COST_FRACTION,
   RunMode,
   STARTING_MONEY,
@@ -58,6 +59,7 @@ import {
   resetVegetation,
 } from './vegetation';
 import { gameEvents } from './gameEvents';
+import { addNotification, clearNotifications } from './notifications';
 
 export interface Resources {
   rawMeat: number;
@@ -161,6 +163,29 @@ let idlePopulation = 0;
  * just that it is.
  */
 let laborShortfall = 0;
+
+/**
+ * Phase 44: debounce state for the notification log's three "recurring
+ * condition" triggers (stalled inputs, upkeep-unpaid, storage-cap waste).
+ * Each needs to fire once on the transition into the bad state and allow a
+ * fresh notification only after a transition back out - never every tick
+ * while the condition holds, which is what production-tick runs at 2s
+ * cadence would otherwise spam the log with. Keyed by buildingId (or, for
+ * storage waste, by ResourceKey - that condition is global to the resource
+ * pool, not any one building) rather than stored on PlacedBuilding itself,
+ * since nothing outside this debounce logic needs to read it.
+ */
+const stalledInputTicks = new Map<string, number>();
+const stalledInputNotified = new Set<string>();
+const upkeepDisabledNotified = new Set<string>();
+const resourcesWastingAtCap = new Set<ResourceKey>();
+
+function clearNotificationDebounceState(): void {
+  stalledInputTicks.clear();
+  stalledInputNotified.clear();
+  upkeepDisabledNotified.clear();
+  resourcesWastingAtCap.clear();
+}
 
 function createEmptyOccupancy(): (string | null)[][] {
   const grid: (string | null)[][] = [];
@@ -509,6 +534,23 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
     placedBuildings.splice(index, 1);
   }
   buildingsById.delete(building.id);
+
+  // Phase 44: drop any per-building debounce state along with the building
+  // itself, so a destroyed-then-rebuilt-with-a-new-id building starts fresh
+  // rather than inheriting a stale stalled/notified flag from a record that
+  // no longer exists.
+  stalledInputTicks.delete(building.id);
+  stalledInputNotified.delete(building.id);
+  upkeepDisabledNotified.delete(building.id);
+
+  if (reason === 'destroyed') {
+    addNotification(
+      `${BUILDING_DEFINITIONS[building.type].label} was destroyed by raiders!`,
+      'danger',
+      elapsedSeconds,
+      building.id,
+    );
+  }
 
   gameEvents.emit('building-removed', { building, reason });
   updateConnections();
@@ -1148,6 +1190,7 @@ function runUpkeep(): number {
     const upkeep = BUILDING_DEFINITIONS[building.type].upkeep * upkeepMultiplier;
     if (upkeep <= 0 || !building.staffed) {
       building.disabled = false;
+      upkeepDisabledNotified.delete(building.id);
       continue;
     }
 
@@ -1155,8 +1198,20 @@ function runUpkeep(): number {
       money = Math.round((money - upkeep) * 100) / 100;
       paid += upkeep;
       building.disabled = false;
+      // Recovery: allow a fresh notification if this building goes unpaid again later.
+      upkeepDisabledNotified.delete(building.id);
     } else {
       building.disabled = true;
+      // Phase 44: fire once on the transition into unpaid, not every tick it stays that way.
+      if (!upkeepDisabledNotified.has(building.id)) {
+        upkeepDisabledNotified.add(building.id);
+        addNotification(
+          `${BUILDING_DEFINITIONS[building.type].label} can't pay upkeep ($${upkeep}) - disabled until funds return`,
+          'warning',
+          elapsedSeconds,
+          building.id,
+        );
+      }
     }
   }
 
@@ -1223,6 +1278,14 @@ function runBankInterest(): void {
     }
     building.bankBalance = Math.round(building.bankBalance * (1 + BANK_INTEREST_RATE) * 100) / 100;
   }
+}
+
+/** Phase 44: which of a production building's required inputs are currently short, for the stall notification's message. */
+function describeMissingInputs(inputs: Partial<Record<ResourceKey, number>>): string {
+  return (Object.entries(inputs) as [ResourceKey, number][])
+    .filter(([key, amount]) => resources[key] < amount)
+    .map(([key]) => RESOURCE_LABELS[key])
+    .join(', ');
 }
 
 function scaleByAnimalCount(
@@ -1293,6 +1356,30 @@ export function runProductionTick(): void {
       ([key, amount]) => resources[key] >= amount,
     );
 
+    // Phase 44: debounced "production stalled" notification. Only meaningful
+    // for buildings with declared inputs (harvesters/flat producers have none,
+    // so `inputs` is `{}` and canRun is trivially true for them) - fires once
+    // PRODUCTION_STALL_NOTIFY_TICKS after the block starts, resets the moment
+    // it clears so a later stall can fire again.
+    if (Object.keys(inputs).length > 0) {
+      if (!canRun) {
+        const ticks = (stalledInputTicks.get(building.id) ?? 0) + 1;
+        stalledInputTicks.set(building.id, ticks);
+        if (ticks >= PRODUCTION_STALL_NOTIFY_TICKS && !stalledInputNotified.has(building.id)) {
+          stalledInputNotified.add(building.id);
+          addNotification(
+            `${BUILDING_DEFINITIONS[building.type].label} is stalled - missing ${describeMissingInputs(inputs)}`,
+            'warning',
+            elapsedSeconds,
+            building.id,
+          );
+        }
+      } else {
+        stalledInputTicks.delete(building.id);
+        stalledInputNotified.delete(building.id);
+      }
+    }
+
     if (!canRun) {
       building.active = false;
       continue;
@@ -1321,12 +1408,34 @@ export function runProductionTick(): void {
       if (key === 'meat') {
         totalMeatProduced += after - before;
       }
+      // Phase 44: the amount that didn't fit is production silently discarded.
+      // Debounced per resource key (not per building - the cap is global to
+      // the pool) so it fires once on the transition into "wasting" rather
+      // than every tick the pool stays pinned at the cap.
+      const wasted = produced - (after - before);
+      if (wasted > 0.001 && !resourcesWastingAtCap.has(key)) {
+        resourcesWastingAtCap.add(key);
+        addNotification(
+          `${RESOURCE_LABELS[key]} storage is full - production is being wasted`,
+          'warning',
+          elapsedSeconds,
+        );
+      }
     }
     building.active = true;
   }
 
   runSupermarketSales();
   runSaloonSales();
+
+  // Recovery pass for the storage-waste notification: once a resource drops
+  // back below the cap (a sale, a Warehouse coming online, etc.), clear its
+  // flag so a future refill-to-cap can notify again.
+  for (const key of resourcesWastingAtCap) {
+    if (resources[key] < storageCap) {
+      resourcesWastingAtCap.delete(key);
+    }
+  }
 
   for (const key of Object.keys(resources) as ResourceKey[]) {
     resourceTrends[key] = Math.round((resources[key] - before[key]) * 10) / 10;
@@ -1495,6 +1604,9 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
     occupancy[y].fill(null);
   }
+
+  clearNotificationDebounceState();
+  clearNotifications();
 
   // Terrain is intentionally kept across a reset (the player replays the same
   // map they just learned), but vegetation is reseeded so a run that felled

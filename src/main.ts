@@ -4,6 +4,7 @@ import { BuildingBar } from './ui/BuildingBar';
 import { BuildingInfoPanel } from './ui/BuildingInfoPanel';
 import { DifficultySelectOverlay } from './ui/DifficultySelectOverlay';
 import { GameOverOverlay } from './ui/GameOverOverlay';
+import { NotificationLogPanel } from './ui/NotificationLogPanel';
 
 new Phaser.Game(gameConfig);
 
@@ -15,6 +16,7 @@ const stageContainer = document.getElementById('stage');
 if (appContainer && stageContainer) {
   new BuildingBar(appContainer);
   new BuildingInfoPanel(stageContainer);
+  new NotificationLogPanel(stageContainer);
   new GameOverOverlay(appContainer);
   // Phase 39: shown last so it's on top for the very first run; MainScene
   // itself starts paused (see MainScene.pauseForPreGameSelection) until this

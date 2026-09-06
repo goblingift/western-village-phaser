@@ -90,6 +90,7 @@ import {
   setAudioListenerRect,
 } from '../audio/sound';
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
+import { addNotification } from '../state/notifications';
 import {
   DayPhase,
   DayPhaseChange,
@@ -530,6 +531,7 @@ export class MainScene extends Phaser.Scene {
     this.setupDayNightCycle();
     this.setupAudio();
     this.setupRaidSystem();
+    this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
     this.pauseForPreGameSelection();
@@ -2951,8 +2953,25 @@ export class MainScene extends Phaser.Scene {
   private centerCameraOnUnits(units: CombatUnit[]): void {
     const avgX = units.reduce((sum, unit) => sum + unit.image.x, 0) / units.length;
     const avgY = units.reduce((sum, unit) => sum + unit.image.y, 0) / units.length;
-    this.cameras.main.centerOn(avgX, avgY);
+    this.centerCameraOnWorldPoint(avgX, avgY);
+  }
+
+  /**
+   * Phase 44: generalized single-point version of centerCameraOnUnits' own
+   * centerOn-then-redraw-minimap-viewport pair, so the notification log's
+   * click-to-focus (which has one world point, not a unit list to average)
+   * doesn't need its own copy of the same two lines.
+   */
+  private centerCameraOnWorldPoint(worldX: number, worldY: number): void {
+    this.cameras.main.centerOn(worldX, worldY);
     this.redrawMinimapViewportThrottled();
+  }
+
+  /** Phase 44: NotificationLogPanel (a DOM overlay with no camera access) asks to pan here via gameEvents rather than duplicating tile->world math. */
+  private setupNotificationLog(): void {
+    gameEvents.on('camera-focus-requested', (worldX: number, worldY: number) => {
+      this.centerCameraOnWorldPoint(worldX, worldY);
+    });
   }
 
   /** 1-indexed against BuildingCategory's declaration order (BuildingBar builds its tabs off the same Object.values(...) order); out-of-range numbers (7-9, with today's 6 categories) are simply a no-op. */
@@ -3315,10 +3334,19 @@ export class MainScene extends Phaser.Scene {
     this.raidWaveTimer = this.time.delayedCall(RAID_WAVE_TIMEOUT_MS, () => this.endRaidWave());
   }
 
+  /**
+   * Phase 44: the temporary on-screen banner (raidNoticeText) stays exactly
+   * as it was - this only additionally appends the same message to the
+   * persistent notification log, so a raid a player didn't catch live is
+   * still visible afterward. No buildingId: a raid targets whichever building
+   * each raider individually picks, not one fixed location.
+   */
   private showRaidNotice(faction: RaiderFaction, count: number, threat: number): void {
     const tier = threat >= 0.66 ? 'Large ' : threat >= 0.33 ? 'Organized ' : '';
-    this.raidNoticeText.setText(`${tier}${RAIDER_DEFINITIONS[faction].label} raid - ${count} incoming!`);
+    const message = `${tier}${RAIDER_DEFINITIONS[faction].label} raid - ${count} incoming!`;
+    this.raidNoticeText.setText(message);
     this.raidNoticeText.setVisible(true);
+    addNotification(message, 'danger', getElapsedSeconds());
   }
 
   private hideRaidNotice(): void {

@@ -187,3 +187,15 @@ export type RunMode = 'fixed' | 'endless';
  * once and going flat for the remainder of a potentially unbounded run.
  */
 export const ENDLESS_THREAT_RAMP_CYCLES = DAY_COUNT;
+
+/**
+ * Phase 44: how many consecutive ticks a staffed, enabled, input-driven
+ * building must sit blocked on a missing input before the notification log
+ * reports it as "stalled". Debounced rather than firing on the very first
+ * blocked tick, since a one-tick input hiccup (another building draining the
+ * pool the instant before this one runs) is normal and not worth a log entry.
+ */
+export const PRODUCTION_STALL_NOTIFY_TICKS = 3;
+
+/** Phase 44: notification log retention - oldest entries drop once the log exceeds this many. */
+export const MAX_NOTIFICATION_LOG_ENTRIES = 50;

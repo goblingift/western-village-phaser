@@ -218,6 +218,55 @@
       #building-info-panel button.priority-button.active {
         background: #4caf50;
       }
+      /* Phase 44: notification log feed, opposite corner from
+         #building-info-panel so the two never overlap. */
+      #notification-log-panel {
+        position: absolute;
+        left: 16px;
+        bottom: 16px;
+        width: 280px;
+        max-width: calc(100vw - 32px);
+        max-height: 220px;
+        display: flex;
+        flex-direction: column;
+        background: #2b1d12ee;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 6px;
+        font-family: sans-serif;
+        font-size: 12px;
+        overflow: hidden;
+      }
+      #notification-log-panel .notification-log-header {
+        padding: 6px 10px;
+        font-weight: bold;
+        background: #3e2b1f;
+        border-bottom: 1px solid #8d6e4a;
+        cursor: pointer;
+        user-select: none;
+      }
+      #notification-log-panel .notification-log-list {
+        overflow-y: auto;
+        padding: 4px 10px;
+      }
+      #notification-log-panel .notification-log-entry {
+        padding: 3px 0;
+        border-bottom: 1px solid #4a3626;
+        line-height: 1.35;
+      }
+      #notification-log-panel .notification-log-entry:last-child {
+        border-bottom: none;
+      }
+      #notification-log-panel .notification-log-entry.clickable {
+        cursor: pointer;
+      }
+      #notification-log-panel .notification-log-entry.clickable:hover {
+        text-decoration: underline;
+      }
+      #notification-log-panel .notification-log-empty {
+        color: #8d7f6e;
+        padding: 6px 0;
+      }
       #game-over-overlay {
         position: fixed;
         inset: 0;
