@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import {
+  MARKETABLE_RESOURCE_KEYS,
+  MarketableResourceKey,
   RESOURCE_ICONS_ATLAS_KEY,
   RESOURCE_ICON_SIZE,
   RESOURCE_LABELS,
@@ -18,6 +20,12 @@ import {
   getStorageCap,
   getTotalPopulation,
 } from '../state/gameState';
+import { getBaselineMarketPrice, getCurrentMarketPrice } from '../state/market';
+
+/** Phase 51: is this resource sold anywhere (Supermarket/Saloon/Trading Post) and therefore has a fluctuating market price worth showing in the tooltip? */
+function isMarketable(key: ResourceKey): key is MarketableResourceKey {
+  return (MARKETABLE_RESOURCE_KEYS as ResourceKey[]).includes(key);
+}
 
 /**
  * Phase 33: the resource readout used to be three ever-lengthening lines of
@@ -189,6 +197,14 @@ export class ResourceHudPanel {
     this.tooltip.style.top = `${pointer.y + TOOLTIP_OFFSET_PX}px`;
   }
 
+  /** Phase 51: "$5.20 &uarr;" (above its drifting baseline), "$4.10 &darr;" (below), or plain "$5.00" when it's sitting right on it - the tooltip's only fluctuation cue, since the HUD grid itself has no room for a price column. */
+  private formatMarketPriceLine(key: MarketableResourceKey): string {
+    const current = getCurrentMarketPrice(key);
+    const baseline = getBaselineMarketPrice(key);
+    const arrow = current > baseline + 0.01 ? ' &uarr;' : current < baseline - 0.01 ? ' &darr;' : '';
+    return `<div>Market price: $${round1(current)}${arrow}</div>`;
+  }
+
   private renderTooltip(key: ResourceKey): void {
     const resources = getResources();
     const trends = getResourceTrends();
@@ -197,11 +213,13 @@ export class ResourceHudPanel {
     const trendText = trend > 0 ? `+${trend}/tick` : `${trend}/tick`;
     const producers = getResourceProducerLabels(key);
     const consumers = getResourceConsumerLabels(key);
+    const marketPriceLine = isMarketable(key) ? this.formatMarketPriceLine(key) : '';
 
     this.tooltip.innerHTML = `
       <strong>${RESOURCE_LABELS[key]}</strong>
       <div>Stock: ${stock}</div>
       <div>Net rate: ${trendText}</div>
+      ${marketPriceLine}
       <div>Produced by: ${producers.length > 0 ? producers.join(', ') : 'Nothing yet'}</div>
       <div>Consumed by: ${consumers.length > 0 ? consumers.join(', ') : 'Nothing yet'}</div>
       <div class="hint">Click: highlight on map | Esc: clear | C: toggle</div>

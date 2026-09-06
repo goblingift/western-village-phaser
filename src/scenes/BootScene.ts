@@ -825,6 +825,33 @@ const BLACKSMITH_SPRITE: PixelSprite = {
   ],
 };
 
+const TRADING_POST_SPRITE: PixelSprite = {
+  // Phase 51: open-sided market stall, like Forestry/Cactus Milker's "works
+  // outdoors" shape rather than a walled facade - it's a trading counter, not
+  // a shop. A candy-striped tent roof (A/W, distinct from Supermarket's own
+  // awning accent) shades a hanging balance scale (G beam/pans) over a
+  // counter stacked with goods sacks (J, reusing Cactus Milker's jug motif).
+  palette: { S: 0x3e2723, A: 0xc62828, W: 0xefebe9, P: 0x8d6748, G: 0xffd54f, C: 0x8d6e4a, J: 0xd7ccc8 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'AAWWAAWWAAWWAAWW',
+    'AAWWAAWWAAWWAAWW',
+    'SSSSSSSSSSSSSSSS',
+    'P..............P',
+    'P....GGGGGG....P',
+    'P...G......G...P',
+    'P..GG......GG..P',
+    'P..............P',
+    'P..CCC....CCC..P',
+    'P..CCC....CCC..P',
+    'SSSSSSSSSSSSSSSS',
+    'JJ.JJ.JJ.JJ.JJ..',
+    'JJ.JJ.JJ.JJ.JJ..',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -851,6 +878,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Quarry]: QUARRY_SPRITE,
   [BuildingType.IronMine]: IRON_MINE_SPRITE,
   [BuildingType.Blacksmith]: BLACKSMITH_SPRITE,
+  [BuildingType.TradingPost]: TRADING_POST_SPRITE,
 };
 
 /**

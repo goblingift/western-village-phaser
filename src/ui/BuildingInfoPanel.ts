@@ -5,9 +5,12 @@ import {
   BuildingType,
   HOUSE_TIER_CONFIG,
   HarvestConfig,
+  MARKETABLE_RESOURCE_KEYS,
+  MarketableResourceKey,
   PlacedBuilding,
   RESOURCE_LABELS,
   ResourceKey,
+  TradeOrderConfig,
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -21,6 +24,8 @@ import {
   HOUSE_TIER_HYSTERESIS_TICKS,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  TRADING_POST_DEFAULT_AMOUNT,
+  TRADING_POST_DEFAULT_THRESHOLD,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
@@ -39,10 +44,12 @@ import {
   hasAdjacentFence,
   repairBuilding,
   setBuildingPriority,
+  setTradingPostOrder,
   trainCowboy,
   trainMountedCowboy,
   withdrawFromBank,
 } from '../state/gameState';
+import { getCurrentMarketPrice } from '../state/market';
 
 const WORKER_PRIORITIES: WorkerPriority[] = ['high', 'normal', 'low'];
 
@@ -91,13 +98,14 @@ export class BuildingInfoPanel {
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const isHorsery = this.selected.type === BuildingType.Horsery;
     const isBank = this.selected.type === BuildingType.Bank;
+    const isTradingPost = this.selected.type === BuildingType.TradingPost;
     const isWatchtower = this.selected.type === BuildingType.Watchtower;
     const isHouse = this.selected.type === BuildingType.House;
     // Harvesters (Forestry, Cactus Milker) have no `production` block but are
     // still production buildings from the player's point of view.
     const statusText = production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
-      : isBarracks || isHorsery || isBank
+      : isBarracks || isHorsery || isBank || isTradingPost
         ? `Staffed: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
         : isWatchtower
           ? `Defense: ${
@@ -126,7 +134,9 @@ export class BuildingInfoPanel {
       ? this.formatSaleText(this.selected.lastSale, this.selected, workersRequired)
       : isSaloon
         ? this.formatSaleText(this.selected.saloonSale, this.selected, workersRequired)
-        : null;
+        : isTradingPost
+          ? this.formatSaleText(this.selected.tradingPostSale, this.selected, workersRequired)
+          : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
     const cowboyText = isBarracks ? `Cowboys: ${this.selected.cowboyCount}/${COWBOY_MAX_PER_BARRACKS}` : null;
@@ -226,6 +236,9 @@ export class BuildingInfoPanel {
       this.renderDepositButton(this.selected);
       this.renderWithdrawButton(this.selected);
     }
+    if (isTradingPost) {
+      this.renderTradeOrderRows(this.selected);
+    }
     if (workersRequired > 0) {
       this.renderPriorityControls(this.selected);
     }
@@ -309,6 +322,78 @@ export class BuildingInfoPanel {
     }
 
     this.panel.appendChild(row);
+  }
+
+  /**
+   * Phase 51: Trading Post. One row per marketable resource: a toggle button
+   * ("Off"/"Auto-sell"), a threshold number input ("above") and an amount
+   * number input ("up to N/tick"), plus the resource's live market price so
+   * the player can see what they'd actually be selling at. The two number
+   * inputs use 'change' (fires on blur/Enter), not 'input' - re-rendering the
+   * whole panel on every keystroke (this.render(), like every other control
+   * in this file) would steal focus mid-type.
+   */
+  private renderTradeOrderRows(building: PlacedBuilding): void {
+    const header = document.createElement('div');
+    header.textContent = 'Trade Orders:';
+    this.panel.appendChild(header);
+
+    for (const key of MARKETABLE_RESOURCE_KEYS) {
+      this.panel.appendChild(this.buildTradeOrderRow(building, key));
+    }
+  }
+
+  private buildTradeOrderRow(building: PlacedBuilding, key: MarketableResourceKey): HTMLDivElement {
+    const order: TradeOrderConfig = building.tradeOrders[key] ?? {
+      enabled: false,
+      threshold: TRADING_POST_DEFAULT_THRESHOLD,
+      amount: TRADING_POST_DEFAULT_AMOUNT,
+    };
+
+    const row = document.createElement('div');
+    row.className = 'trade-order-row';
+
+    const toggle = document.createElement('button');
+    toggle.className = `priority-button${order.enabled ? ' active' : ''}`;
+    toggle.textContent = order.enabled ? 'Auto-sell' : 'Off';
+    toggle.title = `${RESOURCE_LABELS[key]} ($${Math.round(getCurrentMarketPrice(key) * 100) / 100})`;
+    toggle.addEventListener('click', () => {
+      setTradingPostOrder(building.id, key, { enabled: !order.enabled });
+      this.render();
+    });
+    row.appendChild(toggle);
+
+    const label = document.createElement('span');
+    label.textContent = RESOURCE_LABELS[key];
+    row.appendChild(label);
+
+    const thresholdInput = document.createElement('input');
+    thresholdInput.type = 'number';
+    thresholdInput.min = '0';
+    thresholdInput.className = 'trade-order-input';
+    thresholdInput.title = 'Sell only once stock is above this amount';
+    thresholdInput.value = `${order.threshold}`;
+    thresholdInput.addEventListener('change', () => {
+      const threshold = Math.max(0, Number(thresholdInput.value) || 0);
+      setTradingPostOrder(building.id, key, { threshold });
+      this.render();
+    });
+    row.appendChild(thresholdInput);
+
+    const amountInput = document.createElement('input');
+    amountInput.type = 'number';
+    amountInput.min = '0';
+    amountInput.className = 'trade-order-input';
+    amountInput.title = 'Max sold per tick';
+    amountInput.value = `${order.amount}`;
+    amountInput.addEventListener('change', () => {
+      const amount = Math.max(0, Number(amountInput.value) || 0);
+      setTradingPostOrder(building.id, key, { amount });
+      this.render();
+    });
+    row.appendChild(amountInput);
+
+    return row;
   }
 
   /**

@@ -38,6 +38,7 @@ export enum BuildingType {
   Quarry = 'Quarry',
   IronMine = 'IronMine',
   Blacksmith = 'Blacksmith',
+  TradingPost = 'TradingPost',
 }
 
 /**
@@ -267,6 +268,30 @@ export interface AutoSale<K extends ResourceKey> {
 
 export type SupermarketSale = AutoSale<SupermarketSellableKey>;
 export type SaloonSale = AutoSale<SaloonSellableKey>;
+/**
+ * Phase 51: every resource sellable via either autonomous-sell table is also
+ * tradeable through a Trading Post's manual per-resource orders - the two
+ * existing rate tables double as this phase's price *baseline*, they aren't
+ * replaced. See MARKETABLE_RESOURCE_KEYS/BASE_MARKET_PRICES further down this
+ * file (declared after both tables) and state/market.ts for the fluctuating
+ * price model itself.
+ */
+export type MarketableResourceKey = SupermarketSellableKey | SaloonSellableKey;
+export type TradingPostSale = AutoSale<MarketableResourceKey>;
+
+/**
+ * Phase 51: one Trading Post row's manual configuration for a single
+ * resource. `enabled` gates the whole order; `threshold` is the stock level
+ * that must be exceeded before anything sells; `amount` caps how much sells
+ * per tick once it does - the same "sell up to N/tick above threshold X"
+ * shape the roadmap item asks for, just player-configured instead of a fixed
+ * per-building-type rate table.
+ */
+export interface TradeOrderConfig {
+  enabled: boolean;
+  threshold: number;
+  amount: number;
+}
 
 /**
  * Phase 42: player-controlled staffing order. assignWorkforce (gameState.ts)
@@ -339,6 +364,16 @@ export interface PlacedBuilding {
   houseNeedsUnmetStreak: number;
   /** Phase 46: only meaningful for House; last tick's per-need-group met/missing snapshot, for the info panel. Empty until the first production tick after placement. */
   houseNeedsStatus: { label: string; met: boolean }[];
+  /**
+   * Phase 51: only meaningful for Trading Post; player-configured manual sell
+   * orders keyed by resource, empty until the info panel's per-resource rows
+   * are used. A plain object on every building (like cowboyHp/animalCount)
+   * rather than a Map, so it survives the existing PlacedBuilding shape and
+   * needs no special-cased serialization anywhere.
+   */
+  tradeOrders: Partial<Record<MarketableResourceKey, TradeOrderConfig>>;
+  /** Only meaningful for Trading Post; last tick's autonomous sale from tradeOrders, mirroring lastSale/saloonSale. */
+  tradingPostSale?: TradingPostSale;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -706,6 +741,30 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     maxHp: 80,
     unlockRequirement: { populationAtLeast: 12 },
   },
+  /**
+   * Phase 51: Trading Post & Fluctuating Prices. A staffed, no-production
+   * commerce building like Supermarket/Saloon/Bank, but instead of a fixed
+   * per-type rate table it exposes per-resource manual sell orders
+   * (PlacedBuilding.tradeOrders) that the player configures in the info
+   * panel; both automatic (Supermarket/Saloon) and manual (Trading Post)
+   * sales now draw from the same fluctuating market (state/market.ts).
+   * Gated as the latest Commerce building (above Bank's netWorthAtLeast
+   * 4000) since manual price-timing only matters once a town has an economy
+   * worth optimizing.
+   */
+  [BuildingType.TradingPost]: {
+    type: BuildingType.TradingPost,
+    label: 'Trading Post',
+    cost: 260,
+    materials: { wood: 10, tools: 4 },
+    size: { width: 2, height: 2 },
+    color: 0xc9a063,
+    category: BuildingCategory.Commerce,
+    upkeep: 2,
+    requiresWorkers: true,
+    maxHp: 100,
+    unlockRequirement: { netWorthAtLeast: 5000, dayAtLeast: 3 },
+  },
 };
 
 /**
@@ -777,6 +836,36 @@ export const SALOON_SELL_RATES: Record<SaloonSellableKey, { amount: number; pric
   liquor: { amount: 2, price: 12 },
   agaveJuice: { amount: 2, price: 6 },
 };
+
+/**
+ * Phase 51: every resource either sell table names, deduped (the two never
+ * overlap today, but a Set guards against that changing later). This is the
+ * full set of goods a Trading Post can carry an order for, and what
+ * state/market.ts tracks a fluctuating price for.
+ */
+export const MARKETABLE_RESOURCE_KEYS: MarketableResourceKey[] = Array.from(
+  new Set<MarketableResourceKey>([
+    ...(Object.keys(SUPERMARKET_SELL_RATES) as SupermarketSellableKey[]),
+    ...(Object.keys(SALOON_SELL_RATES) as SaloonSellableKey[]),
+  ]),
+);
+
+/**
+ * The fixed `price` each rate table used to sell at forever is now just the
+ * peg a resource's fluctuating market price drifts around and is clamped
+ * against (see MARKET_PRICE_FLOOR_FRACTION/CEIL_FRACTION in constants.ts).
+ */
+export const BASE_MARKET_PRICES: Record<MarketableResourceKey, number> = MARKETABLE_RESOURCE_KEYS.reduce(
+  (acc, key) => {
+    const supermarketRate = (SUPERMARKET_SELL_RATES as Partial<Record<MarketableResourceKey, { price: number }>>)[
+      key
+    ];
+    const saloonRate = (SALOON_SELL_RATES as Partial<Record<MarketableResourceKey, { price: number }>>)[key];
+    acc[key] = supermarketRate?.price ?? saloonRate?.price ?? 0;
+    return acc;
+  },
+  {} as Record<MarketableResourceKey, number>,
+);
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
 
@@ -998,16 +1087,25 @@ export function describeBuilding(definition: BuildingDefinition): string {
     parts.push(`Produces per ${animalLabel}: ${formatResourceMap(outputPerAnimal)}`);
   }
   if (definition.type === BuildingType.Supermarket) {
+    // Phase 51: "@$X" read as a fixed price, which stopped being true once
+    // SUPERMARKET_SELL_RATES became the fluctuating market's baseline peg
+    // rather than the actual sale price - "~$X" signals it moves.
     const sellText = (Object.entries(SUPERMARKET_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
-      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} @$${price}`)
+      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} ~$${price}`)
       .join(', ');
-    parts.push(`Sells: ${sellText} per tick`);
+    parts.push(`Sells: ${sellText} per tick (market price fluctuates)`);
   }
   if (definition.type === BuildingType.Saloon) {
     const sellText = (Object.entries(SALOON_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
-      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} @$${price}`)
+      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} ~$${price}`)
       .join(', ');
-    parts.push(`Sells: ${sellText} per tick`);
+    parts.push(`Sells: ${sellText} per tick (market price fluctuates)`);
+  }
+  if (definition.type === BuildingType.TradingPost) {
+    parts.push(
+      `Configure manual sell orders (enable, threshold, amount) per resource in the info panel - trades at the same fluctuating market price as Supermarket/Saloon`,
+    );
+    parts.push(`Tradeable: ${MARKETABLE_RESOURCE_KEYS.map((key) => RESOURCE_LABELS[key]).join(', ')}`);
   }
   if (definition.type === BuildingType.Barracks) {
     parts.push(`Cowboys: $${COWBOY_TRAIN_COST} each, up to ${COWBOY_MAX_PER_BARRACKS}`);

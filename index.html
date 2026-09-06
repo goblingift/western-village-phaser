@@ -264,6 +264,27 @@
       #building-info-panel button.priority-button.active {
         background: #4caf50;
       }
+      /* Phase 51: Trading Post per-resource order rows - toggle + label +
+         two small number inputs, one row per marketable resource. */
+      #building-info-panel .trade-order-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 4px;
+        font-size: 12px;
+      }
+      #building-info-panel .trade-order-row span {
+        flex: 1;
+      }
+      #building-info-panel input.trade-order-input {
+        width: 44px;
+        background: #1d130c;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 3px;
+        padding: 2px 4px;
+        font-size: 12px;
+      }
       /* Phase 44: notification log feed, opposite corner from
          #building-info-panel so the two never overlap. */
       #notification-log-panel {

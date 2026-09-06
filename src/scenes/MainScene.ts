@@ -10,6 +10,12 @@ import {
   DAY_PHASE_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
+  MERCHANT_DEAL_MAX_SECONDS,
+  MERCHANT_DEAL_MIN_SECONDS,
+  MERCHANT_MAX_INTERVAL_MS,
+  MERCHANT_MIN_INTERVAL_MS,
+  MERCHANT_MULTIPLIER_MAX,
+  MERCHANT_MULTIPLIER_MIN,
   MINIMAP_HEIGHT,
   MINIMAP_MARGIN,
   MINIMAP_WIDTH,
@@ -62,6 +68,7 @@ import {
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
+  MARKETABLE_RESOURCE_KEYS,
   MOUNTED_COWBOYS_ATLAS_KEY,
   MOUNTED_COWBOY_SPRITE_HEIGHT,
   MOUNTED_COWBOY_SPRITE_WIDTH,
@@ -69,6 +76,7 @@ import {
   PlacedBuilding,
   RAIDERS_ATLAS_KEY,
   RAIDER_DEFINITIONS,
+  RESOURCE_LABELS,
   RaiderDefinition,
   RaiderFaction,
   ResourceKey,
@@ -92,6 +100,7 @@ import {
 } from '../audio/sound';
 import { BuildingRemovedPayload, HouseTierChangePayload, gameEvents } from '../state/gameEvents';
 import { addNotification } from '../state/notifications';
+import { startMerchantDeal } from '../state/market';
 import {
   DayPhase,
   DayPhaseChange,
@@ -500,6 +509,8 @@ export class MainScene extends Phaser.Scene {
   private raidNoticeText!: Phaser.GameObjects.Text;
   private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
+  /** Phase 51: Traveling Merchant - self-rescheduling timer mirroring raidCheckTimer, but with no wave/active-state to gate on. */
+  private merchantCheckTimer: Phaser.Time.TimerEvent | null = null;
   private cowboyShotGraphics: Phaser.GameObjects.Graphics[] = [];
   private cowboyUnits: CombatUnit[] = [];
   /** Phase 41: monotonically increasing so every CombatUnit.id is unique for the life of the scene, mirroring raiderIdCounter. */
@@ -586,6 +597,7 @@ export class MainScene extends Phaser.Scene {
     this.setupDayNightCycle();
     this.setupAudio();
     this.setupRaidSystem();
+    this.setupMerchantSystem();
     this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
@@ -2646,6 +2658,8 @@ export class MainScene extends Phaser.Scene {
       this.raidWarningTimer = null;
       this.raidWaveTimer?.remove();
       this.raidWaveTimer = null;
+      this.merchantCheckTimer?.remove();
+      this.merchantCheckTimer = null;
       this.animalSoundTimer?.remove();
       this.animalSoundTimer = null;
       this.hideRaidNotice();
@@ -3485,6 +3499,7 @@ export class MainScene extends Phaser.Scene {
       this.redrawMinimap();
 
       this.resetRaidState();
+      this.resetMerchantState();
     });
   }
 
@@ -3616,6 +3631,54 @@ export class MainScene extends Phaser.Scene {
         },
       });
     });
+  }
+
+  /**
+   * Phase 51: Traveling Merchant. Follows scheduleNextRaidCheck's exact
+   * self-rescheduling shape (roll a random delay, fire, immediately roll the
+   * next one) but with none of the raid system's active-wave/eligibility
+   * gating - a merchant deal has no "wave" to avoid overlapping and no grace
+   * period, so the timer body is just "fire, then reschedule".
+   */
+  private setupMerchantSystem(): void {
+    this.scheduleNextMerchantCheck();
+  }
+
+  private scheduleNextMerchantCheck(): void {
+    const delay = Phaser.Math.Between(MERCHANT_MIN_INTERVAL_MS, MERCHANT_MAX_INTERVAL_MS);
+    this.merchantCheckTimer = this.time.delayedCall(delay, () => {
+      this.triggerMerchantDeal();
+      this.scheduleNextMerchantCheck();
+    });
+  }
+
+  /**
+   * Picks one marketable resource and a random price-spike multiplier/
+   * duration, hands it to state/market.ts (the single source of truth for
+   * currentMarketPrice) and announces it through Phase 44's notification log
+   * - no bespoke UI chrome, the HUD tooltip's price/arrow already reflects it
+   * live once startMerchantDeal takes effect on the next production tick.
+   */
+  private triggerMerchantDeal(): void {
+    const key = MARKETABLE_RESOURCE_KEYS[Phaser.Math.Between(0, MARKETABLE_RESOURCE_KEYS.length - 1)];
+    const multiplier = Phaser.Math.FloatBetween(MERCHANT_MULTIPLIER_MIN, MERCHANT_MULTIPLIER_MAX);
+    const durationSeconds = Phaser.Math.Between(MERCHANT_DEAL_MIN_SECONDS, MERCHANT_DEAL_MAX_SECONDS);
+
+    startMerchantDeal(key, multiplier, durationSeconds, getElapsedSeconds());
+
+    const percentUp = Math.round((multiplier - 1) * 100);
+    addNotification(
+      `Traveling merchant wants ${RESOURCE_LABELS[key]}! Price up ${percentUp}% for the next ${durationSeconds}s.`,
+      'info',
+      getElapsedSeconds(),
+    );
+  }
+
+  /** Mirrors resetRaidState: cancel the pending check and start a fresh one so a new run doesn't inherit the previous run's countdown. */
+  private resetMerchantState(): void {
+    this.merchantCheckTimer?.remove();
+    this.merchantCheckTimer = null;
+    this.scheduleNextMerchantCheck();
   }
 
   /**

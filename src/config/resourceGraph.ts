@@ -2,6 +2,7 @@ import {
   BUILDING_DEFINITIONS,
   BuildingType,
   HOUSE_TIER_CONFIG,
+  MARKETABLE_RESOURCE_KEYS,
   ResourceKey,
   SALOON_SELL_RATES,
   SUPERMARKET_SELL_RATES,
@@ -61,6 +62,13 @@ export function getResourceConsumers(key: ResourceKey): BuildingType[] {
   }
   if (key in SALOON_SELL_RATES) {
     consumers.push(BuildingType.Saloon);
+  }
+  // Phase 51: a Trading Post CAN trade any marketable resource, even before
+  // the player has actually configured an order for it - "consumer" here
+  // means capability, matching how Supermarket/Saloon are listed regardless
+  // of whether they're currently staffed/selling this tick.
+  if ((MARKETABLE_RESOURCE_KEYS as ResourceKey[]).includes(key)) {
+    consumers.push(BuildingType.TradingPost);
   }
 
   return consumers;

@@ -219,3 +219,40 @@ export const HOUSE_TIER_HYSTERESIS_TICKS = 5;
  * equivalent here.
  */
 export const GRAVEL_MAX_DISTANCE_TILES = 2;
+
+/**
+ * Phase 51: Trading Post & Fluctuating Prices. Every marketable resource
+ * (state/market.ts) carries a slowly-drifting `baselinePrice` around its
+ * BASE_MARKET_PRICES peg, plus a temporary supply-side "pressure" penalty
+ * that grows with recent sold volume and decays back out. MARKET_DRIFT_
+ * MAX_FRACTION is the per-tick random-walk step (as a fraction of the
+ * baseline itself, not the original peg); FLOOR/CEIL_FRACTION clamp the
+ * baseline against the peg so a long run of bad luck can't drift a price to
+ * zero or to the moon.
+ */
+export const MARKET_DRIFT_MAX_FRACTION = 0.02;
+export const MARKET_PRICE_FLOOR_FRACTION = 0.5;
+export const MARKET_PRICE_CEIL_FRACTION = 1.5;
+/** Rolling window (in production ticks) of recent sold volume feeding the supply-pressure penalty - same rolling-window shape as Phase 49's productivity tracking. */
+export const MARKET_PRESSURE_WINDOW_TICKS = 10;
+/** Price cut (as a fraction) per unit of a resource sold within the pressure window; summed across the window and capped at MARKET_MAX_PRESSURE_FRACTION. */
+export const MARKET_PRESSURE_PER_UNIT = 0.015;
+export const MARKET_MAX_PRESSURE_FRACTION = 0.6;
+/** Absolute floor (as a fraction of BASE_MARKET_PRICES) the final price can never drop below, even under max pressure plus a low baseline. */
+export const MARKET_ABSOLUTE_FLOOR_FRACTION = 0.2;
+
+/** Trading Post: sensible starting values for a freshly-toggled-on order row, before the player tunes it. */
+export const TRADING_POST_DEFAULT_THRESHOLD = 10;
+export const TRADING_POST_DEFAULT_AMOUNT = 4;
+
+/**
+ * Phase 51: Traveling Merchant. Self-rescheduling timer in MainScene,
+ * following the exact scheduleNextRaidCheck pattern - a random delay is
+ * picked, the deal fires, and the next delay is rolled immediately after.
+ */
+export const MERCHANT_MIN_INTERVAL_MS = 90000;
+export const MERCHANT_MAX_INTERVAL_MS = 180000;
+export const MERCHANT_DEAL_MIN_SECONDS = 30;
+export const MERCHANT_DEAL_MAX_SECONDS = 60;
+export const MERCHANT_MULTIPLIER_MIN = 1.5;
+export const MERCHANT_MULTIPLIER_MAX = 2;

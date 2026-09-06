@@ -25,6 +25,8 @@ import {
   RunMode,
   STARTING_MONEY,
   THREAT_NET_WORTH_FULL,
+  TRADING_POST_DEFAULT_AMOUNT,
+  TRADING_POST_DEFAULT_THRESHOLD,
   VEGETATION_CLEAR_CACTUS_JUICE,
   VEGETATION_CLEAR_COST,
   VEGETATION_CLEAR_TREE_LOGS,
@@ -38,6 +40,7 @@ import {
   HOUSE_TIER_CONFIG,
   HarvestConfig,
   HouseTier,
+  MarketableResourceKey,
   PlacedBuilding,
   RESOURCE_LABELS,
   RESOURCE_VALUES,
@@ -46,6 +49,7 @@ import {
   SUPERMARKET_SELL_RATES,
   SaloonSellableKey,
   SupermarketSellableKey,
+  TradeOrderConfig,
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -63,6 +67,7 @@ import {
 } from './vegetation';
 import { gameEvents } from './gameEvents';
 import { addNotification, clearNotifications } from './notifications';
+import { getCurrentMarketPrice, recordMarketSaleVolume, resetMarket, runMarketTick } from './market';
 
 export interface Resources {
   rawMeat: number;
@@ -689,6 +694,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     houseNeedsMetStreak: 0,
     houseNeedsUnmetStreak: 0,
     houseNeedsStatus: [],
+    tradeOrders: {},
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -1330,7 +1336,11 @@ function runSupermarketSales(): void {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
       addConsumedThisTick(key, soldAmount);
-      revenue += soldAmount * rate.price;
+      // Phase 51: SUPERMARKET_SELL_RATES.price is now only the market's
+      // baseline peg - the actual sale reads the live, fluctuating price.
+      const price = getCurrentMarketPrice(key);
+      revenue += soldAmount * price;
+      recordMarketSaleVolume(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
         anySold = true;
@@ -1372,7 +1382,9 @@ function runSaloonSales(): void {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
       addConsumedThisTick(key, soldAmount);
-      revenue += soldAmount * rate.price;
+      const price = getCurrentMarketPrice(key);
+      revenue += soldAmount * price;
+      recordMarketSaleVolume(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
         anySold = true;
@@ -1387,6 +1399,98 @@ function runSaloonSales(): void {
     };
     building.active = anySold;
   }
+}
+
+/**
+ * Phase 51: Trading Post. Unlike Supermarket/Saloon's fixed per-type rate
+ * table, each Trading Post carries its own player-configured `tradeOrders`
+ * (set via setTradingPostOrder) - "sell up to `amount`/tick, but only once
+ * stock exceeds `threshold`". Draws from the same fluctuating market price
+ * and feeds the same volume-pressure tracking as the other two sell passes,
+ * so a player dumping stock through a Trading Post depresses the price a
+ * Supermarket/Saloon (or another Trading Post) would get for the same good,
+ * and vice versa - there's one market, not three.
+ */
+function runTradingPostSales(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.TradingPost) {
+      continue;
+    }
+
+    if (!building.staffed) {
+      building.active = false;
+      building.tradingPostSale = { sold: {}, revenue: 0 };
+      continue;
+    }
+
+    const sold: Partial<Record<MarketableResourceKey, number>> = {};
+    let revenue = 0;
+    let anySold = false;
+
+    for (const [key, order] of Object.entries(building.tradeOrders) as [MarketableResourceKey, TradeOrderConfig][]) {
+      if (!order.enabled || order.amount <= 0) {
+        continue;
+      }
+      const availableAboveThreshold = resources[key] - order.threshold;
+      const soldAmount = Math.min(order.amount, Math.max(0, availableAboveThreshold));
+      if (soldAmount <= 0) {
+        continue;
+      }
+
+      resources[key] -= soldAmount;
+      addConsumedThisTick(key, soldAmount);
+      const price = getCurrentMarketPrice(key);
+      revenue += soldAmount * price;
+      recordMarketSaleVolume(key, soldAmount);
+      sold[key] = Math.round(soldAmount * 10) / 10;
+      anySold = true;
+    }
+
+    money = Math.round((money + revenue) * 100) / 100;
+
+    building.tradingPostSale = {
+      sold,
+      revenue: Math.round(revenue * 100) / 100,
+    };
+    building.active = anySold;
+  }
+}
+
+/**
+ * Phase 51: player-facing Trading Post configuration, one resource row at a
+ * time (mirrors setBuildingPriority's "mutate the field, let the next tick
+ * pick it up" shape). Passing `undefined` for `enabled`/`threshold`/`amount`
+ * keeps that field's current value (or the TRADING_POST_DEFAULT_* seed if the
+ * order doesn't exist yet), so the info panel's toggle button and its two
+ * number inputs can each call this independently without clobbering the
+ * other two fields.
+ */
+export function setTradingPostOrder(
+  buildingId: string,
+  key: MarketableResourceKey,
+  update: Partial<TradeOrderConfig>,
+): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.TradingPost) {
+    return false;
+  }
+
+  const existing: TradeOrderConfig = building.tradeOrders[key] ?? {
+    enabled: false,
+    threshold: TRADING_POST_DEFAULT_THRESHOLD,
+    amount: TRADING_POST_DEFAULT_AMOUNT,
+  };
+
+  building.tradeOrders = {
+    ...building.tradeOrders,
+    [key]: {
+      enabled: update.enabled ?? existing.enabled,
+      threshold: Math.max(0, update.threshold ?? existing.threshold),
+      amount: Math.max(0, update.amount ?? existing.amount),
+    },
+  };
+
+  return true;
 }
 
 /**
@@ -1632,6 +1736,11 @@ export function runProductionTick(): void {
   tickResourceProduced = {};
   tickResourceConsumed = {};
 
+  // Phase 51: advance the market before anything sells this tick, so every
+  // sell pass below reads a price that already reflects the drift/pressure/
+  // merchant-deal state as of this tick, not last tick's.
+  runMarketTick(elapsedSeconds);
+
   runBankInterest();
   assignWorkforce();
   runUpkeep();
@@ -1761,6 +1870,7 @@ export function runProductionTick(): void {
 
   runSupermarketSales();
   runSaloonSales();
+  runTradingPostSales();
   runHouseNeeds();
 
   // Recovery pass for the storage-waste notification: once a resource drops
@@ -1997,6 +2107,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   clearNotificationDebounceState();
   clearNotifications();
   unlockNotified.clear();
+  resetMarket();
 
   // Terrain is intentionally kept across a reset (the player replays the same
   // map they just learned), but vegetation is reseeded so a run that felled
