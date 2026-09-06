@@ -541,7 +541,20 @@ export function animalTextureKey(animalLabel: AnimalKind): string {
 /** Small idle-animation accents (Phase 19), layered above a building's own image; a different asset class again, so its own atlas. */
 export const ACCENTS_ATLAS_KEY = 'accents-atlas';
 
-export type AccentKind = 'WellCrank' | 'WarehouseDoor' | 'SupermarketAwning' | 'ChickenDoor';
+/**
+ * Phase 34 adds the two night-only accents (a lit House window, a campfire by
+ * the Barracks) to Phase 19's idle-animation set rather than inventing a
+ * second accent system: they are the same thing - a small sprite layered over
+ * a building and tweened - and reusing ACCENTS_ATLAS_KEY means they cost no
+ * new atlas, no new depth band and no new cleanup path.
+ */
+export type AccentKind =
+  | 'WellCrank'
+  | 'WarehouseDoor'
+  | 'SupermarketAwning'
+  | 'ChickenDoor'
+  | 'HouseWindowLight'
+  | 'Campfire';
 
 export function accentTextureKey(kind: AccentKind): string {
   return `accent-${kind}`;

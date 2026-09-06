@@ -818,11 +818,30 @@ const CHICKEN_DOOR_ACCENT_SPRITE: PixelSprite = {
   pattern: ['.CC.', '.CC.', 'CCCC'],
 };
 
+/**
+ * Phase 34 night accents. A warm lamp-lit pane (two bright rows over a dimmer
+ * sill) that sits over the House's front window and is faded in at dusk, and a
+ * small campfire (dark log bed, orange flame, yellow core) pitched beside the
+ * Barracks. Both are drawn at building PIXEL_SIZE like every other accent so
+ * they line up with the sprite they overlay.
+ */
+const HOUSE_WINDOW_LIGHT_ACCENT_SPRITE: PixelSprite = {
+  palette: { L: 0xffe082, W: 0xffb300 },
+  pattern: ['LLL', 'LLL', 'WWW'],
+};
+
+const CAMPFIRE_ACCENT_SPRITE: PixelSprite = {
+  palette: { F: 0xff7043, C: 0xffd54f, L: 0x4e342e },
+  pattern: ['.F.', 'FCF', 'LLL'],
+};
+
 const ACCENT_SPRITES: Record<AccentKind, PixelSprite> = {
   WellCrank: WELL_CRANK_ACCENT_SPRITE,
   WarehouseDoor: WAREHOUSE_DOOR_ACCENT_SPRITE,
   SupermarketAwning: SUPERMARKET_AWNING_ACCENT_SPRITE,
   ChickenDoor: CHICKEN_DOOR_ACCENT_SPRITE,
+  HouseWindowLight: HOUSE_WINDOW_LIGHT_ACCENT_SPRITE,
+  Campfire: CAMPFIRE_ACCENT_SPRITE,
 };
 
 /**

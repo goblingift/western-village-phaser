@@ -8,7 +8,24 @@ export const PRODUCTION_TICK_MS = 2000;
 // rebuilding after destruction all compete for the same starting purse.
 export const STARTING_MONEY = 1800;
 export const POPULATION_PER_HOUSE = 2;
-export const GAME_DURATION_SECONDS = 300;
+/**
+ * Phase 34: the one-shot 5-minute countdown is gone. A run is now DAY_COUNT
+ * repetitions of a day/night cycle; GAME_DURATION_SECONDS is kept as the
+ * derived total (3 x (150 + 150) = 900s = ~15 min at 1x) because threat
+ * scaling and the score screen still want "how long is a whole run".
+ */
+export const DAY_PHASE_SECONDS = 150;
+export const NIGHT_PHASE_SECONDS = 150;
+export const DAY_COUNT = 3;
+export const CYCLE_SECONDS = DAY_PHASE_SECONDS + NIGHT_PHASE_SECONDS;
+export const GAME_DURATION_SECONDS = CYCLE_SECONDS * DAY_COUNT;
+/**
+ * Dusk/dawn are tweened rather than snapped so the transition reads as time
+ * passing; NIGHT_OVERLAY_ALPHA is how dark full night gets (deliberately far
+ * from opaque - the player still has to be able to play).
+ */
+export const DAY_NIGHT_TRANSITION_MS = 20000;
+export const NIGHT_OVERLAY_ALPHA = 0.45;
 // Global per-resource storage cap: always-available base capacity plus a bonus
 // for every currently-staffed Warehouse. Production beyond the cap is wasted.
 export const BASE_STORAGE_CAP = 50;

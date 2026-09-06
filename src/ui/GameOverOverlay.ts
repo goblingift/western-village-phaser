@@ -35,8 +35,19 @@ export class GameOverOverlay {
 
     const { netWorth } = summary;
 
+    // Phase 34: two ways a run can end now - the buzzer after three full
+    // day/night cycles, or losing every last building to a raid. The score
+    // breakdown is identical either way (a levelled town simply scores its
+    // remaining cash and stock); only the headline changes.
+    const destroyed = summary.reason === 'destroyed';
+    const heading = destroyed ? 'Town Destroyed!' : "Time's Up!";
+    const subheading = destroyed
+      ? `<div class="stat">Raiders levelled the last building on day ${summary.daysSurvived}.</div>`
+      : `<div class="stat">Survived all ${summary.daysSurvived} days.</div>`;
+
     this.content.innerHTML = `
-      <h2>Time's Up!</h2>
+      <h2>${heading}</h2>
+      ${subheading}
       <div class="stat">Net worth: $${netWorth.total}</div>
       <h3>Breakdown</h3>
       <div>Cash: $${netWorth.cash}</div>

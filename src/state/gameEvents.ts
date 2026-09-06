@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { BuildingType, PlacedBuilding } from '../config/buildingConfig';
-import type { GameOverSummary, Resources } from './gameState';
+import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
 import type { VegetationEntity } from './vegetation';
 
 /**
@@ -38,6 +38,8 @@ export interface GameEventMap {
   'demolish-mode-changed': (active: boolean) => void;
   'speed-changed': (speed: number) => void;
   'building-icons-ready': () => void;
+  /** Phase 34: fired on every day->night / night->day boundary (and on reset). */
+  'day-phase-changed': (change: DayPhaseChange) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

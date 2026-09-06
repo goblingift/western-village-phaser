@@ -5,6 +5,9 @@ import {
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  CYCLE_SECONDS,
+  DAY_COUNT,
+  DAY_PHASE_SECONDS,
   DEMOLISH_REFUND_FRACTION,
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
@@ -75,6 +78,23 @@ export interface GameOverSummary {
   netWorth: NetWorthBreakdown;
   totalMeatProduced: number;
   buildingCounts: Record<BuildingType, number>;
+  /**
+   * Phase 34: how the run ended. 'time' is the normal buzzer after DAY_COUNT
+   * full day/night cycles; 'destroyed' is the new early defeat when raiders
+   * level the last standing building.
+   */
+  reason: GameOverReason;
+  daysSurvived: number;
+}
+
+export type GameOverReason = 'time' | 'destroyed';
+
+/** Phase 34: which half of the day/night cycle the run is currently in. */
+export type DayPhase = 'day' | 'night';
+
+export interface DayPhaseChange {
+  dayNumber: number;
+  phase: DayPhase;
 }
 
 function emptyResources(): Resources {
@@ -101,7 +121,13 @@ const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
 let totalMeatProduced = 0;
-let remainingSeconds = GAME_DURATION_SECONDS;
+/**
+ * Phase 34: the clock is now elapsed-forward rather than a single countdown.
+ * Everything else about the cycle (which day, which phase, how long is left in
+ * it) is derived from this one number, so there is no way for the day counter
+ * and the phase timer to drift apart.
+ */
+let elapsedSeconds = 0;
 let gameOver = false;
 let totalPopulation = 0;
 let employedPopulation = 0;
@@ -123,8 +149,42 @@ export function getResources(): Readonly<Resources> {
   return resources;
 }
 
+export function getElapsedSeconds(): number {
+  return elapsedSeconds;
+}
+
+/** Seconds left in the whole run (all DAY_COUNT cycles), floored at 0. */
 export function getRemainingSeconds(): number {
-  return remainingSeconds;
+  return Math.max(0, GAME_DURATION_SECONDS - elapsedSeconds);
+}
+
+/**
+ * Pure derivation from an elapsed-seconds value, so the same function answers
+ * "what phase is it now" and "what phase will it be in N seconds" (the raid
+ * scheduler needs the latter to decide whether to bother showing a warning).
+ */
+export function getPhaseAtElapsed(seconds: number): DayPhase {
+  return seconds % CYCLE_SECONDS < DAY_PHASE_SECONDS ? 'day' : 'night';
+}
+
+export function getDayNumberAtElapsed(seconds: number): number {
+  return Math.min(DAY_COUNT, Math.floor(seconds / CYCLE_SECONDS) + 1);
+}
+
+export function getDayPhase(): DayPhase {
+  return getPhaseAtElapsed(elapsedSeconds);
+}
+
+export function getDayNumber(): number {
+  return getDayNumberAtElapsed(elapsedSeconds);
+}
+
+/** Seconds left in the *current* day or night half, which is what the HUD counts down. */
+export function getPhaseRemainingSeconds(): number {
+  const intoCycle = elapsedSeconds % CYCLE_SECONDS;
+  return getDayPhase() === 'day'
+    ? DAY_PHASE_SECONDS - intoCycle
+    : CYCLE_SECONDS - intoCycle;
 }
 
 export function getTotalMeatProduced(): number {
@@ -325,6 +385,15 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
 
   gameEvents.emit('building-removed', { building, reason });
   updateConnections();
+
+  // Phase 34: losing your last building to a raid ends the run early. Gated
+  // on reason === 'destroyed' deliberately: bulldozing your own last shed is
+  // a legitimate (if odd) rebuild step, not a defeat, and the town has all
+  // its money and stock to rebuild with. Raiders levelling everything is the
+  // actual failure state.
+  if (reason === 'destroyed' && placedBuildings.length === 0) {
+    endGame('destroyed');
+  }
 }
 
 /** Called by the combat tick once a building's HP has been driven to 0. */
@@ -1073,16 +1142,34 @@ export function runProductionTick(): void {
   gameEvents.emit('production-tick');
 }
 
+/**
+ * Phase 34: one second of run time. The run is DAY_COUNT day/night cycles
+ * long, and the only thing this advances is `elapsedSeconds` - day number and
+ * phase are derived from it (see getPhaseAtElapsed), so a phase transition is
+ * detected by comparing the derived phase before and after the increment
+ * rather than by maintaining a second, separately-decremented counter that
+ * could fall out of sync with the day count.
+ */
 export function tickTimer(): void {
   if (gameOver) {
     return;
   }
 
-  remainingSeconds -= 1;
-  gameEvents.emit('timer-changed', remainingSeconds);
+  const previousPhase = getDayPhase();
+  const previousDay = getDayNumber();
 
-  if (remainingSeconds <= 0) {
-    endGame();
+  elapsedSeconds += 1;
+  gameEvents.emit('timer-changed', getPhaseRemainingSeconds());
+
+  if (elapsedSeconds >= GAME_DURATION_SECONDS) {
+    endGame('time');
+    return;
+  }
+
+  const phase = getDayPhase();
+  const dayNumber = getDayNumber();
+  if (phase !== previousPhase || dayNumber !== previousDay) {
+    gameEvents.emit('day-phase-changed', { dayNumber, phase });
   }
 }
 
@@ -1122,8 +1209,14 @@ export function computeNetWorth(): NetWorthBreakdown {
  * bank-balance-only raid hook: banked cash still raises threat, but now as
  * one component of overall wealth rather than its own special case.
  */
+/**
+ * Phase 34: rebased from the old one-shot countdown (`remainingSeconds`,
+ * which no longer exists as a monotonically-shrinking value) onto elapsed run
+ * time. Behaviour is identical to Phase 31's over a full run - 0 at the start,
+ * 1 at the buzzer - but it no longer breaks the moment the clock repeats.
+ */
 export function getThreatLevel(): number {
-  const elapsedFraction = 1 - Math.max(0, remainingSeconds) / GAME_DURATION_SECONDS;
+  const elapsedFraction = Math.min(1, elapsedSeconds / GAME_DURATION_SECONDS);
   const wealthFraction = Math.min(1, computeNetWorth().total / THREAT_NET_WORTH_FULL);
   return Math.min(1, elapsedFraction * 0.5 + wealthFraction * 0.5);
 }
@@ -1143,12 +1236,17 @@ function countBuildingsByType(): Record<BuildingType, number> {
   return counts;
 }
 
-function endGame(): void {
+function endGame(reason: GameOverReason): void {
+  if (gameOver) {
+    return;
+  }
   gameOver = true;
   gameEvents.emit('game-over', {
     netWorth: computeNetWorth(),
     totalMeatProduced: Math.round(totalMeatProduced * 10) / 10,
     buildingCounts: countBuildingsByType(),
+    reason,
+    daysSurvived: getDayNumber(),
   });
 }
 
@@ -1157,7 +1255,7 @@ export function resetGame(): void {
   Object.assign(resources, emptyResources());
   resourceTrends = emptyResources();
   totalMeatProduced = 0;
-  remainingSeconds = GAME_DURATION_SECONDS;
+  elapsedSeconds = 0;
   gameOver = false;
   totalPopulation = 0;
   employedPopulation = 0;
@@ -1176,7 +1274,10 @@ export function resetGame(): void {
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
-  gameEvents.emit('timer-changed', remainingSeconds);
+  gameEvents.emit('timer-changed', getPhaseRemainingSeconds());
+  // A reset always lands back on day 1 morning, so listeners that own
+  // night-only visuals get told to go back to their daytime state.
+  gameEvents.emit('day-phase-changed', { dayNumber: 1, phase: 'day' });
   gameEvents.emit('connections-updated');
   gameEvents.emit('game-reset');
 }

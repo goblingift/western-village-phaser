@@ -5,7 +5,7 @@ import {
   CAMERA_ZOOM_STEP,
   COWBOY_DAMAGE,
   COWBOY_RANGE_TILES,
-  GAME_DURATION_SECONDS,
+  DAY_PHASE_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
   MINIMAP_HEIGHT,
@@ -34,6 +34,7 @@ import {
   vegetationTextureKey,
 } from '../config/vegetationConfig';
 import { VegetationEntity, getVegetation } from '../state/vegetation';
+import { NightOverlay } from '../ui/NightOverlay';
 import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
 import {
@@ -66,12 +67,16 @@ import {
 import { playPlacementSound } from '../audio/sound';
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
 import {
+  DayPhase,
+  DayPhaseChange,
   computeNetWorth,
   damageUnit,
   demolishBuilding,
   destroyBuilding,
   getBuildingAtTile,
   getBuildingById,
+  getDayNumber,
+  getDayPhase,
   getFenceLinks,
   getPlacedBuildings,
   getPlacementRejection,
@@ -211,11 +216,29 @@ const SELECTION_RECT_COLOR = 0x42a5f5;
 const SELECTION_RECT_FILL_ALPHA = 0.15;
 const SELECTION_RECT_DEPTH = 13.4;
 
+/**
+ * Phase 34 night polish. The window light and campfire are created once with
+ * the rest of a building's accents and simply faded in/out with the cycle, so
+ * nothing is created or destroyed at a phase boundary.
+ */
+const NIGHT_ACCENT_FADE_MS = 4000;
+const NIGHT_ACCENT_MAX_ALPHA = 0.95;
+const CAMPFIRE_FLICKER_MS = 420;
+/** Cool blue-grey multiply tint applied to tree/cactus sprites at night; daytime is untinted. */
+const VEGETATION_NIGHT_TINT = 0x6f86b8;
+
 interface BuildingVisual {
   building: PlacedBuilding;
   image: Phaser.GameObjects.Image;
   animalImages: Phaser.GameObjects.Image[];
   accentObjects: Phaser.GameObjects.GameObject[];
+  /**
+   * Phase 34: the subset of accentObjects that only show at night (House
+   * window light, Barracks campfire). Tracked separately so the phase change
+   * can fade exactly those without touching the always-on idle accents, while
+   * cleanup still walks the single accentObjects list.
+   */
+  nightAccents: Phaser.GameObjects.Image[];
 }
 
 /**
@@ -291,7 +314,8 @@ export class MainScene extends Phaser.Scene {
   private raidWarningTimer: Phaser.Time.TimerEvent | null = null;
   /** Tracked so a building that is destroyed/demolished while its info panel is open closes that panel. */
   private selectedBuildingId: string | null = null;
-  private remainingSecondsDisplay = GAME_DURATION_SECONDS;
+  private phaseRemainingDisplay = DAY_PHASE_SECONDS;
+  private nightOverlay!: NightOverlay;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private pointerDownX = 0;
@@ -351,6 +375,7 @@ export class MainScene extends Phaser.Scene {
     this.setupCowboyVisuals();
     this.setupUnitControl();
     this.setupHpBarVisuals();
+    this.setupDayNightCycle();
     this.setupRaidSystem();
     this.setupGameReset();
   }
@@ -421,6 +446,11 @@ export class MainScene extends Phaser.Scene {
       .image(entity.tileX * TILE_SIZE, entity.tileY * TILE_SIZE, VEGETATION_ATLAS_KEY, vegetationTextureKey(entity.kind))
       .setOrigin(0, 0)
       .setDepth(VEGETATION_DEPTH);
+    // Phase 34: a tree replanted at 2am must not be the only green thing on a
+    // blue map, so new sprites adopt the current phase's tint immediately.
+    if (getDayPhase() === 'night') {
+      image.setTint(VEGETATION_NIGHT_TINT);
+    }
     this.vegetationImages.set(entity.id, image);
   }
 
@@ -656,8 +686,8 @@ export class MainScene extends Phaser.Scene {
     this.timerText.setScrollFactor(0);
     this.timerText.setDepth(1000);
 
-    gameEvents.on('timer-changed', (remainingSeconds: number) => {
-      this.remainingSecondsDisplay = remainingSeconds;
+    gameEvents.on('timer-changed', (phaseRemainingSeconds: number) => {
+      this.phaseRemainingDisplay = phaseRemainingSeconds;
       this.timerText.setText(this.formatTimerText());
     });
     gameEvents.on('production-tick', () => {
@@ -675,13 +705,21 @@ export class MainScene extends Phaser.Scene {
    * Phase 32: the headline number is net worth, not meat. Also shows the
    * current speed multiplier (or PAUSED) so the player always knows why the
    * clock is or isn't moving.
+   *
+   * Phase 34: the flat run countdown is replaced by the cycle position -
+   * which day, which half of it, and how long that half has left. "How long
+   * until the run ends" is no longer the number the player plans around;
+   * "how long until nightfall (and therefore raids)" is.
    */
   private formatTimerText(): string {
-    const minutes = Math.floor(this.remainingSecondsDisplay / 60);
-    const seconds = this.remainingSecondsDisplay % 60;
+    const minutes = Math.floor(this.phaseRemainingDisplay / 60);
+    const seconds = this.phaseRemainingDisplay % 60;
     const time = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    // "Day 2 - Day 1:40" read as a typo in testing; the phase gets the longer
+    // word so the day counter and the phase can't be mistaken for each other.
+    const phaseLabel = getDayPhase() === 'night' ? 'Night' : 'Daytime';
     const speedLabel = this.gameSpeed === 0 ? 'PAUSED' : `${this.gameSpeed}x`;
-    return `Time: ${time} (${speedLabel}) | Net worth: $${computeNetWorth().total}`;
+    return `Day ${getDayNumber()} - ${phaseLabel} ${time} (${speedLabel}) | Net worth: $${computeNetWorth().total}`;
   }
 
   private setupMinimap(): void {
@@ -1116,7 +1154,13 @@ export class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(10);
 
-    const visual: BuildingVisual = { building, image, animalImages: [], accentObjects: [] };
+    const visual: BuildingVisual = {
+      building,
+      image,
+      animalImages: [],
+      accentObjects: [],
+      nightAccents: [],
+    };
     this.buildingVisuals.set(building.id, visual);
     if (building.type === BuildingType.Fence) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
@@ -1156,6 +1200,52 @@ export class MainScene extends Phaser.Scene {
         break;
       default:
         break;
+    }
+
+    this.createNightAccents(visual, originX, originY);
+  }
+
+  /**
+   * Phase 34: the night-only half of a building's accents. Created here with
+   * everything else (never at a phase boundary) and simply held at alpha 0
+   * through the day, so a phase change is a tween on existing objects rather
+   * than a create/destroy churn across every House on the map.
+   */
+  private createNightAccents(visual: BuildingVisual, originX: number, originY: number): void {
+    const { building } = visual;
+
+    if (building.type === BuildingType.House) {
+      // Sits over the House's front window, centred on its 1x1 footprint.
+      const light = this.createAccentImage(originX + 12, originY + 16, 'HouseWindowLight').setOrigin(0, 0);
+      visual.nightAccents.push(light);
+      visual.accentObjects.push(light);
+    }
+
+    if (building.type === BuildingType.Barracks) {
+      // Pitched just outside the Barracks' footprint, in its yard.
+      const fire = this.createAccentImage(originX + 4, originY + 46, 'Campfire').setOrigin(0, 0);
+      visual.nightAccents.push(fire);
+      visual.accentObjects.push(fire);
+
+      // Flicker runs permanently; it's only ever visible when the alpha tween
+      // below has faded the fire in, so there's nothing to start/stop.
+      this.tweens.add({
+        targets: fire,
+        scaleY: 1.15,
+        duration: CAMPFIRE_FLICKER_MS,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
+
+    // Read from the overlay's live alpha rather than a binary day/night check,
+    // so a House placed halfway through dusk lights its window to match the
+    // current darkness instead of popping to fully lit (or staying dark until
+    // the next phase change).
+    const nightFactor = this.nightOverlay.getNightFactor();
+    for (const accent of visual.nightAccents) {
+      accent.setAlpha(nightFactor * NIGHT_ACCENT_MAX_ALPHA);
     }
   }
 
@@ -1351,6 +1441,70 @@ export class MainScene extends Phaser.Scene {
       this.hpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
       this.hpBarGraphics.fillRect(px, py, barWidth * ratio, HP_BAR_HEIGHT);
     }
+  }
+
+  /**
+   * Phase 34: the day/night cycle's visual side. The cycle itself is state
+   * (gameState owns dayNumber/phase/elapsed and emits 'day-phase-changed');
+   * this only reacts to it - darken the screen, light the windows, cool the
+   * vegetation, and announce the transition.
+   */
+  private setupDayNightCycle(): void {
+    this.nightOverlay = new NightOverlay(this);
+    this.applyVegetationTint(getDayPhase());
+
+    gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
+      this.applyVegetationTint(phase);
+      this.fadeNightAccents(phase);
+      this.timerText.setText(this.formatTimerText());
+      this.showPhaseNotice(dayNumber, phase);
+    });
+  }
+
+  /** Cool blue-grey multiply tint on every tree/cactus at night; cleared at dawn. */
+  private applyVegetationTint(phase: DayPhase): void {
+    for (const image of this.vegetationImages.values()) {
+      if (phase === 'night') {
+        image.setTint(VEGETATION_NIGHT_TINT);
+      } else {
+        image.clearTint();
+      }
+    }
+  }
+
+  private fadeNightAccents(phase: DayPhase): void {
+    const target = phase === 'night' ? NIGHT_ACCENT_MAX_ALPHA : 0;
+    for (const visual of this.buildingVisuals.values()) {
+      for (const accent of visual.nightAccents) {
+        this.tweens.add({
+          targets: accent,
+          alpha: target,
+          duration: NIGHT_ACCENT_FADE_MS,
+          ease: 'Sine.easeInOut',
+        });
+      }
+    }
+  }
+
+  /**
+   * Reuses the raid notice's slot/style rather than adding a third HUD text
+   * object; suppressed while a raid is on screen, which is strictly the more
+   * urgent message (and raids only happen at night, so this would otherwise
+   * fight with them at exactly the wrong moment).
+   */
+  private showPhaseNotice(dayNumber: number, phase: DayPhase): void {
+    if (this.raidActive) {
+      return;
+    }
+    this.raidNoticeText.setText(
+      phase === 'night' ? `Night falls - Day ${dayNumber}` : `Sunrise - Day ${dayNumber}`,
+    );
+    this.raidNoticeText.setVisible(true);
+    this.time.delayedCall(4000, () => {
+      if (!this.raidActive) {
+        this.raidNoticeText.setVisible(false);
+      }
+    });
   }
 
   private tileCenter(building: PlacedBuilding): { x: number; y: number } {
