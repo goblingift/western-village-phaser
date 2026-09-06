@@ -41,7 +41,9 @@ import {
   CROP_OUTPUT_BY_DISTANCE,
   WANDERING_SETTLERS_MONEY_MIN,
   WANDERING_SETTLERS_MONEY_MAX,
+  ROLLING_OBJECTIVE_SLOT_COUNT,
 } from '../config/constants';
+import { OBJECTIVE_DEFINITIONS, OBJECTIVE_DEFINITIONS_BY_ID, ObjectiveSnapshot, formatObjectiveReward } from '../config/objectives';
 import {
   BUILDING_DEFINITIONS,
   BuildingType,
@@ -505,6 +507,206 @@ function checkBuildingUnlocks(): void {
       addNotification(`New building unlocked: ${BUILDING_DEFINITIONS[type].label}`, 'info', elapsedSeconds);
     }
   }
+}
+
+/**
+ * Phase 56: Objectives / Quest Chain. A rolling ROLLING_OBJECTIVE_SLOT_COUNT-
+ * wide active set drawn, in declaration order, from config/objectives.ts's
+ * OBJECTIVE_DEFINITIONS (objectiveQueue holds the not-yet-active remainder).
+ * Kept as small standalone module state - like Phase 44's notification
+ * debounce Maps - rather than folded onto any PlacedBuilding, since an
+ * objective is a town-wide goal, not a per-building one.
+ */
+interface ActiveObjectiveState {
+  id: string;
+  progress: number;
+}
+let activeObjectiveStates: ActiveObjectiveState[] = [];
+let objectiveQueue: string[] = [];
+const completedObjectiveIds = new Set<string>();
+
+/**
+ * Run-lifetime total of each resource ever sold across Supermarket/Saloon/
+ * Trading Post (Phases 14/27/51) - unlike the resource pool itself, this
+ * never decrements, so a sale-driven objective ("Ship 50 Clothes") can't be
+ * un-completed by later spending the stock back down. Written by the three
+ * sell passes below, right alongside their existing recordMarketSaleVolume
+ * call.
+ */
+let cumulativeResourcesSold: Partial<Record<ResourceKey, number>> = {};
+function addSoldThisRun(key: ResourceKey, amount: number): void {
+  if (amount <= 0) {
+    return;
+  }
+  cumulativeResourcesSold[key] = (cumulativeResourcesSold[key] ?? 0) + amount;
+}
+
+/**
+ * Cumulative Cowboy + Cowboy-on-Horse units ever completed out of a Phase 53
+ * training queue - unlike cowboyCount/mountedCowboyCount (which decrement
+ * when a unit dies, freeing its training slot), this only ever grows, so a
+ * "Train N Cowboys" objective reflects total investment rather than current
+ * garrison size.
+ */
+let totalUnitsTrained = 0;
+
+/**
+ * Survival objective tracking: cleared at the start of every night phase and
+ * flipped true by removeBuilding's destroyed path if a building falls during
+ * that same night; consulted at the following dawn (tickTimer) to grow
+ * nightsSurvivedCleanCount only when it never did. Not required to be
+ * consecutive nights - a running lifetime count of "nights that ended clean".
+ */
+let buildingLostThisNight = false;
+let nightsSurvivedCleanCount = 0;
+
+/** (Re)builds the queue fresh in declaration order and fills the first ROLLING_OBJECTIVE_SLOT_COUNT slots - called from resetGame, so every run starts on the same first three objectives. */
+function initObjectiveQueue(): void {
+  objectiveQueue = OBJECTIVE_DEFINITIONS.map((definition) => definition.id);
+  activeObjectiveStates = [];
+  completedObjectiveIds.clear();
+  refillActiveObjectives();
+}
+
+function refillActiveObjectives(): void {
+  while (activeObjectiveStates.length < ROLLING_OBJECTIVE_SLOT_COUNT && objectiveQueue.length > 0) {
+    const id = objectiveQueue.shift();
+    if (id) {
+      activeObjectiveStates.push({ id, progress: 0 });
+    }
+  }
+}
+
+function buildObjectiveSnapshot(): ObjectiveSnapshot {
+  return {
+    cumulativeSold: cumulativeResourcesSold,
+    totalPopulation,
+    netWorthTotal: computeNetWorth().total,
+    watchtowerCount: placedBuildings.filter((building) => building.type === BuildingType.Watchtower).length,
+    totalUnitsTrained,
+    nightsSurvivedCleanCount,
+  };
+}
+
+/**
+ * Called at the end of runProductionTick, after checkBuildingUnlocks (same
+ * "recompute against current town state every tick" shape). A definition
+ * whose progress reaches its target grants its reward immediately - money
+ * added directly, materials added straight to the resource pool bypassing
+ * the storage cap, since this is a quest payout rather than production
+ * output that should be able to overflow/waste - logs a Phase 44
+ * notification, and is replaced by the next queued objective (if any remain)
+ * in the same tick so the rolling slot count never sits short for a tick.
+ */
+function runObjectivesCheck(): void {
+  if (activeObjectiveStates.length === 0) {
+    return;
+  }
+
+  const snapshot = buildObjectiveSnapshot();
+  const stillActive: ActiveObjectiveState[] = [];
+  let materialsGranted = false;
+
+  for (const state of activeObjectiveStates) {
+    const definition = OBJECTIVE_DEFINITIONS_BY_ID.get(state.id);
+    if (!definition) {
+      continue;
+    }
+    const progress = Math.min(definition.target, Math.max(0, definition.getProgress(snapshot)));
+    state.progress = progress;
+
+    if (progress < definition.target) {
+      stillActive.push(state);
+      continue;
+    }
+
+    completedObjectiveIds.add(definition.id);
+    if (definition.reward.money) {
+      money = Math.round((money + definition.reward.money) * 100) / 100;
+    }
+    if (definition.reward.materials) {
+      for (const [key, amount] of Object.entries(definition.reward.materials) as [ResourceKey, number][]) {
+        resources[key] += amount;
+      }
+      materialsGranted = true;
+    }
+    addNotification(
+      `Objective complete: ${definition.description} -> ${formatObjectiveReward(definition.reward)}`,
+      'info',
+      elapsedSeconds,
+    );
+  }
+
+  activeObjectiveStates = stillActive;
+  refillActiveObjectives();
+
+  if (materialsGranted) {
+    gameEvents.emit('resources-changed', { ...resources });
+  }
+}
+
+export interface ObjectiveView {
+  id: string;
+  description: string;
+  progress: number;
+  target: number;
+  unit?: string;
+}
+
+/** UI-ready view of the current rolling objective set, for ObjectivesPanel. */
+export function getActiveObjectives(): ObjectiveView[] {
+  return activeObjectiveStates.map((state) => {
+    const definition = OBJECTIVE_DEFINITIONS_BY_ID.get(state.id);
+    return {
+      id: state.id,
+      description: definition?.description ?? state.id,
+      progress: state.progress,
+      target: definition?.target ?? 0,
+      unit: definition?.unit,
+    };
+  });
+}
+
+export function getCompletedObjectiveCount(): number {
+  return completedObjectiveIds.size;
+}
+
+/**
+ * Phase 56 persistence payload (Phase 52's save/load). Optional on the save
+ * type itself (see persistence.ts) so a pre-Phase-56 save still loads fine -
+ * resetGame's own initObjectiveQueue already seeded a fresh rolling set, and
+ * this simply overwrites it when the field is present.
+ */
+export interface ObjectiveSaveState {
+  activeObjectiveStates: { id: string; progress: number }[];
+  objectiveQueue: string[];
+  completedObjectiveIds: string[];
+  cumulativeResourcesSold: Partial<Record<ResourceKey, number>>;
+  totalUnitsTrained: number;
+  nightsSurvivedCleanCount: number;
+}
+
+export function serializeObjectivesState(): ObjectiveSaveState {
+  return {
+    activeObjectiveStates: activeObjectiveStates.map((state) => ({ ...state })),
+    objectiveQueue: [...objectiveQueue],
+    completedObjectiveIds: Array.from(completedObjectiveIds),
+    cumulativeResourcesSold: { ...cumulativeResourcesSold },
+    totalUnitsTrained,
+    nightsSurvivedCleanCount,
+  };
+}
+
+export function restoreObjectivesState(state: ObjectiveSaveState): void {
+  activeObjectiveStates = state.activeObjectiveStates.map((entry) => ({ ...entry }));
+  objectiveQueue = [...state.objectiveQueue];
+  completedObjectiveIds.clear();
+  for (const id of state.completedObjectiveIds) {
+    completedObjectiveIds.add(id);
+  }
+  cumulativeResourcesSold = { ...state.cumulativeResourcesSold };
+  totalUnitsTrained = state.totalUnitsTrained;
+  nightsSurvivedCleanCount = state.nightsSurvivedCleanCount;
 }
 
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
@@ -983,6 +1185,12 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
       elapsedSeconds,
       building.id,
     );
+    // Phase 56: "Survive N Nights Without Losing a Building" objective - only
+    // a raid-destroyed loss during the night phase counts against it; the
+    // flag is read (and reset for the next night) by tickTimer at dawn.
+    if (getDayPhase() === 'night') {
+      buildingLostThisNight = true;
+    }
   }
 
   gameEvents.emit('building-removed', { building, reason });
@@ -1320,6 +1528,11 @@ function runTrainingQueues(): void {
     }
 
     building.trainingQueue.shift();
+    // Phase 56: counted here (job completion), not at trainCowboy/
+    // trainMountedCowboy's enqueue time - a cancelled/never-finished queue
+    // slot (there is no cancel path today, but this is the correct point
+    // regardless) shouldn't count toward the "Train N Cowboys" objective.
+    totalUnitsTrained += 1;
     if (job.kind === 'cowboy') {
       building.cowboyCount += 1;
       building.cowboyHp.push(COWBOY_MAX_HP);
@@ -1626,6 +1839,7 @@ function runSupermarketSales(): void {
       const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
+      addSoldThisRun(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
         anySold = true;
@@ -1672,6 +1886,7 @@ function runSaloonSales(): void {
       const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
+      addSoldThisRun(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
         anySold = true;
@@ -1731,6 +1946,7 @@ function runTradingPostSales(): void {
       const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
+      addSoldThisRun(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       anySold = true;
     }
@@ -2200,6 +2416,7 @@ export function runProductionTick(): void {
   pushResourceHistorySnapshot();
 
   checkBuildingUnlocks();
+  runObjectivesCheck();
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
@@ -2237,6 +2454,17 @@ export function tickTimer(): void {
 
   const phase = getDayPhase();
   const dayNumber = getDayNumber();
+  if (phase !== previousPhase) {
+    // Phase 56: "Survive N Nights Without Losing a Building" bookkeeping.
+    // Cleared the instant night begins (a fresh, unblemished night ahead);
+    // consulted at the following dawn - if removeBuilding's destroyed path
+    // never flipped it during the night that just ended, that night counts.
+    if (phase === 'night') {
+      buildingLostThisNight = false;
+    } else if (previousPhase === 'night' && !buildingLostThisNight) {
+      nightsSurvivedCleanCount += 1;
+    }
+  }
   if (phase !== previousPhase || dayNumber !== previousDay) {
     gameEvents.emit('day-phase-changed', { dayNumber, phase });
   }
@@ -2421,6 +2649,12 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   unlockNotified.clear();
   resetMarket();
   resetWorldEvents();
+
+  cumulativeResourcesSold = {};
+  totalUnitsTrained = 0;
+  buildingLostThisNight = false;
+  nightsSurvivedCleanCount = 0;
+  initObjectiveQueue();
 
   // Terrain is intentionally kept across a reset (the player replays the same
   // map they just learned), but vegetation is reseeded so a run that felled

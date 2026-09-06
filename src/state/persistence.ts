@@ -2,6 +2,7 @@ import { CYCLE_SECONDS, Difficulty, RunMode } from '../config/constants';
 import { PlacedBuilding } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 import {
+  ObjectiveSaveState,
   Resources,
   getCurrentDifficulty,
   getCurrentRunMode,
@@ -17,6 +18,8 @@ import {
   resetGame,
   restoreBuilding,
   restoreCoreState,
+  restoreObjectivesState,
+  serializeObjectivesState,
   silentlySyncUnlockNotifications,
   updateConnections,
 } from './gameState';
@@ -37,6 +40,12 @@ import { VegetationEntity, getVegetation, restoreVegetationEntities } from './ve
  *    resumes counting down exactly where it left off) and rallyPoint, etc.),
  *    every live vegetation entity, and the full fluctuating-market state
  *    (baseline prices, pressure windows, any active merchant deal).
+ *  - SAVED (Phase 56 addition): the active/queued Objectives / Quest Chain
+ *    state (`objectives`, optional on the type for backward compatibility
+ *    with pre-Phase-56 saves - a missing field just keeps resetGame's own
+ *    fresh initObjectiveQueue() rather than being treated as an error),
+ *    including cumulative resources-sold and units-trained counters and the
+ *    "nights survived without losing a building" count those objectives read.
  *  - NOT SAVED (reset to fresh-game defaults on load), by design:
  *      - `resourceHistory` (Phase 49's rolling sparkline buffers) - purely
  *        cosmetic, and re-populates itself over the next
@@ -72,6 +81,8 @@ export interface SaveGameV1 {
   placedBuildings: PlacedBuilding[];
   vegetation: VegetationEntity[];
   market: MarketSaveState;
+  /** Phase 56: optional so a save made before this phase shipped still loads (see the class doc comment above). */
+  objectives?: ObjectiveSaveState;
 }
 
 export interface SaveSlotInfo {
@@ -111,6 +122,7 @@ export function serializeGameState(): SaveGameV1 {
     placedBuildings: getPlacedBuildings().map(cloneBuilding),
     vegetation: getVegetation().map((entity) => ({ ...entity })),
     market: serializeMarket(),
+    objectives: serializeObjectivesState(),
   };
 }
 
@@ -153,6 +165,12 @@ export function deserializeGameState(save: SaveGameV1): void {
     restoreVegetationEntities(save.vegetation);
     for (const building of save.placedBuildings) {
       restoreBuilding(cloneBuilding(building));
+    }
+    // Phase 56: undefined on a pre-Phase-56 save - resetGame() above already
+    // seeded a fresh rolling objective set via initObjectiveQueue(), so a
+    // missing field is simply left as-is rather than treated as an error.
+    if (save.objectives) {
+      restoreObjectivesState(save.objectives);
     }
     recomputeWorkforceNow();
     silentlySyncUnlockNotifications();

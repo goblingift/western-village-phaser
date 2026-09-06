@@ -338,3 +338,11 @@ export const DUST_STORM_TRANSITION_MS = 3000;
 /** Wandering Settlers: a one-time immediate money gift rather than a lasting effect - population is tier-summed from real Houses (Phase 46), so a free-population reward doesn't fit that model. */
 export const WANDERING_SETTLERS_MONEY_MIN = 150;
 export const WANDERING_SETTLERS_MONEY_MAX = 400;
+
+/**
+ * Phase 56: Objectives / Quest Chain. How many objectives (config/
+ * objectives.ts's OBJECTIVE_DEFINITIONS) are active at once; completing one
+ * immediately pulls the next one off the queue to backfill the freed slot, so
+ * the player always has this many goals in view rather than one at a time.
+ */
+export const ROLLING_OBJECTIVE_SLOT_COUNT = 3;

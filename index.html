@@ -339,6 +339,64 @@
         color: #8d7f6e;
         padding: 6px 0;
       }
+      /* Phase 56: Objectives / Quest Chain - a small, always-on, non-
+         interactive widget docked top-center of #stage. Every other corner is
+         already spoken for (ResourceHudPanel/minimap top-left on the canvas,
+         BuildingInfoPanel bottom-right, NotificationLogPanel bottom-left,
+         StatisticsPanel top-right-but-hidden-by-default), so top-center is the
+         one glanceable spot left; pointer-events:none like #resource-tooltip
+         since it's a read-only readout, not a clickable panel. */
+      #objectives-panel {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 260px;
+        max-width: calc(100vw - 340px);
+        pointer-events: none;
+        background: #2b1d12ee;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 6px;
+        font-family: sans-serif;
+        font-size: 12px;
+        overflow: hidden;
+      }
+      #objectives-panel .objectives-panel-header {
+        padding: 5px 10px;
+        font-weight: bold;
+        color: #ffd54f;
+        background: #3e2b1f;
+        border-bottom: 1px solid #8d6e4a;
+      }
+      #objectives-panel .objectives-panel-list {
+        padding: 4px 10px;
+      }
+      #objectives-panel .objectives-panel-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 3px 0;
+        border-bottom: 1px solid #4a3626;
+        line-height: 1.35;
+      }
+      #objectives-panel .objectives-panel-row:last-child {
+        border-bottom: none;
+      }
+      #objectives-panel .objectives-panel-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #objectives-panel .objectives-panel-value {
+        color: #8bc34a;
+        font-weight: bold;
+        white-space: nowrap;
+      }
+      #objectives-panel .objectives-panel-empty {
+        color: #8d7f6e;
+        padding: 6px 0;
+      }
       /* Phase 49: Statistics & Efficiency panel - opt-in, hidden by default
          (toggled by the 'V' hotkey / building bar's Stats button), anchored
          top-right so it never collides with the info panel (bottom-right) or
