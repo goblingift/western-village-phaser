@@ -20,22 +20,26 @@
       }
       #building-bar {
         display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
+        flex-direction: column;
+        gap: 6px;
         padding: 8px 12px;
         background: #3e2b1f;
         border-top: 2px solid #8d6e4a;
         font-family: sans-serif;
+        width: 960px;
         max-width: 100vw;
         box-sizing: border-box;
+      }
+      #building-bar .bar-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
       }
       #building-bar .money {
         color: #ffd54f;
         font-weight: bold;
-        margin-right: 12px;
-        min-width: 90px;
+        min-width: 70px;
       }
       #building-bar button {
         background: #5b3a29;
@@ -55,10 +59,85 @@
         background: #4caf50;
         border-color: #4caf50;
       }
+      #building-bar button.tab {
+        font-size: 12px;
+        padding: 5px 8px;
+      }
+      #building-bar button.danger {
+        background: #7f3b2f;
+        border-color: #c05a45;
+      }
+      #building-bar button.danger.active {
+        background: #c62828;
+        border-color: #ff8a80;
+      }
+      #building-bar .speed-group {
+        display: flex;
+        gap: 4px;
+        margin-left: auto;
+      }
+      #building-bar button.speed {
+        min-width: 34px;
+        padding: 5px 6px;
+        font-size: 12px;
+      }
+      #building-bar .building-panel {
+        min-height: 52px;
+      }
+      #building-bar button.building-button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 4px 8px;
+        min-width: 74px;
+      }
+      #building-bar button.building-button .icon {
+        width: 28px;
+        height: 28px;
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+        image-rendering: pixelated;
+      }
+      /* Until the atlas icons arrive the slot stays empty and the text label
+         alone carries the button, so the bar is never unusable. */
+      #building-bar button.building-button .icon:not(.has-image) {
+        height: 0;
+      }
+      #building-bar button.building-button .label {
+        font-size: 11px;
+        line-height: 1.1;
+      }
+      #building-bar button.building-button .cost {
+        font-size: 10px;
+        color: #ffd54f;
+      }
+      #building-bar button.building-button.unaffordable {
+        opacity: 0.4;
+      }
+      #building-bar button.building-button.unaffordable .cost {
+        color: #ef5350;
+      }
+      /* The canvas gets its own positioned wrapper so in-game overlays anchor
+         to the play area instead of the viewport - the building bar's height
+         changes with its content, and a viewport-anchored panel ended up
+         sitting on top of it (and swallowing its clicks). */
+      #stage {
+        position: relative;
+      }
+      /* Block display (rather than line-height:0 on the wrapper) removes the
+         canvas's inline-element descender gap without imposing a zero
+         line-height on the overlays that live inside #stage. */
+      #stage canvas {
+        display: block;
+      }
       #building-info-panel {
-        position: fixed;
+        position: absolute;
         right: 16px;
-        bottom: 88px;
+        bottom: 16px;
+        max-height: 70%;
+        overflow-y: auto;
         background: #2b1d12ee;
         color: #f2e6d8;
         border: 1px solid #8d6e4a;
@@ -100,6 +179,12 @@
       #building-info-panel .hp-disabled {
         color: #ff5252;
         font-weight: bold;
+      }
+      #building-info-panel button.danger {
+        background: #7f3b2f;
+      }
+      #building-info-panel button.danger:hover:not(:disabled) {
+        background: #c62828;
       }
       #game-over-overlay {
         position: fixed;
@@ -155,7 +240,7 @@
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><div id="stage"></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

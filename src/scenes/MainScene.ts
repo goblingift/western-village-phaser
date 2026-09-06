@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
 import {
+  CAMERA_MAX_ZOOM,
+  CAMERA_MIN_ZOOM,
+  CAMERA_ZOOM_STEP,
   COWBOY_DAMAGE,
   COWBOY_RANGE_TILES,
   GAME_DURATION_SECONDS,
@@ -11,16 +14,27 @@ import {
   MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
   POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
+  RAID_MAX_HP_MULTIPLIER,
   RAID_MAX_INTERVAL_MS,
-  RAID_MAX_UNITS,
+  RAID_MAX_INTERVAL_SQUEEZE,
+  RAID_MAX_UNITS_ESCALATED,
   RAID_MIN_INTERVAL_MS,
   RAID_MIN_UNITS,
+  RAID_WARNING_LEAD_MS,
   RAID_WAVE_TIMEOUT_MS,
+  RAIDER_UNIT_ATTACK_RANGE_TILES,
   TILE_SIZE,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../config/constants';
-import { generateTileMap, TILE_COLORS, TileType } from '../config/mapConfig';
+import { TILE_COLORS, TileType, getWorldTiles } from '../config/mapConfig';
+import {
+  VEGETATION_ATLAS_KEY,
+  VEGETATION_DEFINITIONS,
+  vegetationTextureKey,
+} from '../config/vegetationConfig';
+import { VegetationEntity, getVegetation } from '../state/vegetation';
+import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
 import {
   ACCENTS_ATLAS_KEY,
@@ -50,20 +64,18 @@ import {
   raiderTextureKey,
 } from '../config/buildingConfig';
 import { playPlacementSound } from '../audio/sound';
-import { gameEvents } from '../state/gameEvents';
+import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
 import {
-  canPlaceBuilding,
+  computeNetWorth,
+  damageUnit,
+  demolishBuilding,
+  destroyBuilding,
   getBuildingAtTile,
   getBuildingById,
-  getEmployedPopulation,
   getFenceLinks,
-  getMoney,
   getPlacedBuildings,
-  getResources,
-  getStorageCap,
-  getTotalBankBalance,
-  getTotalMeatProduced,
-  getTotalPopulation,
+  getPlacementRejection,
+  getThreatLevel,
   placeBuilding,
   runProductionTick,
   tickTimer,
@@ -72,12 +84,33 @@ import {
 const FENCE_LINE_COLOR = 0x8d6748;
 
 /**
- * Phase 29: once every placed Bank's combined balance reaches this, raids
- * lean Outlaw and come faster - see pickRaidFaction/scheduleNextRaidCheck.
- * Below it, both behave exactly as before Phase 29 (even 1/3 split, normal
- * interval).
+ * Phase 31: Phase 29's bank-balance-only raid hook is generalized into
+ * gameState.getThreatLevel() (elapsed time + net worth, which already
+ * includes banked cash). Above this threat level raids lean Outlaw, exactly
+ * as a full bank used to.
  */
-const BANK_RISK_THRESHOLD = 200;
+const OUTLAW_BIAS_THREAT = 0.35;
+
+/** Phase 30: trees/cacti render above the ground layer but below buildings (depth 10). */
+const VEGETATION_DEPTH = 5;
+const MINIMAP_VEGETATION_DOT_SIZE = 2;
+
+/** Phase 31: destruction animation - shake, fade, and a burst of dust motes. */
+const DESTRUCTION_SHAKE_PX = 4;
+const DESTRUCTION_SHAKE_MS = 60;
+const DESTRUCTION_SHAKE_REPEATS = 5;
+const DESTRUCTION_FADE_MS = 450;
+const DUST_PUFF_COUNT = 10;
+const DUST_PUFF_RADIUS_MIN = 2;
+const DUST_PUFF_RADIUS_MAX = 5;
+const DUST_PUFF_COLOR = 0xbfa980;
+const DUST_PUFF_SPREAD_PX = 26;
+const DUST_PUFF_DURATION_MIN_MS = 400;
+const DUST_PUFF_DURATION_MAX_MS = 800;
+const DUST_DEPTH = 14;
+
+/** Phase 33: placement rejection reason, shown just under the preview footprint. */
+const PLACEMENT_HINT_DEPTH = 1000;
 
 const VALID_TINT = 0x00ff00;
 const INVALID_TINT = 0xff0000;
@@ -249,8 +282,15 @@ interface CombatUnit {
 
 export class MainScene extends Phaser.Scene {
   private infoText!: Phaser.GameObjects.Text;
-  private resourceText!: Phaser.GameObjects.Text;
+  private resourceHud!: ResourceHudPanel;
   private timerText!: Phaser.GameObjects.Text;
+  private placementHintText!: Phaser.GameObjects.Text;
+  private vegetationImages = new Map<string, Phaser.GameObjects.Image>();
+  private demolishMode = false;
+  private gameSpeed = 1;
+  private raidWarningTimer: Phaser.Time.TimerEvent | null = null;
+  /** Tracked so a building that is destroyed/demolished while its info panel is open closes that panel. */
+  private selectedBuildingId: string | null = null;
   private remainingSecondsDisplay = GAME_DURATION_SECONDS;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -292,12 +332,17 @@ export class MainScene extends Phaser.Scene {
 
   create(): void {
     this.buildTilemap();
+    this.setupVegetationVisuals();
     this.setupCameraDrag();
+    this.setupCameraZoom();
     this.setupInfoText();
     this.setupResourceHud();
     this.setupTimerHud();
+    this.setupSpeedControl();
     this.setupMinimap();
     this.setupBuildingPlacement();
+    this.setupDemolishMode();
+    this.setupBuildingRemoval();
     this.setupBuildingSelection();
     this.setupProductionTimer();
     this.setupConnectionVisuals();
@@ -332,8 +377,11 @@ export class MainScene extends Phaser.Scene {
       throw new Error('Failed to create ground layer');
     }
 
-    const tileData = generateTileMap();
-    this.tileData = tileData;
+    // Phase 30: the terrain grid is owned by mapConfig (gameState consults it
+    // on every placement check), so the scene reads it rather than generating
+    // its own copy.
+    const tileData = getWorldTiles();
+    this.tileData = tileData.map((row) => [...row]);
     for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
       for (let x = 0; x < MAP_WIDTH_TILES; x++) {
         layer.putTileAt(tileData[y][x], x, y);
@@ -341,6 +389,104 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.cameras.main.setBounds(0, 0, MAP_WIDTH_TILES * TILE_SIZE, MAP_HEIGHT_TILES * TILE_SIZE);
+  }
+
+  /**
+   * Phase 30: one sprite per live vegetation entity, keyed by entity id.
+   * Driven purely by the vegetation module's add/remove events (harvesting
+   * depleting a tree, a Forestry replanting one) rather than redrawn per
+   * tick, mirroring how animal sprites are driven only by 'animal-bought'.
+   */
+  private setupVegetationVisuals(): void {
+    this.redrawAllVegetation();
+
+    gameEvents.on('vegetation-added', (entity: VegetationEntity) => {
+      this.addVegetationSprite(entity);
+      this.redrawMinimap();
+    });
+
+    gameEvents.on('vegetation-removed', (entity: VegetationEntity) => {
+      const image = this.vegetationImages.get(entity.id);
+      if (image) {
+        this.tweens.killTweensOf(image);
+        image.destroy();
+        this.vegetationImages.delete(entity.id);
+      }
+      this.redrawMinimap();
+    });
+  }
+
+  private addVegetationSprite(entity: VegetationEntity): void {
+    const image = this.add
+      .image(entity.tileX * TILE_SIZE, entity.tileY * TILE_SIZE, VEGETATION_ATLAS_KEY, vegetationTextureKey(entity.kind))
+      .setOrigin(0, 0)
+      .setDepth(VEGETATION_DEPTH);
+    this.vegetationImages.set(entity.id, image);
+  }
+
+  private redrawAllVegetation(): void {
+    for (const image of this.vegetationImages.values()) {
+      this.tweens.killTweensOf(image);
+      image.destroy();
+    }
+    this.vegetationImages.clear();
+
+    for (const entity of getVegetation()) {
+      this.addVegetationSprite(entity);
+    }
+  }
+
+  /**
+   * Phase 33: wheel zoom about the cursor. The world point under the pointer
+   * is captured before the zoom change and the camera is then scrolled so
+   * that same world point lands back under the cursor afterwards - which is
+   * what makes it feel like zooming into what you're looking at rather than
+   * into the screen centre. The minimap viewport rectangle needs no special
+   * handling: it derives from camera.worldView, which is already zoom-aware.
+   */
+  /**
+   * CAMERA_MIN_ZOOM is the *desired* floor, but zooming out far enough that
+   * the viewport is larger than the whole map just frames the map in dead
+   * space (and pushes the minimap's viewport rectangle outside the minimap).
+   * The effective floor is therefore whichever is larger: the configured
+   * minimum, or the zoom at which the map exactly fills the viewport.
+   */
+  private getMinZoom(): number {
+    const fitZoom = Math.max(
+      VIEWPORT_WIDTH / (MAP_WIDTH_TILES * TILE_SIZE),
+      VIEWPORT_HEIGHT / (MAP_HEIGHT_TILES * TILE_SIZE),
+    );
+    return Math.max(CAMERA_MIN_ZOOM, fitZoom);
+  }
+
+  private setupCameraZoom(): void {
+    this.input.on(
+      'wheel',
+      (pointer: Phaser.Input.Pointer, _objects: unknown, _dx: number, dy: number) => {
+        const camera = this.cameras.main;
+        const worldPointX = pointer.worldX;
+        const worldPointY = pointer.worldY;
+
+        const direction = dy > 0 ? -1 : 1;
+        const nextZoom = Phaser.Math.Clamp(
+          camera.zoom + direction * CAMERA_ZOOM_STEP * camera.zoom,
+          this.getMinZoom(),
+          CAMERA_MAX_ZOOM,
+        );
+        if (nextZoom === camera.zoom) {
+          return;
+        }
+        camera.setZoom(nextZoom);
+
+        // Re-anchor: after the zoom the same screen offset maps to a
+        // different world offset, so shift scroll by the difference.
+        const newWorldPoint = camera.getWorldPoint(pointer.x, pointer.y);
+        camera.scrollX += worldPointX - newWorldPoint.x;
+        camera.scrollY += worldPointY - newWorldPoint.y;
+
+        this.redrawMinimapViewport();
+      },
+    );
   }
 
   private setupCameraDrag(): void {
@@ -427,6 +573,18 @@ export class MainScene extends Phaser.Scene {
     this.infoText.setOrigin(0, 1);
     this.infoText.setScrollFactor(0);
     this.infoText.setDepth(1000);
+
+    // World-space (no setScrollFactor(0)) so it stays pinned under the
+    // preview footprint it is describing as the camera pans/zooms.
+    this.placementHintText = this.add
+      .text(0, 0, '', {
+        fontSize: '12px',
+        color: '#ffffff',
+        backgroundColor: '#c62828dd',
+        padding: { x: 4, y: 2 },
+      })
+      .setDepth(PLACEMENT_HINT_DEPTH)
+      .setVisible(false);
   }
 
   private updateInfoText(pointer: Phaser.Input.Pointer): void {
@@ -440,28 +598,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setupResourceHud(): void {
-    this.resourceText = this.add.text(8, 8, this.formatResourceText(), {
-      fontSize: '14px',
-      color: '#ffffff',
-      backgroundColor: '#2b1d12cc',
-      padding: { x: 6, y: 4 },
-    });
-    this.resourceText.setScrollFactor(0);
-    this.resourceText.setDepth(1000);
+    this.resourceHud = new ResourceHudPanel(this);
 
-    gameEvents.on('money-changed', () => this.resourceText.setText(this.formatResourceText()));
-    gameEvents.on('resources-changed', () => this.resourceText.setText(this.formatResourceText()));
-    gameEvents.on('production-tick', () => this.resourceText.setText(this.formatResourceText()));
-  }
-
-  private formatResourceText(): string {
-    const { rawMeat, meat, water, eggs, leather, clothes, logs, wood, potatoes, liquor } = getResources();
-    const fmt = (n: number) => Math.round(n * 10) / 10;
-    return (
-      `Money: $${fmt(getMoney())} | Population: ${getEmployedPopulation()}/${getTotalPopulation()} | Storage cap: ${getStorageCap()}\n` +
-      `Raw Meat: ${fmt(rawMeat)} | Meat: ${fmt(meat)} | Water: ${fmt(water)} | Eggs: ${fmt(eggs)} | Leather: ${fmt(leather)}\n` +
-      `Clothes: ${fmt(clothes)} | Logs: ${fmt(logs)} | Wood: ${fmt(wood)} | Potatoes: ${fmt(potatoes)} | Liquor: ${fmt(liquor)}`
-    );
+    gameEvents.on('money-changed', () => this.resourceHud.refresh());
+    gameEvents.on('resources-changed', () => this.resourceHud.refresh());
+    gameEvents.on('production-tick', () => this.resourceHud.refresh());
   }
 
   /**
@@ -479,6 +620,27 @@ export class MainScene extends Phaser.Scene {
         runProductionTick();
         this.runRaidCombatTick();
       },
+    });
+  }
+
+  /**
+   * Phase 33: pause and 1x/2x/4x fast-forward. Rather than rescaling every
+   * individual timer and tween by hand, this drives Phaser's two global
+   * time scales: this.time.timeScale (every TimerEvent - production ticks,
+   * the countdown clock, raid scheduling) and this.tweens.timeScale (every
+   * movement/animation tween - villagers, units, raiders, accents). A speed
+   * of 0 freezes both, which is exactly what "paused" means here: production
+   * ticks stop firing and raids neither spawn nor advance.
+   *
+   * runProductionTick additionally early-returns while paused, so even a
+   * timer that somehow fires mid-transition can't advance the simulation.
+   */
+  private setupSpeedControl(): void {
+    gameEvents.on('speed-changed', (speed: number) => {
+      this.gameSpeed = speed;
+      this.time.timeScale = speed;
+      this.tweens.timeScale = speed;
+      this.timerText.setText(this.formatTimerText());
     });
   }
 
@@ -509,16 +671,22 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Phase 32: the headline number is net worth, not meat. Also shows the
+   * current speed multiplier (or PAUSED) so the player always knows why the
+   * clock is or isn't moving.
+   */
   private formatTimerText(): string {
     const minutes = Math.floor(this.remainingSecondsDisplay / 60);
     const seconds = this.remainingSecondsDisplay % 60;
     const time = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-    return `Time: ${time} | Meat score: ${Math.round(getTotalMeatProduced() * 10) / 10}`;
+    const speedLabel = this.gameSpeed === 0 ? 'PAUSED' : `${this.gameSpeed}x`;
+    return `Time: ${time} (${speedLabel}) | Net worth: $${computeNetWorth().total}`;
   }
 
   private setupMinimap(): void {
     this.minimapX = MINIMAP_MARGIN;
-    this.minimapY = this.resourceText.y + this.resourceText.height + MINIMAP_MARGIN;
+    this.minimapY = this.resourceHud.getBottomY() + MINIMAP_MARGIN;
 
     this.minimapGraphics = this.add.graphics();
     this.minimapGraphics.setScrollFactor(0);
@@ -542,7 +710,7 @@ export class MainScene extends Phaser.Scene {
 
     for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
       for (let x = 0; x < MAP_WIDTH_TILES; x++) {
-        const tileType = this.tileData[y]?.[x] ?? TileType.Grass;
+        const tileType = this.tileData[y]?.[x] ?? TileType.Dirt;
         this.minimapGraphics.fillStyle(TILE_COLORS[tileType], 1);
         this.minimapGraphics.fillRect(
           this.minimapX + x * tileWidth,
@@ -551,6 +719,19 @@ export class MainScene extends Phaser.Scene {
           tileHeight,
         );
       }
+    }
+
+    // Phase 30: vegetation is drawn under the building dots - it's terrain-
+    // scale context (where the woods and cactus fields are, i.e. where a
+    // Forestry or Cactus Milker would pay off), not a town landmark.
+    for (const entity of getVegetation()) {
+      this.minimapGraphics.fillStyle(VEGETATION_DEFINITIONS[entity.kind].color, 1);
+      this.minimapGraphics.fillRect(
+        this.minimapX + entity.tileX * tileWidth,
+        this.minimapY + entity.tileY * tileHeight,
+        MINIMAP_VEGETATION_DOT_SIZE,
+        MINIMAP_VEGETATION_DOT_SIZE,
+      );
     }
 
     for (const building of getPlacedBuildings()) {
@@ -588,10 +769,20 @@ export class MainScene extends Phaser.Scene {
     const mapPixelWidth = MAP_WIDTH_TILES * TILE_SIZE;
     const mapPixelHeight = MAP_HEIGHT_TILES * TILE_SIZE;
 
-    const rectX = this.minimapX + (worldView.x / mapPixelWidth) * MINIMAP_WIDTH;
-    const rectY = this.minimapY + (worldView.y / mapPixelHeight) * MINIMAP_HEIGHT;
-    const rectW = (worldView.width / mapPixelWidth) * MINIMAP_WIDTH;
-    const rectH = (worldView.height / mapPixelHeight) * MINIMAP_HEIGHT;
+    // worldView is zoom-aware, so this follows the camera's zoom for free
+    // (Phase 33). Clamped to the minimap's own rect so a viewport wider than
+    // the map (possible at the minimum zoom on non-default viewport sizes)
+    // can never draw its rectangle outside the minimap frame.
+    const rectX = this.minimapX + Phaser.Math.Clamp(worldView.x / mapPixelWidth, 0, 1) * MINIMAP_WIDTH;
+    const rectY = this.minimapY + Phaser.Math.Clamp(worldView.y / mapPixelHeight, 0, 1) * MINIMAP_HEIGHT;
+    const rectW = Math.min(
+      (worldView.width / mapPixelWidth) * MINIMAP_WIDTH,
+      this.minimapX + MINIMAP_WIDTH - rectX,
+    );
+    const rectH = Math.min(
+      (worldView.height / mapPixelHeight) * MINIMAP_HEIGHT,
+      this.minimapY + MINIMAP_HEIGHT - rectY,
+    );
 
     this.minimapViewportGraphics.lineStyle(2, MINIMAP_VIEWPORT_COLOR, 1);
     this.minimapViewportGraphics.strokeRect(rectX, rectY, rectW, rectH);
@@ -667,7 +858,15 @@ export class MainScene extends Phaser.Scene {
       const { tileX, tileY } = this.pointerToTile(pointer);
       const building = getBuildingAtTile(tileX, tileY);
 
+      this.selectedBuildingId = building?.id ?? null;
       gameEvents.emit('building-selected', building);
+    });
+
+    // Keeps the tracked id in step with panel closes issued elsewhere
+    // (game-reset, a removal closing the panel) without those paths needing
+    // to know about this field.
+    gameEvents.on('building-selected', (building: PlacedBuilding | null) => {
+      this.selectedBuildingId = building?.id ?? null;
     });
   }
 
@@ -687,8 +886,15 @@ export class MainScene extends Phaser.Scene {
     this.selectedType = null;
     this.previewImage?.destroy();
     this.previewImage = null;
+    this.placementHintText?.setVisible(false);
   }
 
+  /**
+   * Phase 33: the preview no longer just goes red - it says why. The reason
+   * string comes straight from gameState.getPlacementRejection, the same
+   * function placeBuilding itself gates on, so the hint can never claim a
+   * placement is legal (or illegal) when the rule disagrees.
+   */
   private updatePreview(pointer: Phaser.Input.Pointer): void {
     if (this.selectedType === null || !this.previewImage) {
       return;
@@ -697,8 +903,196 @@ export class MainScene extends Phaser.Scene {
     const { tileX, tileY } = this.pointerToTile(pointer);
     this.previewImage.setPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
 
-    const valid = canPlaceBuilding(tileX, tileY, this.selectedType);
-    this.previewImage.setTint(valid ? VALID_TINT : INVALID_TINT);
+    const rejection = getPlacementRejection(tileX, tileY, this.selectedType);
+    this.previewImage.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
+
+    if (rejection === null) {
+      this.placementHintText.setVisible(false);
+      return;
+    }
+
+    const { height } = BUILDING_DEFINITIONS[this.selectedType].size;
+    this.placementHintText.setText(rejection);
+    this.placementHintText.setPosition(
+      tileX * TILE_SIZE,
+      (tileY + height) * TILE_SIZE + 4,
+    );
+    this.placementHintText.setVisible(true);
+  }
+
+  /**
+   * Phase 31: explicit bulldozer mode. Kept as a separate mode rather than a
+   * button on the info panel so demolishing several buildings in a row
+   * doesn't mean re-selecting each one first; selecting a building to place
+   * cancels it (and vice versa) since the two modes both own the left click.
+   */
+  private setupDemolishMode(): void {
+    gameEvents.on('demolish-mode-changed', (active: boolean) => {
+      this.demolishMode = active;
+      if (active) {
+        this.cancelPlacement();
+      }
+    });
+
+    gameEvents.on('select-building', () => {
+      if (this.demolishMode) {
+        this.demolishMode = false;
+        gameEvents.emit('demolish-mode-changed', false);
+      }
+    });
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!this.demolishMode || !pointer.leftButtonDown() || this.isPointerInMinimap(pointer)) {
+        return;
+      }
+      const { tileX, tileY } = this.pointerToTile(pointer);
+      const building = getBuildingAtTile(tileX, tileY);
+      if (building) {
+        demolishBuilding(building.id);
+      }
+    });
+  }
+
+  /**
+   * Phase 31: single cleanup path for a building leaving the world, whether
+   * it was destroyed by raiders or bulldozed by the player. gameState has
+   * already dropped it from its own records by the time this runs, so
+   * everything here is purely visual/scene-local: its sprite (plus the
+   * destruction animation for a raid kill), its animals, its idle accents,
+   * and any units it trained - a garrison dies with its Barracks.
+   */
+  private setupBuildingRemoval(): void {
+    gameEvents.on('building-removed', ({ building, reason }: BuildingRemovedPayload) => {
+      const visual = this.buildingVisuals.get(building.id);
+      if (visual) {
+        this.buildingVisuals.delete(building.id);
+
+        for (const animalImage of visual.animalImages) {
+          this.tweens.killTweensOf(animalImage);
+          animalImage.destroy();
+        }
+        for (const accentObject of visual.accentObjects) {
+          this.tweens.killTweensOf(accentObject);
+          accentObject.destroy();
+        }
+
+        if (reason === 'destroyed') {
+          this.playDestructionAnimation(visual.image, building);
+        } else {
+          this.tweens.killTweensOf(visual.image);
+          visual.image.destroy();
+        }
+      }
+
+      this.removeUnitsOfBuilding(building.id);
+      if (building.type === BuildingType.House) {
+        this.removeVillagersForLostHouse();
+      }
+
+      if (this.selectedBuildingId === building.id) {
+        gameEvents.emit('building-selected', null);
+      }
+
+      this.redrawConnectionOutlines();
+      this.redrawFenceLines();
+      this.redrawHpBars();
+      this.redrawMinimap();
+    });
+  }
+
+  /**
+   * Shake, fade, and a puff of dust. The sprite is already detached from
+   * buildingVisuals (and from gameState) when this runs, so it's a pure
+   * orphan being animated to its own destruction - nothing else can look it
+   * up mid-animation. Follows the same killTweensOf-then-destroy discipline
+   * the animal/accent cleanup uses, so no tween ever outlives its target.
+   */
+  private playDestructionAnimation(image: Phaser.GameObjects.Image, building: PlacedBuilding): void {
+    const originX = image.x;
+
+    this.tweens.add({
+      targets: image,
+      x: originX + DESTRUCTION_SHAKE_PX,
+      duration: DESTRUCTION_SHAKE_MS,
+      yoyo: true,
+      repeat: DESTRUCTION_SHAKE_REPEATS,
+      ease: 'Sine.easeInOut',
+    });
+
+    this.tweens.add({
+      targets: image,
+      alpha: 0,
+      duration: DESTRUCTION_FADE_MS,
+      delay: DESTRUCTION_SHAKE_MS * (DESTRUCTION_SHAKE_REPEATS + 1),
+      ease: 'Quad.easeIn',
+      onComplete: () => {
+        this.tweens.killTweensOf(image);
+        image.destroy();
+      },
+    });
+
+    this.spawnDustBurst(building);
+  }
+
+  private spawnDustBurst(building: PlacedBuilding): void {
+    const center = this.tileCenter(building);
+
+    for (let index = 0; index < DUST_PUFF_COUNT; index++) {
+      const radius = Phaser.Math.Between(DUST_PUFF_RADIUS_MIN, DUST_PUFF_RADIUS_MAX);
+      const puff = this.add
+        .circle(center.x, center.y, radius, DUST_PUFF_COLOR, 0.7)
+        .setDepth(DUST_DEPTH);
+
+      this.tweens.add({
+        targets: puff,
+        x: center.x + Phaser.Math.Between(-DUST_PUFF_SPREAD_PX, DUST_PUFF_SPREAD_PX),
+        y: center.y + Phaser.Math.Between(-DUST_PUFF_SPREAD_PX, DUST_PUFF_SPREAD_PX),
+        alpha: 0,
+        scale: 1.6,
+        duration: Phaser.Math.Between(DUST_PUFF_DURATION_MIN_MS, DUST_PUFF_DURATION_MAX_MS),
+        ease: 'Quad.easeOut',
+        onComplete: () => {
+          this.tweens.killTweensOf(puff);
+          puff.destroy();
+        },
+      });
+    }
+  }
+
+  /**
+   * A destroyed House takes its population with it (gameState recomputes
+   * total population from the House count every tick), so the same number of
+   * villager sprites has to go too or the town would keep visibly bustling
+   * with people it no longer houses. Removed LIFO, mirroring the order
+   * spawnVillagersForHouse added them under VILLAGER_CAP.
+   */
+  private removeVillagersForLostHouse(): void {
+    const removeCount = Math.min(POPULATION_PER_HOUSE, this.villagers.length);
+    for (let index = 0; index < removeCount; index++) {
+      const villager = this.villagers.pop();
+      if (!villager) {
+        break;
+      }
+      this.tweens.killTweensOf(villager);
+      villager.destroy();
+    }
+  }
+
+  /** Units are owned by the building that trained them, so they go when it does. */
+  private removeUnitsOfBuilding(buildingId: string): void {
+    const survivors: CombatUnit[] = [];
+    for (const unit of this.cowboyUnits) {
+      if (unit.barracksId !== buildingId) {
+        survivors.push(unit);
+        continue;
+      }
+      unit.moveTween?.stop();
+      this.tweens.killTweensOf(unit.image);
+      unit.image.destroy();
+    }
+    this.cowboyUnits = survivors;
+    this.selectedUnits = this.selectedUnits.filter((unit) => unit.barracksId !== buildingId);
+    this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
   }
 
   private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
@@ -1354,15 +1748,35 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  /** Random placed building's tile center; always at least the villager's own House, since it's placed before this is ever called. Clamped defensively in case a future building type ever sits outside map bounds. */
+  /**
+   * Random placed building's tile center, clamped to map bounds.
+   *
+   * Phase 31 made the empty-list case reachable for the first time: before
+   * buildings could be destroyed or demolished, a villager's own House was
+   * guaranteed to still be standing whenever this ran, so
+   * `buildings[Between(0, -1)]` was unreachable. Now a town can lose every
+   * last building while its villagers are still walking, so an empty list
+   * falls back to a random point on the map rather than dereferencing
+   * undefined.
+   */
   private pickVillagerTarget(): { x: number; y: number } {
     const buildings = getPlacedBuildings();
+    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
+    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
+
+    if (buildings.length === 0) {
+      return {
+        x: Phaser.Math.Between(0, mapWidthPx),
+        y: Phaser.Math.Between(0, mapHeightPx),
+      };
+    }
+
     const building = buildings[Phaser.Math.Between(0, buildings.length - 1)];
     const center = this.tileCenter(building);
 
     return {
-      x: Phaser.Math.Clamp(center.x, 0, MAP_WIDTH_TILES * TILE_SIZE),
-      y: Phaser.Math.Clamp(center.y, 0, MAP_HEIGHT_TILES * TILE_SIZE),
+      x: Phaser.Math.Clamp(center.x, 0, mapWidthPx),
+      y: Phaser.Math.Clamp(center.y, 0, mapHeightPx),
     };
   }
 
@@ -1402,6 +1816,13 @@ export class MainScene extends Phaser.Scene {
       this.selectionRingGraphics.clear();
       this.selectionRectGraphics.clear();
       this.cowboySelectionHintText.setVisible(false);
+      this.placementHintText.setVisible(false);
+
+      // gameState.resetGame reseeds vegetation before emitting 'game-reset',
+      // so rebuilding every sprite from the current entity list here picks up
+      // the new layout.
+      this.redrawAllVegetation();
+      this.redrawMinimap();
 
       this.resetRaidState();
     });
@@ -1440,14 +1861,25 @@ export class MainScene extends Phaser.Scene {
    * any given wave lasts; the "only trigger if none active" rule is enforced
    * inside by simply skipping the spawn when one already is.
    */
+  /**
+   * Phase 31: the interval is squeezed continuously by threat level (elapsed
+   * time + net worth) instead of Phase 29's single bank-balance step. At
+   * threat 0 this is the original 45-90s roll; at threat 1 both bounds are
+   * halved (RAID_MAX_INTERVAL_SQUEEZE), which is exactly what a full bank
+   * used to do on its own - so the old behaviour is a point on the new curve
+   * rather than a special case.
+   *
+   * A countdown warning is scheduled RAID_WARNING_LEAD_MS before the wave so
+   * the player gets a chance to reposition defenders rather than discovering
+   * the raid by finding a crater.
+   */
   private scheduleNextRaidCheck(): void {
-    // Below BANK_RISK_THRESHOLD this is byte-identical to the pre-Phase-29
-    // interval roll; at/above it both bounds are halved, so raids come
-    // roughly twice as often on top of the Outlaw-biased pick below.
-    const bankAtRisk = getTotalBankBalance() >= BANK_RISK_THRESHOLD;
-    const delay = bankAtRisk
-      ? Phaser.Math.Between(RAID_MIN_INTERVAL_MS / 2, RAID_MAX_INTERVAL_MS / 2)
-      : Phaser.Math.Between(RAID_MIN_INTERVAL_MS, RAID_MAX_INTERVAL_MS);
+    const threat = getThreatLevel();
+    const squeeze = 1 - RAID_MAX_INTERVAL_SQUEEZE * threat;
+    const delay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS * squeeze, RAID_MAX_INTERVAL_MS * squeeze);
+
+    this.scheduleRaidWarning(delay);
+
     this.raidCheckTimer = this.time.delayedCall(delay, () => {
       if (!this.raidActive) {
         this.startRaid();
@@ -1457,13 +1889,49 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Below BANK_RISK_THRESHOLD: identical to the original even pick across
-   * Object.values(RaiderFaction). At/above it: a full bank draws outsized
-   * Outlaw attention (60% Outlaws / 20% Rustlers / 20% Coyotes).
+   * Ticks a "Raid in Ns" notice down over the final RAID_WARNING_LEAD_MS.
+   * Runs on this.time (not setInterval) so it obeys the pause/speed control
+   * along with everything else, and is suppressed while a wave is already on
+   * screen - the active-raid notice is the more urgent message.
+   */
+  private scheduleRaidWarning(raidDelayMs: number): void {
+    this.raidWarningTimer?.remove();
+    this.raidWarningTimer = null;
+
+    const lead = Math.min(RAID_WARNING_LEAD_MS, raidDelayMs);
+    const warningDelay = raidDelayMs - lead;
+
+    this.time.delayedCall(warningDelay, () => {
+      if (this.raidActive) {
+        return;
+      }
+      let remaining = Math.ceil(lead / 1000);
+      this.raidNoticeText.setText(`Raid in ${remaining}s - ready your cowboys!`);
+      this.raidNoticeText.setVisible(true);
+
+      this.raidWarningTimer = this.time.addEvent({
+        delay: 1000,
+        repeat: remaining - 1,
+        callback: () => {
+          remaining -= 1;
+          if (this.raidActive || remaining <= 0) {
+            return;
+          }
+          this.raidNoticeText.setText(`Raid in ${remaining}s - ready your cowboys!`);
+        },
+      });
+    });
+  }
+
+  /**
+   * Below OUTLAW_BIAS_THREAT: the original even pick across
+   * Object.values(RaiderFaction). Above it a wealthy/late-game town draws
+   * outsized Outlaw attention (60/20/20), generalizing Phase 29's
+   * bank-balance trigger to overall net worth.
    */
   private pickRaidFaction(): RaiderFaction {
     const factions = Object.values(RaiderFaction);
-    if (getTotalBankBalance() < BANK_RISK_THRESHOLD) {
+    if (getThreatLevel() < OUTLAW_BIAS_THREAT) {
       return factions[Phaser.Math.Between(0, factions.length - 1)];
     }
     const roll = Math.random();
@@ -1473,21 +1941,34 @@ export class MainScene extends Phaser.Scene {
     return roll < 0.8 ? RaiderFaction.Rustlers : RaiderFaction.Coyotes;
   }
 
+  /**
+   * Phase 31: wave size and raider toughness both scale with threat. The HP
+   * multiplier is carried on each Raider rather than mutating
+   * RAIDER_DEFINITIONS, which must stay the immutable base stat table.
+   */
   private startRaid(): void {
     const faction = this.pickRaidFaction();
-    const count = Phaser.Math.Between(RAID_MIN_UNITS, RAID_MAX_UNITS);
+    const threat = getThreatLevel();
+    const maxUnits = Math.round(
+      RAID_MIN_UNITS + (RAID_MAX_UNITS_ESCALATED - RAID_MIN_UNITS) * threat,
+    );
+    const count = Phaser.Math.Between(RAID_MIN_UNITS, Math.max(RAID_MIN_UNITS, maxUnits));
+    const hpMultiplier = 1 + (RAID_MAX_HP_MULTIPLIER - 1) * threat;
 
     this.raidActive = true;
-    this.showRaidNotice(faction);
+    this.raidWarningTimer?.remove();
+    this.raidWarningTimer = null;
+    this.showRaidNotice(faction, count, threat);
     for (let i = 0; i < count; i++) {
-      this.spawnRaider(faction);
+      this.spawnRaider(faction, hpMultiplier);
     }
 
     this.raidWaveTimer = this.time.delayedCall(RAID_WAVE_TIMEOUT_MS, () => this.endRaidWave());
   }
 
-  private showRaidNotice(faction: RaiderFaction): void {
-    this.raidNoticeText.setText(`${RAIDER_DEFINITIONS[faction].label} incoming!`);
+  private showRaidNotice(faction: RaiderFaction, count: number, threat: number): void {
+    const tier = threat >= 0.66 ? 'Large ' : threat >= 0.33 ? 'Organized ' : '';
+    this.raidNoticeText.setText(`${tier}${RAIDER_DEFINITIONS[faction].label} raid - ${count} incoming!`);
     this.raidNoticeText.setVisible(true);
   }
 
@@ -1495,7 +1976,7 @@ export class MainScene extends Phaser.Scene {
     this.raidNoticeText.setVisible(false);
   }
 
-  private spawnRaider(faction: RaiderFaction): void {
+  private spawnRaider(faction: RaiderFaction, hpMultiplier = 1): void {
     const spawn = this.pickRaidSpawnPoint();
     const definition = RAIDER_DEFINITIONS[faction];
 
@@ -1506,7 +1987,7 @@ export class MainScene extends Phaser.Scene {
     const raider: Raider = {
       image,
       faction,
-      hp: definition.maxHp,
+      hp: Math.round(definition.maxHp * hpMultiplier),
       targetBuildingId: null,
       arrived: false,
     };
@@ -1626,11 +2107,36 @@ export class MainScene extends Phaser.Scene {
     this.resolveRaiderAttacks();
     this.resolveCowboyFire();
     this.removeDeadRaiders();
+    this.removeDestroyedBuildings();
     this.redrawHpBars();
   }
 
+  /**
+   * Phase 31: raiders shoot back at the defenders. A raider prefers any
+   * living unit within RAIDER_UNIT_ATTACK_RANGE_TILES over its building
+   * target - defending cowboys used to be invulnerable, which made combat a
+   * one-sided damage race the player could never lose - and only falls back
+   * to chewing on the building when no defender is close enough.
+   *
+   * Note it can fight a unit before `arrived` is true: a raider walking past
+   * a cowboy will engage it, whereas hitting a building still requires having
+   * actually reached it.
+   */
   private resolveRaiderAttacks(): void {
+    const unitRangePx = RAIDER_UNIT_ATTACK_RANGE_TILES * TILE_SIZE;
+
     for (const raider of this.raiders) {
+      const definition = RAIDER_DEFINITIONS[raider.faction];
+
+      const defender = this.findNearestUnit(raider.image.x, raider.image.y, unitRangePx);
+      if (defender) {
+        const remaining = damageUnit(defender.barracksId, defender.kind, defender.index, definition.damage);
+        if (remaining <= 0) {
+          this.killUnit(defender);
+        }
+        continue;
+      }
+
       if (!raider.arrived || !raider.targetBuildingId) {
         continue;
       }
@@ -1638,8 +2144,71 @@ export class MainScene extends Phaser.Scene {
       if (!target || target.hp <= 0) {
         continue;
       }
-      const definition = RAIDER_DEFINITIONS[raider.faction];
       target.hp = Math.max(0, target.hp - definition.damage);
+    }
+  }
+
+  private findNearestUnit(x: number, y: number, maxDistance: number): CombatUnit | null {
+    let best: CombatUnit | null = null;
+    let bestDistance = maxDistance;
+
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(x, y, unit.image.x, unit.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = unit;
+      }
+    }
+
+    return best;
+  }
+
+  /**
+   * Phase 31: a unit that hits 0 HP is gone - sprite destroyed, dropped from
+   * the tracking and selection arrays. Its HP slot in gameState stays at 0
+   * (see damageUnit) precisely so the surviving units' indices don't shift
+   * underneath them.
+   */
+  private killUnit(unit: CombatUnit): void {
+    unit.moveTween?.stop();
+    this.tweens.killTweensOf(unit.image);
+    this.spawnDeathPuff(unit.image.x, unit.image.y);
+    unit.image.destroy();
+
+    this.cowboyUnits = this.cowboyUnits.filter((candidate) => candidate !== unit);
+    this.selectedUnits = this.selectedUnits.filter((candidate) => candidate !== unit);
+    this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
+  }
+
+  /** A single small dust puff, reusing the destruction burst's look at unit scale. */
+  private spawnDeathPuff(x: number, y: number): void {
+    const puff = this.add.circle(x, y, DUST_PUFF_RADIUS_MAX, DUST_PUFF_COLOR, 0.7).setDepth(DUST_DEPTH);
+    this.tweens.add({
+      targets: puff,
+      alpha: 0,
+      scale: 1.8,
+      duration: DUST_PUFF_DURATION_MAX_MS,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        this.tweens.killTweensOf(puff);
+        puff.destroy();
+      },
+    });
+  }
+
+  /**
+   * Phase 31: 0 HP now means destroyed, not "disabled forever". Checked after
+   * damage is resolved so a building killed this tick is removed in the same
+   * tick that killed it; gameState.destroyBuilding frees its tiles and emits
+   * 'building-removed', which drives all the visual cleanup.
+   */
+  private removeDestroyedBuildings(): void {
+    const destroyed = getPlacedBuildings().filter((building) => building.hp <= 0);
+    for (const building of destroyed) {
+      destroyBuilding(building.id);
     }
   }
 
@@ -1752,6 +2321,8 @@ export class MainScene extends Phaser.Scene {
     this.raidWaveTimer = null;
     this.raidCheckTimer?.remove();
     this.raidCheckTimer = null;
+    this.raidWarningTimer?.remove();
+    this.raidWarningTimer = null;
 
     for (const raider of this.raiders) {
       this.tweens.killTweensOf(raider.image);

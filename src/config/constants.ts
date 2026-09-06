@@ -4,6 +4,9 @@ export const MAP_HEIGHT_TILES = 30;
 export const VIEWPORT_WIDTH = 960;
 export const VIEWPORT_HEIGHT = 640;
 export const PRODUCTION_TICK_MS = 2000;
+// Phase 32: raised from 500 now that upkeep (per-tick drain), repairs and
+// rebuilding after destruction all compete for the same starting purse.
+export const STARTING_MONEY = 1800;
 export const POPULATION_PER_HOUSE = 2;
 export const GAME_DURATION_SECONDS = 300;
 // Global per-resource storage cap: always-available base capacity plus a bonus
@@ -52,3 +55,41 @@ export const MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC = 180;
 // runtime by MainScene's bank-risk check, not redefined here).
 export const BANK_TRANSACTION_AMOUNT = 50;
 export const BANK_INTEREST_RATE = 0.005;
+
+// Phase 30: Wells must sit near open water and produce less the further away
+// they are. WELL_MAX_WATER_DISTANCE_TILES is both the placement gate and the
+// last band that still yields anything, so the two can never disagree.
+export const WELL_MAX_WATER_DISTANCE_TILES = 3;
+export const WELL_OUTPUT_BY_DISTANCE: readonly number[] = [1, 1, 0.75, 0.5];
+
+// Phase 31: damage is permanent (no more free per-tick regen) - a damaged
+// building is repaired by paying REPAIR_COST_FRACTION of its build cost,
+// pro-rated by how much HP is missing.
+export const REPAIR_COST_FRACTION = 0.5;
+
+// Phase 31: refund fraction when the player bulldozes one of their own
+// buildings. Destroyed-by-raiders buildings refund nothing.
+export const DEMOLISH_REFUND_FRACTION = 0.5;
+
+// Phase 31: raiders now hit defending units as well as buildings; a raider
+// prefers any unit inside this radius over its building target.
+export const RAIDER_UNIT_ATTACK_RANGE_TILES = 2;
+
+// Phase 31: raid escalation. Threat (0..1) is blended from elapsed game time
+// and town net worth; at full threat waves reach RAID_MAX_UNITS_ESCALATED,
+// raiders carry RAID_MAX_HP_MULTIPLIER x their base HP, and the gap between
+// waves shrinks to (1 - RAID_MAX_INTERVAL_SQUEEZE) of the normal roll.
+export const THREAT_NET_WORTH_FULL = 6000;
+export const RAID_MAX_UNITS_ESCALATED = 9;
+export const RAID_MAX_HP_MULTIPLIER = 2;
+export const RAID_MAX_INTERVAL_SQUEEZE = 0.5;
+/** How long before a wave lands the incoming-raid countdown notice appears. */
+export const RAID_WARNING_LEAD_MS = 10000;
+
+// Phase 33: camera zoom bounds and per-wheel-notch step.
+export const CAMERA_MIN_ZOOM = 0.5;
+export const CAMERA_MAX_ZOOM = 2;
+export const CAMERA_ZOOM_STEP = 0.1;
+
+/** Phase 33: selectable game speeds; 0 is the paused state. */
+export const GAME_SPEEDS: readonly number[] = [1, 2, 4];

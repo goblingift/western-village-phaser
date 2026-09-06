@@ -5,6 +5,7 @@ import {
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
+  DEMOLISH_REFUND_FRACTION,
   GAME_DURATION_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -12,12 +13,19 @@ import {
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
+  REPAIR_COST_FRACTION,
+  STARTING_MONEY,
+  THREAT_NET_WORTH_FULL,
   WAREHOUSE_STORAGE_BONUS,
+  WELL_MAX_WATER_DISTANCE_TILES,
+  WELL_OUTPUT_BY_DISTANCE,
 } from '../config/constants';
 import {
   BUILDING_DEFINITIONS,
   BuildingType,
+  HarvestConfig,
   PlacedBuilding,
+  RESOURCE_VALUES,
   ResourceKey,
   SALOON_SELL_RATES,
   SUPERMARKET_SELL_RATES,
@@ -25,6 +33,14 @@ import {
   SupermarketSellableKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
+import { distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
+import {
+  findNearestVegetation,
+  harvestVegetation,
+  isTileBlockedByVegetation,
+  plantVegetation,
+  resetVegetation,
+} from './vegetation';
 import { gameEvents } from './gameEvents';
 
 export interface Resources {
@@ -38,28 +54,49 @@ export interface Resources {
   wood: number;
   potatoes: number;
   liquor: number;
+  agaveJuice: number;
+}
+
+/**
+ * Phase 32: the town is scored on what it's actually worth at the buzzer, not
+ * on a single commodity it happened to produce. The breakdown is carried
+ * alongside the total so the game-over screen can show where the value sits
+ * (cash hoarded vs. banked vs. unsold stock vs. bricks and mortar).
+ */
+export interface NetWorthBreakdown {
+  cash: number;
+  banked: number;
+  resources: number;
+  buildings: number;
+  total: number;
 }
 
 export interface GameOverSummary {
+  netWorth: NetWorthBreakdown;
   totalMeatProduced: number;
   buildingCounts: Record<BuildingType, number>;
 }
 
-const STARTING_MONEY = 500;
+function emptyResources(): Resources {
+  return {
+    rawMeat: 0,
+    meat: 0,
+    water: 0,
+    eggs: 0,
+    leather: 0,
+    clothes: 0,
+    logs: 0,
+    wood: 0,
+    potatoes: 0,
+    liquor: 0,
+    agaveJuice: 0,
+  };
+}
 
 let money = STARTING_MONEY;
-const resources: Resources = {
-  rawMeat: 0,
-  meat: 0,
-  water: 0,
-  eggs: 0,
-  leather: 0,
-  clothes: 0,
-  logs: 0,
-  wood: 0,
-  potatoes: 0,
-  liquor: 0,
-};
+const resources: Resources = emptyResources();
+/** Phase 33: per-resource change over the last completed tick, for the HUD's +X.X/tick trend readout. */
+let resourceTrends: Resources = emptyResources();
 const placedBuildings: PlacedBuilding[] = [];
 const buildingsById = new Map<string, PlacedBuilding>();
 const occupancy: (string | null)[][] = createEmptyOccupancy();
@@ -136,10 +173,77 @@ export function canAfford(type: BuildingType): boolean {
   return money >= BUILDING_DEFINITIONS[type].cost;
 }
 
+/**
+ * Phase 30: terrain is finally consulted. Every tile of the footprint must be
+ * in-bounds, dry land (water is impassable) and clear of vegetation - a tree
+ * or cactus has to be harvested away before its tile can be built on.
+ */
+export function isTerrainBuildable(tileX: number, tileY: number, type: BuildingType): boolean {
+  return getTerrainRejection(tileX, tileY, type) === null;
+}
+
+function getTerrainRejection(tileX: number, tileY: number, type: BuildingType): string | null {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  for (let y = tileY; y < tileY + height; y++) {
+    for (let x = tileX; x < tileX + width; x++) {
+      if (!isBuildableTerrain(x, y)) {
+        return 'Cannot build on water';
+      }
+      if (isTileBlockedByVegetation(x, y)) {
+        return 'Blocked by vegetation';
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Phase 30: a Well needs groundwater. Placement is hard-gated on being within
+ * WELL_MAX_WATER_DISTANCE_TILES of open water, and the same distance then
+ * scales its output every tick (see wellOutputMultiplier), so the gate and
+ * the payoff can never drift apart.
+ */
+export function getWellWaterDistance(tileX: number, tileY: number, type: BuildingType): number | null {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  return distanceToNearestWater(tileX, tileY, width, height, WELL_MAX_WATER_DISTANCE_TILES);
+}
+
+function wellOutputMultiplier(building: PlacedBuilding): number {
+  const distance = getWellWaterDistance(building.tileX, building.tileY, building.type);
+  if (distance === null) {
+    return 0;
+  }
+  return WELL_OUTPUT_BY_DISTANCE[Math.min(distance, WELL_OUTPUT_BY_DISTANCE.length - 1)];
+}
+
+/**
+ * Phase 30: the single source of truth for "why can't I put this here",
+ * returning a player-facing reason string (or null when placement is legal).
+ * canPlaceBuilding is now a thin boolean wrapper over it so the preview
+ * tint and the actual placement rule can never disagree.
+ */
+export function getPlacementRejection(tileX: number, tileY: number, type: BuildingType): string | null {
+  if (!isWithinBounds(tileX, tileY, type)) {
+    return 'Outside the map';
+  }
+  const terrainRejection = getTerrainRejection(tileX, tileY, type);
+  if (terrainRejection) {
+    return terrainRejection;
+  }
+  if (!isAreaFree(tileX, tileY, type)) {
+    return 'Tile already occupied';
+  }
+  if (type === BuildingType.Well && getWellWaterDistance(tileX, tileY, type) === null) {
+    return `Well must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water`;
+  }
+  if (!canAfford(type)) {
+    return `Not enough money ($${BUILDING_DEFINITIONS[type].cost})`;
+  }
+  return null;
+}
+
 export function canPlaceBuilding(tileX: number, tileY: number, type: BuildingType): boolean {
-  return (
-    isWithinBounds(tileX, tileY, type) && isAreaFree(tileX, tileY, type) && canAfford(type)
-  );
+  return getPlacementRejection(tileX, tileY, type) === null;
 }
 
 export function placeBuilding(tileX: number, tileY: number, type: BuildingType): PlacedBuilding | null {
@@ -166,6 +270,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     mountedCowboyCount: 0,
     mountedCowboyHp: [],
     bankBalance: 0,
+    disabled: false,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -184,6 +289,144 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   updateConnections();
 
   return building;
+}
+
+/**
+ * Phase 31: the one and only way a building leaves the world, shared by
+ * raider destruction (0 HP) and the player's bulldozer. Everything hanging
+ * off the building goes with it: its occupancy tiles are freed, its livestock
+ * and garrisoned units cease to exist (their counts/HP arrays die with the
+ * record), and road connectivity is recomputed for the survivors.
+ *
+ * Workforce is deliberately NOT recomputed here - assignWorkforce already
+ * rebuilds it from scratch every tick against the current building list, so
+ * the freed workers are reassigned on the very next tick with no stale state.
+ *
+ * The building is removed from state immediately rather than after any
+ * animation: gameState stays the single source of truth, and the scene plays
+ * its destruction animation on the now-orphaned sprite (see
+ * MainScene.playDestructionAnimation) before destroying it.
+ */
+function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolished'): void {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+  for (let y = building.tileY; y < building.tileY + height; y++) {
+    for (let x = building.tileX; x < building.tileX + width; x++) {
+      if (occupancy[y]?.[x] === building.id) {
+        occupancy[y][x] = null;
+      }
+    }
+  }
+
+  const index = placedBuildings.indexOf(building);
+  if (index >= 0) {
+    placedBuildings.splice(index, 1);
+  }
+  buildingsById.delete(building.id);
+
+  gameEvents.emit('building-removed', { building, reason });
+  updateConnections();
+}
+
+/** Called by the combat tick once a building's HP has been driven to 0. */
+export function destroyBuilding(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return false;
+  }
+  removeBuilding(building, 'destroyed');
+  return true;
+}
+
+/**
+ * Player-initiated teardown. Refunds DEMOLISH_REFUND_FRACTION of the build
+ * cost (raider destruction refunds nothing - that's the whole point of
+ * defending) and otherwise runs the identical removal path.
+ */
+export function demolishBuilding(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return false;
+  }
+
+  const refund = Math.round(BUILDING_DEFINITIONS[building.type].cost * DEMOLISH_REFUND_FRACTION * 100) / 100;
+  money = Math.round((money + refund) * 100) / 100;
+  removeBuilding(building, 'demolished');
+  gameEvents.emit('money-changed', money);
+
+  return true;
+}
+
+/**
+ * Phase 31: with per-tick auto-regen gone, HP only comes back by paying for
+ * it. Cost is pro-rated by the fraction of HP missing against a fixed share
+ * of the build cost, so patching light scratches is cheap and rebuilding a
+ * near-wreck approaches half its original price.
+ */
+export function getRepairCost(building: PlacedBuilding): number {
+  const definition = BUILDING_DEFINITIONS[building.type];
+  const missing = Math.max(0, definition.maxHp - building.hp);
+  if (missing === 0) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil((missing / definition.maxHp) * definition.cost * REPAIR_COST_FRACTION));
+}
+
+export function repairBuilding(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return false;
+  }
+
+  const definition = BUILDING_DEFINITIONS[building.type];
+  const cost = getRepairCost(building);
+  if (cost === 0 || money < cost) {
+    return false;
+  }
+
+  money = Math.round((money - cost) * 100) / 100;
+  building.hp = definition.maxHp;
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('building-repaired', building);
+
+  return true;
+}
+
+/**
+ * Phase 31: units are mortal. Damage is written into the training building's
+ * parallel HP array (gameState stays the source of truth for HP, exactly as
+ * it already is for building.hp), and the dead unit's *slot is kept* at 0
+ * rather than spliced out: MainScene's CombatUnit.index is aligned to that
+ * slot, and every other living unit's index would shift if the array
+ * collapsed. Only the count is decremented, which is what the per-building
+ * training cap reads - so a lost cowboy frees a slot to train a replacement.
+ */
+export function damageUnit(
+  buildingId: string,
+  kind: 'cowboy' | 'cowboyOnHorse',
+  index: number,
+  amount: number,
+): number {
+  const building = buildingsById.get(buildingId);
+  if (!building) {
+    return 0;
+  }
+
+  const hpArray = kind === 'cowboy' ? building.cowboyHp : building.mountedCowboyHp;
+  if (index < 0 || index >= hpArray.length || hpArray[index] <= 0) {
+    return 0;
+  }
+
+  hpArray[index] = Math.max(0, hpArray[index] - amount);
+  if (hpArray[index] === 0) {
+    if (kind === 'cowboy') {
+      building.cowboyCount = Math.max(0, building.cowboyCount - 1);
+    } else {
+      building.mountedCowboyCount = Math.max(0, building.mountedCowboyCount - 1);
+    }
+  }
+
+  return hpArray[index];
 }
 
 function tileHasOtherBuilding(x: number, y: number, excludeId: string): boolean {
@@ -530,7 +773,8 @@ export function getTotalBankBalance(): number {
 
 export function getStorageCap(): number {
   const staffedWarehouses = placedBuildings.filter(
-    (building) => building.type === BuildingType.Warehouse && building.staffed && building.hp > 0,
+    (building) =>
+      building.type === BuildingType.Warehouse && building.staffed && !building.disabled && building.hp > 0,
   ).length;
   return BASE_STORAGE_CAP + WAREHOUSE_STORAGE_BONUS * staffedWarehouses;
 }
@@ -619,34 +863,85 @@ function runSaloonSales(): void {
   }
 }
 
-const HP_REGEN_FRACTION = 0.02;
-
 /**
- * Runs for every building regardless of active/staffed state, including
- * currently-disabled (0 HP) ones - regen is the only way a disabled building
- * recovers, so gating it behind staffing/production would make it permanent.
+ * Phase 31 deliberately deletes the old runHpRegen pass. Free, unconditional
+ * 2%-per-tick healing meant raids had no lasting cost: anything short of a
+ * kill simply undid itself, and a 0 HP building always came back on its own.
+ * Damage is now permanent until paid for (repairBuilding), and a building
+ * that reaches 0 HP is destroyed outright rather than idling as a
+ * self-healing wreck. Unit HP regen went with it for the same reason - units
+ * are mortal now (damageUnit).
+ *
+ * Phase 32: upkeep. Every staffed, enabled building bills its definition's
+ * upkeep each tick. Buildings are billed in placement order and any building
+ * the town can no longer pay for is flagged `disabled` for that tick instead
+ * of being destroyed - a cash crisis idles your town, it doesn't bulldoze it.
+ * Recomputed from scratch every tick (like assignWorkforce), so the moment
+ * money comes back in, the same buildings switch themselves on again.
  */
-function runHpRegen(): void {
-  for (const building of placedBuildings) {
-    const maxHp = BUILDING_DEFINITIONS[building.type].maxHp;
-    building.hp = Math.min(maxHp, building.hp + Math.ceil(maxHp * HP_REGEN_FRACTION));
+function runUpkeep(): number {
+  let paid = 0;
 
-    // Empty for every non-Barracks building, so this is a no-op for them.
-    for (let i = 0; i < building.cowboyHp.length; i++) {
-      building.cowboyHp[i] = Math.min(
-        COWBOY_MAX_HP,
-        building.cowboyHp[i] + Math.ceil(COWBOY_MAX_HP * HP_REGEN_FRACTION),
-      );
+  for (const building of placedBuildings) {
+    const { upkeep } = BUILDING_DEFINITIONS[building.type];
+    if (upkeep <= 0 || !building.staffed) {
+      building.disabled = false;
+      continue;
     }
 
-    // Empty for every non-Horsery building, so this is a no-op for them.
-    for (let i = 0; i < building.mountedCowboyHp.length; i++) {
-      building.mountedCowboyHp[i] = Math.min(
-        MOUNTED_COWBOY_MAX_HP,
-        building.mountedCowboyHp[i] + Math.ceil(MOUNTED_COWBOY_MAX_HP * HP_REGEN_FRACTION),
-      );
+    if (money >= upkeep) {
+      money = Math.round((money - upkeep) * 100) / 100;
+      paid += upkeep;
+      building.disabled = false;
+    } else {
+      building.disabled = true;
     }
   }
+
+  return paid;
+}
+
+/**
+ * Phase 32: pulls this tick's yield out of real vegetation entities standing
+ * near the building. Returns the outputs actually earned, scaled by how much
+ * was really harvested - an exhausted radius yields nothing at all, which is
+ * what makes over-harvesting bite. Forestry additionally rolls to replant,
+ * passing its own "is this tile free of buildings" test down to the
+ * vegetation module (which can't see occupancy itself).
+ */
+function runHarvest(building: PlacedBuilding, harvest: HarvestConfig): Partial<Record<ResourceKey, number>> | null {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+  const centerTileX = building.tileX + Math.floor(width / 2);
+  const centerTileY = building.tileY + Math.floor(height / 2);
+
+  if (harvest.replantChancePerTick && Math.random() < harvest.replantChancePerTick) {
+    plantVegetation(
+      harvest.kind,
+      centerTileX,
+      centerTileY,
+      harvest.radiusTiles,
+      (tileX, tileY) => occupancy[tileY]?.[tileX] == null,
+    );
+  }
+
+  const target = findNearestVegetation(harvest.kind, centerTileX, centerTileY, harvest.radiusTiles);
+  if (!target) {
+    building.lastHarvest = 0;
+    return null;
+  }
+
+  const taken = harvestVegetation(target, harvest.yieldPerTick);
+  building.lastHarvest = taken;
+  if (taken <= 0) {
+    return null;
+  }
+
+  const ratio = taken / harvest.yieldPerTick;
+  const outputs: Partial<Record<ResourceKey, number>> = {};
+  for (const [key, amount] of Object.entries(harvest.outputs) as [ResourceKey, number][]) {
+    outputs[key] = amount * ratio;
+  }
+  return outputs;
 }
 
 /**
@@ -682,15 +977,18 @@ export function runProductionTick(): void {
     return;
   }
 
-  runHpRegen();
+  const before: Resources = { ...resources };
+
   runBankInterest();
   assignWorkforce();
+  runUpkeep();
   const storageCap = getStorageCap();
 
   for (const building of placedBuildings) {
     const definition = BUILDING_DEFINITIONS[building.type];
     const production = definition.production;
-    if (!production) {
+    const harvest = definition.harvest;
+    if (!production && !harvest) {
       building.active = false;
       continue;
     }
@@ -700,7 +998,9 @@ export function runProductionTick(): void {
       continue;
     }
 
-    if (!building.staffed) {
+    // Phase 32: an unpaid (upkeep-starved) building idles exactly like an
+    // understaffed one - no output, but no damage and no removal either.
+    if (!building.staffed || building.disabled) {
       building.active = false;
       continue;
     }
@@ -713,7 +1013,18 @@ export function runProductionTick(): void {
       continue;
     }
 
-    const inputs = production.inputs ?? {};
+    // Harvesters have no inputs and produce only what they can pull from
+    // nearby vegetation this tick; a stripped radius means no output.
+    let harvestOutputs: Partial<Record<ResourceKey, number>> | null = null;
+    if (harvest) {
+      harvestOutputs = runHarvest(building, harvest);
+      if (!harvestOutputs) {
+        building.active = false;
+        continue;
+      }
+    }
+
+    const inputs = production?.inputs ?? {};
     const canRun = (Object.entries(inputs) as [ResourceKey, number][]).every(
       ([key, amount]) => resources[key] >= amount,
     );
@@ -726,11 +1037,17 @@ export function runProductionTick(): void {
     for (const [key, amount] of Object.entries(inputs) as [ResourceKey, number][]) {
       resources[key] -= amount;
     }
-    const bonus = building.connected ? 1.1 : 1;
+    let bonus = building.connected ? 1.1 : 1;
+    // Phase 30: a Well's yield falls off with its distance to open water.
+    if (building.type === BuildingType.Well) {
+      bonus *= wellOutputMultiplier(building);
+    }
     // Animal buildings scale their per-animal rate by how many animals are owned instead of using a flat production.outputs amount.
-    const outputs = animalConfig
-      ? scaleByAnimalCount(animalConfig.outputPerAnimal, building.animalCount)
-      : (production.outputs ?? {});
+    const outputs = harvestOutputs
+      ? harvestOutputs
+      : animalConfig
+        ? scaleByAnimalCount(animalConfig.outputPerAnimal, building.animalCount)
+        : (production?.outputs ?? {});
     for (const [key, amount] of Object.entries(outputs) as [ResourceKey, number][]) {
       const produced = amount * bonus;
       const before = resources[key];
@@ -747,17 +1064,13 @@ export function runProductionTick(): void {
   runSupermarketSales();
   runSaloonSales();
 
+  for (const key of Object.keys(resources) as ResourceKey[]) {
+    resourceTrends[key] = Math.round((resources[key] - before[key]) * 10) / 10;
+  }
+
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
   gameEvents.emit('production-tick');
-
-  const activeCount = placedBuildings.filter((b) => b.active).length;
-  const round1 = (n: number) => Math.round(n * 10) / 10;
-  console.log(
-    '[tick]',
-    { money, rawMeat: round1(resources.rawMeat), meat: round1(resources.meat), water: round1(resources.water) },
-    `${activeCount}/${placedBuildings.length} buildings active`,
-  );
 }
 
 export function tickTimer(): void {
@@ -771,6 +1084,52 @@ export function tickTimer(): void {
   if (remainingSeconds <= 0) {
     endGame();
   }
+}
+
+/**
+ * Phase 32: the score. Cash on hand, every Bank's balance, the unsold
+ * resource stock priced at RESOURCE_VALUES, and the full build cost of every
+ * standing building - so hoarding, banking, stockpiling and expanding are all
+ * legitimate strategies, and losing a building to a raid is a visible hit to
+ * the number the player is graded on.
+ */
+export function computeNetWorth(): NetWorthBreakdown {
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const banked = getTotalBankBalance();
+  let resourceValue = 0;
+  for (const [key, amount] of Object.entries(resources) as [ResourceKey, number][]) {
+    resourceValue += amount * RESOURCE_VALUES[key];
+  }
+  const buildingValue = placedBuildings.reduce(
+    (sum, building) => sum + BUILDING_DEFINITIONS[building.type].cost,
+    0,
+  );
+
+  return {
+    cash: round2(money),
+    banked: round2(banked),
+    resources: round2(resourceValue),
+    buildings: round2(buildingValue),
+    total: round2(money + banked + resourceValue + buildingValue),
+  };
+}
+
+/**
+ * Phase 31: 0..1 measure of how much heat the town is drawing, blended evenly
+ * from elapsed game time (raids ramp up over a run regardless of play) and
+ * net worth (a rich town is a target). This generalizes Phase 29's
+ * bank-balance-only raid hook: banked cash still raises threat, but now as
+ * one component of overall wealth rather than its own special case.
+ */
+export function getThreatLevel(): number {
+  const elapsedFraction = 1 - Math.max(0, remainingSeconds) / GAME_DURATION_SECONDS;
+  const wealthFraction = Math.min(1, computeNetWorth().total / THREAT_NET_WORTH_FULL);
+  return Math.min(1, elapsedFraction * 0.5 + wealthFraction * 0.5);
+}
+
+export function getResourceTrends(): Readonly<Resources> {
+  return resourceTrends;
 }
 
 function countBuildingsByType(): Record<BuildingType, number> {
@@ -787,6 +1146,7 @@ function countBuildingsByType(): Record<BuildingType, number> {
 function endGame(): void {
   gameOver = true;
   gameEvents.emit('game-over', {
+    netWorth: computeNetWorth(),
     totalMeatProduced: Math.round(totalMeatProduced * 10) / 10,
     buildingCounts: countBuildingsByType(),
   });
@@ -794,16 +1154,8 @@ function endGame(): void {
 
 export function resetGame(): void {
   money = STARTING_MONEY;
-  resources.rawMeat = 0;
-  resources.meat = 0;
-  resources.water = 0;
-  resources.eggs = 0;
-  resources.leather = 0;
-  resources.clothes = 0;
-  resources.logs = 0;
-  resources.wood = 0;
-  resources.potatoes = 0;
-  resources.liquor = 0;
+  Object.assign(resources, emptyResources());
+  resourceTrends = emptyResources();
   totalMeatProduced = 0;
   remainingSeconds = GAME_DURATION_SECONDS;
   gameOver = false;
@@ -816,6 +1168,11 @@ export function resetGame(): void {
   for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
     occupancy[y].fill(null);
   }
+
+  // Terrain is intentionally kept across a reset (the player replays the same
+  // map they just learned), but vegetation is reseeded so a run that felled
+  // every tree doesn't start the next one on a bald map.
+  resetVegetation();
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });

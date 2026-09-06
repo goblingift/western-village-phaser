@@ -18,7 +18,10 @@ import {
   MOUNTED_COWBOY_TEXTURE_KEY,
   RAIDERS_ATLAS_KEY,
   RAIDER_SPRITE_SIZE,
+  RESOURCE_ICONS_ATLAS_KEY,
+  RESOURCE_ICON_SIZE,
   RaiderFaction,
+  ResourceKey,
   VILLAGERS_ATLAS_KEY,
   VILLAGER_SPRITE_SIZE,
   VILLAGER_TEXTURE_KEY,
@@ -26,7 +29,14 @@ import {
   animalTextureKey,
   buildingTextureKey,
   raiderTextureKey,
+  resourceIconTextureKey,
 } from '../config/buildingConfig';
+import {
+  VEGETATION_ATLAS_KEY,
+  VegetationKind,
+  vegetationTextureKey,
+} from '../config/vegetationConfig';
+import { setBuildingIcons } from '../ui/buildingIcons';
 
 export const TILESET_KEY = 'tiles-atlas';
 
@@ -56,22 +66,45 @@ interface PixelSprite {
   palette: PixelPalette;
 }
 
-const GRASS_SPRITE: PixelSprite = {
-  palette: { G: 0x4caf50, D: 0x357a38, H: 0x7cc47f },
+/**
+ * Phase 30 terrain: the Western basin is dry ground, so the old grass default
+ * is gone. Dirt is the base, Gravel and Sand are the two variants painted in
+ * patches over it (see mapConfig.paintGround) - all three are buildable and
+ * differ only in texture/hue, so the player reads them as terrain flavour
+ * rather than as a rules distinction.
+ */
+const DIRT_SPRITE: PixelSprite = {
+  // K are shallow cracks in baked earth, H a few sun-bleached highlights.
+  palette: { D: 0x9c7b52, K: 0x836542, H: 0xb09067 },
   pattern: [
-    'GGGGGGGG',
-    'GGDGGGGG',
-    'GGGGGHGG',
-    'GGGDDGGG',
-    'GDGGGGGG',
-    'GGGGGHGG',
-    'GGGGGGGD',
-    'GGGGGGGG',
+    'DDDDDDDD',
+    'DDKDDDDD',
+    'DDDDDHDD',
+    'DKKDDDDD',
+    'DDDDDDHD',
+    'DDDDKDDD',
+    'DHDDKDDD',
+    'DDDDDDDD',
+  ],
+};
+
+const GRAVEL_SPRITE: PixelSprite = {
+  // Denser, cooler-toned speckle than Dirt: P are pebbles, S their shadows.
+  palette: { G: 0x8a8172, P: 0xa9a094, S: 0x6d6558 },
+  pattern: [
+    'GGPGGGSG',
+    'GSGGPGGG',
+    'GGGSGGPG',
+    'PGGGGSGG',
+    'GGSGPGGG',
+    'GPGGGGGS',
+    'GGGPSGGG',
+    'SGGGGGPG',
   ],
 };
 
 const WATER_SPRITE: PixelSprite = {
-  palette: { W: 0x2196f3, D: 0x15599e, H: 0x6ec6ff },
+  palette: { W: 0x2f7fbf, D: 0x1c5c8f, H: 0x6ec6ff },
   pattern: [
     'WWWWWWWW',
     'WWWWWWWW',
@@ -85,25 +118,70 @@ const WATER_SPRITE: PixelSprite = {
 };
 
 const SAND_SPRITE: PixelSprite = {
-  // C forms a two-pixel stub hinting at a small cactus/scrub silhouette;
-  // K forms a short cracked-earth fissure. Both kept to a subtle 2px line
-  // since this tile is rendered 40x30 times across the map.
-  palette: { S: 0xd2b48c, D: 0xb08968, H: 0xe8d0a9, C: 0x8c9a6b, K: 0x9c7b52 },
+  // Phase 30 dropped the baked-in cactus stub that used to sit here: cacti
+  // are real, harvestable world entities now (VEGETATION_SPRITES below), so
+  // painting fake ones into the terrain would misread as harvestable.
+  // K forms a short cracked-earth fissure, D/H are dune shading.
+  palette: { S: 0xd2b48c, D: 0xb08968, H: 0xe8d0a9, K: 0x9c7b52 },
   pattern: [
     'SSSSSSSS',
     'SSDSSSSS',
     'SSSSSSHS',
     'SSSSDSSS',
     'SSSSSSSS',
-    'SSCSSKSS',
-    'SSCSSKSS',
+    'SSSSSKSS',
+    'SHSSSKSS',
     'SSSSSSSS',
   ],
 };
 
-// Order must match the TileType enum values (Grass=0, Water=1, Sand=2), since
-// tile indices in the generated tilemap are used directly as frame indices.
-const TILE_SPRITES: PixelSprite[] = [GRASS_SPRITE, WATER_SPRITE, SAND_SPRITE];
+// Order must match the TileType enum values (Dirt=0, Gravel=1, Sand=2,
+// Water=3), since tile indices in the generated tilemap are used directly as
+// frame indices.
+const TILE_SPRITES: PixelSprite[] = [DIRT_SPRITE, GRAVEL_SPRITE, SAND_SPRITE, WATER_SPRITE];
+
+/**
+ * Phase 30 vegetation: drawn tile-sized (the full 8x8 PIXEL_GRID) rather than
+ * at the 12px small-unit scale, since a tree/cactus owns its whole tile and
+ * blocks building on it - it has to read as terrain-scale, not as a critter.
+ */
+const TREE_SPRITE: PixelSprite = {
+  // Layered canopy (G dark / L light) over a short trunk, with a hint of
+  // shadow (S) at the base so it sits on the ground rather than floating.
+  palette: { G: 0x1b5e20, L: 0x2e7d32, T: 0x4e342e, S: 0x6b5a3e },
+  pattern: [
+    '...GG...',
+    '..GLLG..',
+    '.GLLLLG.',
+    'GLLGGLLG',
+    '.GLLLLG.',
+    '..GLLG..',
+    '...TT...',
+    '..STTS..',
+  ],
+};
+
+const CACTUS_SPRITE: PixelSprite = {
+  // Classic saguaro silhouette: a tall trunk with one arm each side at
+  // different heights, F are the bloom/spine dots that keep it from reading
+  // as a plain green post.
+  palette: { C: 0x689f38, D: 0x33691e, F: 0xf06292, S: 0x6b5a3e },
+  pattern: [
+    '...CC...',
+    '.C.CC.C.',
+    '.C.CC.CF',
+    '.CDCCDC.',
+    '.CCCCCC.',
+    '...CCF..',
+    '...CC...',
+    '..SCCS..',
+  ],
+};
+
+const VEGETATION_SPRITES: Record<VegetationKind, PixelSprite> = {
+  Tree: TREE_SPRITE,
+  Cactus: CACTUS_SPRITE,
+};
 
 const CATTLE_FARM_SPRITE: PixelSprite = {
   // P alternates with B across wall columns to read as vertical wood planks.
@@ -586,6 +664,32 @@ const BANK_SPRITE: PixelSprite = {
   ],
 };
 
+const CACTUS_MILKER_SPRITE: PixelSprite = {
+  // Open-sided harvesting shed rather than a walled facade (it works the
+  // desert, like Forestry works the woods): a canvas awning roof (R) on
+  // posts, a potted cactus being tapped (C/D) under it, and a row of
+  // collection jugs (J) along the bottom with a green juice line (G).
+  palette: { S: 0x5d4037, R: 0xcfa06a, P: 0x7a5a3d, C: 0x689f38, D: 0x33691e, J: 0xd7ccc8, G: 0x7cb342 },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRRRRRRRS',
+    'SSSSSSSSSSSSSSSS',
+    'P..............P',
+    'P....CC.CC.....P',
+    'P..C.CC.CC..C..P',
+    'P..C.CCDCC..C..P',
+    'P..CDCCCCCDDC..P',
+    'P....CCCCC.....P',
+    'P.....CCC......P',
+    'P.....GGG......P',
+    'SSSSSSSSSSSSSSSS',
+    'JJ.JJ.JJ.JJ.JJ..',
+    'JJ.JJ.JJ.JJ.JJ..',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
@@ -607,6 +711,60 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Saloon]: SALOON_SPRITE,
   [BuildingType.Horsery]: HORSERY_SPRITE,
   [BuildingType.Bank]: BANK_SPRITE,
+  [BuildingType.CactusMilker]: CACTUS_MILKER_SPRITE,
+};
+
+/**
+ * Phase 33 resource icons: drawn on the coarse 6x6 small-sprite grid and
+ * scaled to RESOURCE_ICON_SIZE. Each is a single readable silhouette rather
+ * than a detailed illustration - at 12px in a HUD grid, shape and colour are
+ * the only signal that survives.
+ */
+const RESOURCE_ICON_SPRITES: Record<ResourceKey, PixelSprite> = {
+  rawMeat: {
+    palette: { M: 0xd05a6e, B: 0xf2e6d8 },
+    pattern: ['..MM..', '.MMMM.', 'MMMMMM', 'MMMMMM', '.MMMM.', '..BB..'],
+  },
+  meat: {
+    palette: { M: 0x8d3b2f, F: 0xd08a7a, B: 0xf2e6d8 },
+    pattern: ['..MM..', '.MFFM.', 'MFMMFM', 'MFMMFM', '.MFFM.', '..BB..'],
+  },
+  water: {
+    palette: { W: 0x2f7fbf, H: 0x6ec6ff },
+    pattern: ['..WW..', '..WW..', '.WHWW.', 'WHWWWW', 'WWWWWW', '.WWWW.'],
+  },
+  eggs: {
+    palette: { E: 0xfff8e1, S: 0xd7c9a8 },
+    pattern: ['..EE..', '.EEEE.', 'EEEEES', 'EEEEES', '.EEEES', '..SS..'],
+  },
+  leather: {
+    palette: { L: 0x9c6b3f, D: 0x6d4c41 },
+    pattern: ['D....D', '.LLLL.', 'LLLLLL', 'LLLLLL', '.LLLL.', 'D....D'],
+  },
+  clothes: {
+    palette: { C: 0x5c6bc0, T: 0x3949ab },
+    pattern: ['TC..CT', 'CCCCCC', 'CCCCCC', '.CCCC.', '.CCCC.', '.T..T.'],
+  },
+  logs: {
+    palette: { K: 0x8d6748, E: 0xd7ccc8 },
+    pattern: ['......', 'EKKKKE', 'EKKKKE', 'EKKKKE', 'EKKKKE', '......'],
+  },
+  wood: {
+    palette: { P: 0xc9a063, D: 0x9c7b52 },
+    pattern: ['PPPPPP', 'DDDDDD', 'PPPPPP', 'DDDDDD', 'PPPPPP', '......'],
+  },
+  potatoes: {
+    palette: { P: 0xc9a063, S: 0x8d6748 },
+    pattern: ['.PPPP.', 'PPSPPP', 'PPPPSP', 'PSPPPP', 'PPPPSP', '.PPPP.'],
+  },
+  liquor: {
+    palette: { G: 0x8d6e4a, L: 0xd2823a, C: 0xd7ccc8 },
+    pattern: ['..CC..', '..GG..', '.GLLG.', 'GLLLLG', 'GLLLLG', 'GGGGGG'],
+  },
+  agaveJuice: {
+    palette: { G: 0x7cb342, J: 0xaed581, C: 0xd7ccc8 },
+    pattern: ['..CC..', '..GG..', '.GJJG.', 'GJJJJG', 'GJJJJG', 'GGGGGG'],
+  },
 };
 
 const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
@@ -770,10 +928,50 @@ export class BootScene extends Phaser.Scene {
     this.generateCowboyAtlas();
     this.generateMountedCowboyAtlas();
     this.generateRaiderAtlas();
+    this.generateVegetationAtlas();
+    this.generateResourceIconAtlas();
   }
 
   create(): void {
+    this.publishBuildingIcons();
     this.scene.start('MainScene');
+  }
+
+  /**
+   * Rasterises each building frame out of the generated atlas into a data URL
+   * for the DOM building bar (Phase 33). Wrapped in a try/catch because this
+   * is a purely cosmetic enhancement: if the canvas read ever fails (e.g. a
+   * renderer that doesn't back the texture with a readable canvas), the bar
+   * falls back to its text labels rather than taking the game down with it.
+   */
+  private publishBuildingIcons(): void {
+    try {
+      const texture = this.textures.get(BUILDING_ATLAS_KEY);
+      const source = texture.getSourceImage();
+      if (!(source instanceof HTMLCanvasElement) && !(source instanceof HTMLImageElement)) {
+        return;
+      }
+
+      const icons: Partial<Record<BuildingType, string>> = {};
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return;
+      }
+
+      for (const definition of Object.values(BUILDING_DEFINITIONS)) {
+        const frame = texture.get(buildingTextureKey(definition.type));
+        canvas.width = frame.width;
+        canvas.height = frame.height;
+        context.clearRect(0, 0, frame.width, frame.height);
+        context.drawImage(source, frame.cutX, frame.cutY, frame.width, frame.height, 0, 0, frame.width, frame.height);
+        icons[definition.type] = canvas.toDataURL();
+      }
+
+      setBuildingIcons(icons);
+    } catch {
+      // Icons stay empty; BuildingBar renders its text-label fallback.
+    }
   }
 
   private generateTilesetTexture(): void {
@@ -915,6 +1113,43 @@ export class BootScene extends Phaser.Scene {
       MOUNTED_COWBOY_SPRITE_WIDTH,
       MOUNTED_COWBOY_SPRITE_HEIGHT,
     );
+  }
+
+  /** Tile-sized frames (vegetation owns a whole tile), so the uniform-grid layout is stepped by TILE_SIZE rather than the small-unit size. */
+  private generateVegetationAtlas(): void {
+    const kinds = Object.keys(VEGETATION_SPRITES) as VegetationKind[];
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    kinds.forEach((kind, index) => {
+      drawPixelSprite(graphics, index * TILE_SIZE, 0, VEGETATION_SPRITES[kind]);
+    });
+
+    graphics.generateTexture(VEGETATION_ATLAS_KEY, kinds.length * TILE_SIZE, TILE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(VEGETATION_ATLAS_KEY);
+    kinds.forEach((kind, index) => {
+      texture.add(vegetationTextureKey(kind), 0, index * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE);
+    });
+  }
+
+  /** One frame per ResourceKey, uniform grid at RESOURCE_ICON_SIZE; drawn on the coarse small-sprite pixel grid. */
+  private generateResourceIconAtlas(): void {
+    const keys = Object.keys(RESOURCE_ICON_SPRITES) as ResourceKey[];
+    const iconPixelSize = RESOURCE_ICON_SIZE / ANIMAL_PIXEL_GRID;
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    keys.forEach((key, index) => {
+      drawPixelSprite(graphics, index * RESOURCE_ICON_SIZE, 0, RESOURCE_ICON_SPRITES[key], iconPixelSize);
+    });
+
+    graphics.generateTexture(RESOURCE_ICONS_ATLAS_KEY, keys.length * RESOURCE_ICON_SIZE, RESOURCE_ICON_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(RESOURCE_ICONS_ATLAS_KEY);
+    keys.forEach((key, index) => {
+      texture.add(resourceIconTextureKey(key), 0, index * RESOURCE_ICON_SIZE, 0, RESOURCE_ICON_SIZE, RESOURCE_ICON_SIZE);
+    });
   }
 
   /** Multi-frame atlas (one look per faction), same uniform-grid layout as generateAnimalAtlas. */

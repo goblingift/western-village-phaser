@@ -20,16 +20,32 @@ export class GameOverOverlay {
     gameEvents.on('game-over', (summary: GameOverSummary) => this.show(summary));
   }
 
+  /**
+   * Phase 32: scored on net worth rather than meat alone, with the breakdown
+   * shown so the player can see which strategy actually paid - cash hoarding,
+   * banking, stockpiling goods, or building out the town. Buildings the
+   * player never built are omitted from the counts list, which used to print
+   * every type at zero.
+   */
   private show(summary: GameOverSummary): void {
     const buildingRows = Object.values(BuildingType)
+      .filter((type) => summary.buildingCounts[type] > 0)
       .map((type) => `<div>${BUILDING_DEFINITIONS[type].label}: ${summary.buildingCounts[type]}</div>`)
       .join('');
 
+    const { netWorth } = summary;
+
     this.content.innerHTML = `
       <h2>Time's Up!</h2>
-      <div class="stat">Meat produced: ${summary.totalMeatProduced}</div>
+      <div class="stat">Net worth: $${netWorth.total}</div>
+      <h3>Breakdown</h3>
+      <div>Cash: $${netWorth.cash}</div>
+      <div>Banked: $${netWorth.banked}</div>
+      <div>Resource stock: $${netWorth.resources}</div>
+      <div>Buildings standing: $${netWorth.buildings}</div>
+      <div>Meat produced: ${summary.totalMeatProduced}</div>
       <h3>Buildings Built</h3>
-      ${buildingRows}
+      ${buildingRows || '<div>None</div>'}
       <button id="play-again-button">Play Again</button>
     `;
 

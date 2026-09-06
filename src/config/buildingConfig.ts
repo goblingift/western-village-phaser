@@ -4,7 +4,9 @@ import {
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  WELL_MAX_WATER_DISTANCE_TILES,
 } from './constants';
+import { VegetationKind } from './vegetationConfig';
 
 export enum BuildingType {
   CattleFarm = 'CattleFarm',
@@ -27,6 +29,22 @@ export enum BuildingType {
   Saloon = 'Saloon',
   Horsery = 'Horsery',
   Bank = 'Bank',
+  CactusMilker = 'CactusMilker',
+}
+
+/**
+ * Phase 33: grouping for the categorized building bar. Purely a UI concern
+ * (the bar's tabs) - nothing in the simulation reads it - but it lives on the
+ * definition so a new building type can never be added without deciding where
+ * it belongs in the menu.
+ */
+export enum BuildingCategory {
+  Infrastructure = 'Housing & Infra',
+  Livestock = 'Livestock',
+  Farming = 'Farming & Forestry',
+  Industry = 'Industry',
+  Commerce = 'Commerce',
+  Military = 'Military',
 }
 
 export interface BuildingSize {
@@ -44,7 +62,27 @@ export type ResourceKey =
   | 'logs'
   | 'wood'
   | 'potatoes'
-  | 'liquor';
+  | 'liquor'
+  | 'agaveJuice';
+
+/**
+ * Phase 32: per-unit cash value used to price the resource stock inside net
+ * worth (the replacement for the old meat-only score). Roughly tracks each
+ * good's sell price where one exists, and its chain depth where it doesn't.
+ */
+export const RESOURCE_VALUES: Record<ResourceKey, number> = {
+  rawMeat: 2,
+  meat: 5,
+  water: 1,
+  eggs: 3,
+  leather: 4,
+  clothes: 15,
+  logs: 2,
+  wood: 3,
+  potatoes: 2,
+  liquor: 12,
+  agaveJuice: 6,
+};
 
 export interface BuildingProduction {
   inputs?: Partial<Record<ResourceKey, number>>;
@@ -66,18 +104,43 @@ export interface AnimalConfig {
   outputPerAnimal: Partial<Record<ResourceKey, number>>;
 }
 
+/**
+ * Phase 32: a building that draws its output from real vegetation entities
+ * standing near it (Forestry -> Trees, Cactus Milker -> Cacti) instead of
+ * conjuring it from nothing. Each tick it consumes `yieldPerTick` from the
+ * nearest matching entity inside `radiusTiles` and emits `outputs` scaled by
+ * however much it actually managed to take - so a cleared-out radius means no
+ * output at all until something regrows.
+ */
+export interface HarvestConfig {
+  kind: VegetationKind;
+  radiusTiles: number;
+  yieldPerTick: number;
+  outputs: Partial<Record<ResourceKey, number>>;
+  /** Chance per tick to replant one entity of `kind` inside the radius (Forestry only). */
+  replantChancePerTick?: number;
+}
+
 export interface BuildingDefinition {
   type: BuildingType;
   label: string;
   cost: number;
   size: BuildingSize;
   color: number;
+  category: BuildingCategory;
   production?: BuildingProduction;
   /** Marks a non-production building (e.g. Warehouse) as still needing staff to function. */
   requiresWorkers?: boolean;
   animal?: AnimalConfig;
+  harvest?: HarvestConfig;
   /** Starting/full hit points (Phase 21); tiered roughly by cost/footprint. */
   maxHp: number;
+  /**
+   * Phase 32: money drained per production tick while this building is
+   * staffed and enabled. 0 for passive structures (Road/Fence) that cost
+   * nothing to keep standing.
+   */
+  upkeep: number;
 }
 
 /**
@@ -138,6 +201,15 @@ export interface PlacedBuilding {
   mountedCowboyHp: number[];
   /** Only meaningful for Bank; starts at 0, grows via compounding interest each production tick (runBankInterest) and moves with deposit/withdraw. */
   bankBalance: number;
+  /**
+   * Phase 32: set when the town couldn't pay this building's upkeep on the
+   * last tick. Distinct from destruction (Phase 31 removes a building at 0 HP
+   * outright) and from understaffing: it's a recoverable, recomputed-every-
+   * tick money problem, so it must not delete anything.
+   */
+  disabled: boolean;
+  /** Phase 32: what a harvesting building actually pulled from vegetation last tick, for the info panel. */
+  lastHarvest?: number;
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
@@ -147,6 +219,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 100,
     size: { width: 2, height: 2 },
     color: 0xa1887f,
+    category: BuildingCategory.Livestock,
+    upkeep: 1,
     production: {},
     animal: {
       animalLabel: 'Cow',
@@ -162,6 +236,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 150,
     size: { width: 2, height: 2 },
     color: 0xc62828,
+    category: BuildingCategory.Industry,
+    upkeep: 1.5,
     production: { inputs: { rawMeat: 1, water: 1 }, outputs: { meat: 1 } },
     maxHp: 80,
   },
@@ -171,6 +247,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 50,
     size: { width: 1, height: 1 },
     color: 0x0288d1,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0.5,
     production: { outputs: { water: 1 } },
     maxHp: 45,
   },
@@ -180,6 +258,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 80,
     size: { width: 1, height: 1 },
     color: 0xffa726,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0.5,
     maxHp: 50,
   },
   [BuildingType.Road]: {
@@ -188,6 +268,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 10,
     size: { width: 1, height: 1 },
     color: 0x757575,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0,
     maxHp: 15,
   },
   [BuildingType.ChickenFarm]: {
@@ -196,6 +278,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 70,
     size: { width: 1, height: 1 },
     color: 0xfff8e1,
+    category: BuildingCategory.Livestock,
+    upkeep: 0.5,
     production: {},
     animal: { animalLabel: 'Chicken', costPerAnimal: 5, maxAnimals: 4, outputPerAnimal: { eggs: 0.2 } },
     maxHp: 45,
@@ -206,6 +290,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 120,
     size: { width: 2, height: 2 },
     color: 0xe8a5b8,
+    category: BuildingCategory.Livestock,
+    upkeep: 1,
     production: {},
     animal: { animalLabel: 'Pig', costPerAnimal: 12, maxAnimals: 6, outputPerAnimal: { rawMeat: 0.25 } },
     maxHp: 80,
@@ -216,6 +302,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 220,
     size: { width: 2, height: 2 },
     color: 0xbca88a,
+    category: BuildingCategory.Livestock,
+    upkeep: 1.5,
     production: {},
     animal: {
       animalLabel: 'Cow',
@@ -231,6 +319,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 15,
     size: { width: 1, height: 1 },
     color: 0xc9a063,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0,
     maxHp: 20,
   },
   [BuildingType.Warehouse]: {
@@ -239,6 +329,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 150,
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
   },
@@ -248,6 +340,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 200,
     size: { width: 2, height: 2 },
     color: 0x8e24aa,
+    category: BuildingCategory.Commerce,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 90,
   },
@@ -257,6 +351,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 180,
     size: { width: 2, height: 2 },
     color: 0x37474f,
+    category: BuildingCategory.Military,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
   },
@@ -266,6 +362,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 130,
     size: { width: 2, height: 2 },
     color: 0x8d6e4a,
+    category: BuildingCategory.Industry,
+    upkeep: 1.5,
     production: { inputs: { leather: 1 }, outputs: { clothes: 1 } },
     maxHp: 80,
   },
@@ -275,7 +373,19 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 60,
     size: { width: 2, height: 2 },
     color: 0x2e7d32,
-    production: { outputs: { logs: 1.2 } },
+    category: BuildingCategory.Farming,
+    upkeep: 1,
+    // Phase 32: no longer a flat `production.outputs` faucet - logs now come
+    // out of actual Tree entities standing within radiusTiles, and the
+    // Forestry slowly replants what it fells so a well-placed one is
+    // sustainable while an over-dense cluster strips its radius bare.
+    harvest: {
+      kind: 'Tree',
+      radiusTiles: 5,
+      yieldPerTick: 1,
+      outputs: { logs: 1.2 },
+      replantChancePerTick: 0.12,
+    },
     maxHp: 45,
   },
   [BuildingType.WoodCutter]: {
@@ -284,6 +394,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 100,
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
+    category: BuildingCategory.Industry,
+    upkeep: 1.5,
     production: { inputs: { logs: 1 }, outputs: { wood: 1 } },
     maxHp: 80,
   },
@@ -293,6 +405,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 90,
     size: { width: 2, height: 2 },
     color: 0xc9a063,
+    category: BuildingCategory.Farming,
+    upkeep: 1,
     production: { outputs: { potatoes: 1.2 } },
     maxHp: 45,
   },
@@ -302,6 +416,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 140,
     size: { width: 2, height: 2 },
     color: 0xb87333,
+    category: BuildingCategory.Industry,
+    upkeep: 1.5,
     production: { inputs: { potatoes: 2 }, outputs: { liquor: 1 } },
     maxHp: 80,
   },
@@ -311,6 +427,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 200,
     size: { width: 2, height: 2 },
     color: 0xefebe9,
+    category: BuildingCategory.Commerce,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 90,
   },
@@ -320,6 +438,8 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 220,
     size: { width: 2, height: 2 },
     color: 0x795548,
+    category: BuildingCategory.Military,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
   },
@@ -329,8 +449,29 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 200,
     size: { width: 2, height: 2 },
     color: 0x9e9e9e,
+    category: BuildingCategory.Commerce,
+    upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
+  },
+  [BuildingType.CactusMilker]: {
+    type: BuildingType.CactusMilker,
+    label: 'Cactus Milker',
+    cost: 150,
+    size: { width: 2, height: 2 },
+    color: 0x7cb342,
+    category: BuildingCategory.Farming,
+    upkeep: 1,
+    // Same harvest shape as Forestry but against Cacti, and with no replant:
+    // cacti are the desert's finite bounty, so a Milker eventually drinks its
+    // radius dry and has to be rebuilt somewhere else.
+    harvest: {
+      kind: 'Cactus',
+      radiusTiles: 5,
+      yieldPerTick: 1,
+      outputs: { agaveJuice: 1 },
+    },
+    maxHp: 80,
   },
 };
 
@@ -344,7 +485,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
  */
 export function getWorkersRequired(type: BuildingType): number {
   const definition = BUILDING_DEFINITIONS[type];
-  if (!definition.production && !definition.requiresWorkers) {
+  // Phase 32: harvesters (Forestry, Cactus Milker) count as production for
+  // staffing purposes even though their output comes from a `harvest` rule
+  // rather than a `production` block.
+  if (!definition.production && !definition.harvest && !definition.requiresWorkers) {
     return 0;
   }
   return Math.ceil((definition.size.width * definition.size.height) / 2);
@@ -365,11 +509,17 @@ export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: nu
   clothes: { amount: 2, price: 15 },
 };
 
-/** Same idea as SUPERMARKET_SELL_RATES, but Saloon only ever sells Liquor. */
-export type SaloonSellableKey = 'liquor';
+/**
+ * Same idea as SUPERMARKET_SELL_RATES. Phase 32 adds Agave Juice alongside
+ * Liquor: the Cactus Milker's output is a drink, so the Saloon (not the
+ * Supermarket) is where it belongs, and reusing the existing runSaloonSales
+ * pass means the new chain needs no new selling logic at all.
+ */
+export type SaloonSellableKey = 'liquor' | 'agaveJuice';
 
 export const SALOON_SELL_RATES: Record<SaloonSellableKey, { amount: number; price: number }> = {
   liquor: { amount: 2, price: 12 },
+  agaveJuice: { amount: 2, price: 6 },
 };
 
 export const BUILDING_ATLAS_KEY = 'buildings-atlas';
@@ -484,6 +634,18 @@ export const RAIDER_DEFINITIONS: Record<RaiderFaction, RaiderDefinition> = {
   },
 };
 
+/**
+ * Phase 33: one small icon per resource for the redesigned HUD panel. Its own
+ * atlas again (a UI asset class, not a world one) and its own size constant -
+ * these are read at a glance in a dense grid, not placed on the map.
+ */
+export const RESOURCE_ICONS_ATLAS_KEY = 'resource-icons-atlas';
+export const RESOURCE_ICON_SIZE = 12;
+
+export function resourceIconTextureKey(key: ResourceKey): string {
+  return `resource-icon-${key}`;
+}
+
 /** Distinct asset class again (Phase 23): hostile raid units, unrelated to any single building footprint. */
 export const RAIDERS_ATLAS_KEY = 'raiders-atlas';
 
@@ -494,7 +656,7 @@ export function raiderTextureKey(faction: RaiderFaction): string {
   return `raider-${faction}`;
 }
 
-const RESOURCE_LABELS: Record<ResourceKey, string> = {
+export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   rawMeat: 'Raw Meat',
   meat: 'Meat',
   water: 'Water',
@@ -505,6 +667,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   wood: 'Wood',
   potatoes: 'Potatoes',
   liquor: 'Liquor',
+  agaveJuice: 'Agave Juice',
 };
 
 function formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {
@@ -523,6 +686,16 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.production?.outputs) {
     parts.push(`Produces: ${formatResourceMap(definition.production.outputs)}`);
+  }
+  if (definition.upkeep > 0) {
+    parts.push(`Upkeep: $${definition.upkeep}/tick`);
+  }
+  if (definition.harvest) {
+    const { kind, radiusTiles, outputs } = definition.harvest;
+    parts.push(`Harvests ${kind}s within ${radiusTiles} tiles -> ${formatResourceMap(outputs)}`);
+  }
+  if (definition.type === BuildingType.Well) {
+    parts.push(`Must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water; output falls off with distance`);
   }
   if (definition.animal) {
     const { animalLabel, costPerAnimal, maxAnimals, outputPerAnimal } = definition.animal;

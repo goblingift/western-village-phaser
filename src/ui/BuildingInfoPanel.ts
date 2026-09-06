@@ -4,6 +4,7 @@ import {
   BUILDING_DEFINITIONS,
   BuildingType,
   PlacedBuilding,
+  RESOURCE_LABELS,
   ResourceKey,
   getWorkersRequired,
 } from '../config/buildingConfig';
@@ -13,30 +14,22 @@ import {
   COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
+  WELL_MAX_WATER_DISTANCE_TILES,
 } from '../config/constants';
-import { gameEvents } from '../state/gameEvents';
+import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
 import {
   buyAnimal,
+  demolishBuilding,
   depositToBank,
   getMoney,
+  getRepairCost,
+  getWellWaterDistance,
   hasAdjacentFence,
+  repairBuilding,
   trainCowboy,
   trainMountedCowboy,
   withdrawFromBank,
 } from '../state/gameState';
-
-const RESOURCE_LABELS: Record<ResourceKey, string> = {
-  rawMeat: 'Raw Meat',
-  meat: 'Meat',
-  water: 'Water',
-  eggs: 'Eggs',
-  leather: 'Leather',
-  clothes: 'Clothes',
-  logs: 'Logs',
-  wood: 'Wood',
-  potatoes: 'Potatoes',
-  liquor: 'Liquor',
-};
 
 export class BuildingInfoPanel {
   private panel: HTMLDivElement;
@@ -53,6 +46,16 @@ export class BuildingInfoPanel {
       this.render();
     });
     gameEvents.on('production-tick', () => this.render());
+
+    // Phase 31: a building can now vanish while its panel is open (raid kill
+    // or bulldozer), so the panel drops any reference to a removed building
+    // rather than continuing to render a detached record.
+    gameEvents.on('building-removed', ({ building }: BuildingRemovedPayload) => {
+      if (this.selected?.id === building.id) {
+        this.selected = null;
+        this.render();
+      }
+    });
   }
 
   private render(): void {
@@ -73,7 +76,9 @@ export class BuildingInfoPanel {
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const isHorsery = this.selected.type === BuildingType.Horsery;
     const isBank = this.selected.type === BuildingType.Bank;
-    const statusText = production
+    // Harvesters (Forestry, Cactus Milker) have no `production` block but are
+    // still production buildings from the player's point of view.
+    const statusText = production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
       : isBarracks || isHorsery || isBank
         ? `Staffed: ${this.selected.staffed ? 'Active' : 'Inactive (understaffed)'}`
@@ -92,15 +97,46 @@ export class BuildingInfoPanel {
       ? `Cowboys on Horse: ${this.selected.mountedCowboyCount}/${MOUNTED_COWBOY_MAX_PER_HORSERY}`
       : null;
     const balanceText = isBank ? `Balance: $${this.selected.bankBalance}` : null;
-    const isDisabled = this.selected.hp <= 0;
-    const hpText = `HP: ${this.selected.hp}/${definition.maxHp}${isDisabled ? ' (Disabled)' : ''}`;
+    const isDamaged = this.selected.hp < definition.maxHp;
+    const hpText = `HP: ${this.selected.hp}/${definition.maxHp}`;
+
+    // Phase 32: an unpaid building idles until the town can afford it again,
+    // which is a very different (and recoverable) failure from understaffing,
+    // so it gets its own prominent line rather than being folded into status.
+    const upkeepText =
+      definition.upkeep > 0
+        ? `Upkeep: $${definition.upkeep}/tick${this.selected.disabled ? ' - UNPAID, idle' : ''}`
+        : null;
+
+    // Phase 32: harvesters live or die by what's still standing near them,
+    // so the panel reports last tick's actual take rather than a nominal rate.
+    const harvestText = definition.harvest
+      ? this.selected.lastHarvest && this.selected.lastHarvest > 0
+        ? `Harvested: ${this.selected.lastHarvest} ${definition.harvest.kind}`
+        : `No ${definition.harvest.kind}s left within ${definition.harvest.radiusTiles} tiles`
+      : null;
+
+    // Phase 30: a Well's yield depends on how close it got to water.
+    const wellDistance =
+      this.selected.type === BuildingType.Well
+        ? getWellWaterDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+        : null;
+    const wellText =
+      this.selected.type === BuildingType.Well
+        ? wellDistance === null
+          ? `No water within ${WELL_MAX_WATER_DISTANCE_TILES} tiles - dry`
+          : `Water ${wellDistance} tile${wellDistance === 1 ? '' : 's'} away`
+        : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
-      <div${isDisabled ? ' class="hp-disabled"' : ''}>${hpText}</div>
+      <div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${hpText}</div>
       ${statusText ? `<div>${statusText}</div>` : ''}
+      ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
+      ${harvestText ? `<div>${harvestText}</div>` : ''}
+      ${wellText ? `<div>${wellText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
@@ -110,6 +146,9 @@ export class BuildingInfoPanel {
       ${balanceText ? `<div>${balanceText}</div>` : ''}
     `;
 
+    if (isDamaged) {
+      this.renderRepairButton(this.selected);
+    }
     if (animalConfig) {
       this.renderBuyAnimalButton(this.selected, animalConfig);
     }
@@ -123,6 +162,46 @@ export class BuildingInfoPanel {
       this.renderDepositButton(this.selected);
       this.renderWithdrawButton(this.selected);
     }
+    this.renderDemolishButton(this.selected);
+  }
+
+  /**
+   * Phase 31: with auto-regen gone, this button is the only way HP comes
+   * back. Repairs always go to full - a partial-repair slider would be more
+   * granular but the cost is already pro-rated by missing HP, so paying
+   * twice for two halves costs the same as paying once for the whole.
+   */
+  private renderRepairButton(building: PlacedBuilding): void {
+    const cost = getRepairCost(building);
+    const blockReason = getMoney() < cost ? "can't afford" : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Repair ($${cost})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      repairBuilding(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /** Phase 31: per-building demolish, alongside the building bar's bulldozer mode for clearing several in a row. */
+  private renderDemolishButton(building: PlacedBuilding): void {
+    const button = document.createElement('button');
+    button.className = 'danger';
+    button.textContent = 'Demolish';
+    button.addEventListener('click', () => {
+      demolishBuilding(building.id);
+      gameEvents.emit('building-selected', null);
+    });
+    this.panel.appendChild(button);
   }
 
   private renderBuyAnimalButton(building: PlacedBuilding, animalConfig: AnimalConfig): void {
