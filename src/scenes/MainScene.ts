@@ -4,10 +4,18 @@ import {
   CAMERA_MAX_ZOOM,
   CAMERA_MIN_ZOOM,
   CAMERA_ZOOM_STEP,
+  CATTLE_DISEASE_DURATION_MAX_SECONDS,
+  CATTLE_DISEASE_DURATION_MIN_SECONDS,
   COWBOY_DAMAGE,
   COWBOY_MAX_HP,
   COWBOY_RANGE_TILES,
   DAY_PHASE_SECONDS,
+  DROUGHT_DURATION_MAX_SECONDS,
+  DROUGHT_DURATION_MIN_SECONDS,
+  DUST_STORM_DURATION_MAX_SECONDS,
+  DUST_STORM_DURATION_MIN_SECONDS,
+  GOLD_RUSH_DURATION_MAX_SECONDS,
+  GOLD_RUSH_DURATION_MIN_SECONDS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
   MERCHANT_DEAL_MAX_SECONDS,
@@ -39,6 +47,9 @@ import {
   VIEWPORT_WIDTH,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
+  WORLD_EVENT_BANNER_DURATION_MS,
+  WORLD_EVENT_MAX_INTERVAL_MS,
+  WORLD_EVENT_MIN_INTERVAL_MS,
 } from '../config/constants';
 import { TILE_COLORS, TileType, getWorldTiles } from '../config/mapConfig';
 import { getResourceChainBuildingTypes } from '../config/resourceGraph';
@@ -103,8 +114,16 @@ import { addNotification } from '../state/notifications';
 import { startMerchantDeal } from '../state/market';
 import { AUTOSAVE_SLOT, saveToSlot } from '../state/persistence';
 import {
+  DurationWorldEventType,
+  WORLD_EVENT_LABELS,
+  getActiveWorldEvent,
+  pickRandomWorldEventType,
+  startWorldEvent,
+} from '../state/worldEvents';
+import {
   DayPhase,
   DayPhaseChange,
+  applyWanderingSettlersReward,
   clearVegetationAt,
   computeNetWorth,
   damageUnit,
@@ -128,6 +147,7 @@ import {
   setRallyPoint,
   tickTimer,
 } from '../state/gameState';
+import { DustStormOverlay } from '../ui/DustStormOverlay';
 
 const FENCE_LINE_COLOR = 0x8d6748;
 /** Phase 48: chain-view map overlay outline color - gold, distinct from the green connection outline and the red/blue minimap combat dots. */
@@ -140,6 +160,35 @@ const CHAIN_VIEW_HIGHLIGHT_COLOR = 0xffd54f;
  * as a full bank used to.
  */
 const OUTLAW_BIAS_THREAT = 0.35;
+
+/**
+ * Phase 55: Random World Events. Per-type duration range (seconds) and
+ * flavor text, kept in MainScene alongside the raid/merchant announcement
+ * strings rather than in state/worldEvents.ts - that module's own doc comment
+ * explains it deliberately stays free of scene-facing copy/UI concerns,
+ * mirroring how RAIDER_DEFINITIONS' labels vs. showRaidNotice's phrasing are
+ * split today.
+ */
+const WORLD_EVENT_DURATION_RANGE_SECONDS: Record<DurationWorldEventType, readonly [number, number]> = {
+  drought: [DROUGHT_DURATION_MIN_SECONDS, DROUGHT_DURATION_MAX_SECONDS],
+  goldRush: [GOLD_RUSH_DURATION_MIN_SECONDS, GOLD_RUSH_DURATION_MAX_SECONDS],
+  cattleDisease: [CATTLE_DISEASE_DURATION_MIN_SECONDS, CATTLE_DISEASE_DURATION_MAX_SECONDS],
+  dustStorm: [DUST_STORM_DURATION_MIN_SECONDS, DUST_STORM_DURATION_MAX_SECONDS],
+};
+
+const WORLD_EVENT_DESCRIPTIONS: Record<DurationWorldEventType, string> = {
+  drought: 'Wells run low.',
+  goldRush: 'Sell prices are spiking.',
+  cattleDisease: 'Livestock output is down.',
+  dustStorm: 'Production is dampened and visibility is poor.',
+};
+
+const WORLD_EVENT_NOTIFICATION_KIND: Record<DurationWorldEventType, 'warning' | 'info'> = {
+  drought: 'warning',
+  goldRush: 'info',
+  cattleDisease: 'warning',
+  dustStorm: 'warning',
+};
 
 /** Phase 30: trees/cacti render above the ground layer but below buildings (depth 10). */
 const VEGETATION_DEPTH = 5;
@@ -532,6 +581,10 @@ export class MainScene extends Phaser.Scene {
   private raidWaveTimer: Phaser.Time.TimerEvent | null = null;
   /** Phase 51: Traveling Merchant - self-rescheduling timer mirroring raidCheckTimer, but with no wave/active-state to gate on. */
   private merchantCheckTimer: Phaser.Time.TimerEvent | null = null;
+  /** Phase 55: Random World Events - self-rescheduling timer mirroring merchantCheckTimer. */
+  private worldEventCheckTimer: Phaser.Time.TimerEvent | null = null;
+  private worldEventNoticeText!: Phaser.GameObjects.Text;
+  private worldEventNoticeHideTimer: Phaser.Time.TimerEvent | null = null;
   /**
    * Phase 52: which day number the autosave last fired for, so the
    * 'day-phase-changed' listener only saves once per genuine dawn rather than
@@ -631,6 +684,7 @@ export class MainScene extends Phaser.Scene {
     this.setupAudio();
     this.setupRaidSystem();
     this.setupMerchantSystem();
+    this.setupWorldEventSystem();
     this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
@@ -2823,6 +2877,11 @@ export class MainScene extends Phaser.Scene {
       this.raidWaveTimer = null;
       this.merchantCheckTimer?.remove();
       this.merchantCheckTimer = null;
+      this.worldEventCheckTimer?.remove();
+      this.worldEventCheckTimer = null;
+      this.worldEventNoticeHideTimer?.remove();
+      this.worldEventNoticeHideTimer = null;
+      this.worldEventNoticeText.setVisible(false);
       this.animalSoundTimer?.remove();
       this.animalSoundTimer = null;
       this.hideRaidNotice();
@@ -3695,6 +3754,7 @@ export class MainScene extends Phaser.Scene {
 
       this.resetRaidState();
       this.resetMerchantState();
+      this.resetWorldEventState();
       this.lastAutosaveDayNumber = -1;
     });
   }
@@ -3909,6 +3969,98 @@ export class MainScene extends Phaser.Scene {
     this.merchantCheckTimer?.remove();
     this.merchantCheckTimer = null;
     this.scheduleNextMerchantCheck();
+  }
+
+  /**
+   * Phase 55: Random World Events. Follows scheduleNextRaidCheck/
+   * scheduleNextMerchantCheck's exact self-rescheduling shape (roll a random
+   * delay, fire, immediately roll the next one), widened past the merchant
+   * timer's 90-180s window (WORLD_EVENT_MIN/MAX_INTERVAL_MS = 120-200s) so the
+   * two timers don't habitually land on top of each other.
+   *
+   * The banner text is a separate GameObject from raidNoticeText - a raid
+   * warning and a world-event announcement can legitimately be visible at the
+   * same time, and sharing one Text would make one silently clobber the
+   * other.
+   */
+  private setupWorldEventSystem(): void {
+    // Self-contained widget (owns its own gameEvents subscriptions/lifecycle,
+    // same as NightOverlay) - no method on it is ever called again from here,
+    // so it isn't kept as a field.
+    new DustStormOverlay(this);
+
+    this.worldEventNoticeText = this.add.text(VIEWPORT_WIDTH / 2, 68, '', {
+      fontSize: '18px',
+      color: '#ffd699',
+      backgroundColor: '#2b1d12cc',
+      padding: { x: 10, y: 6 },
+    });
+    this.worldEventNoticeText.setOrigin(0.5, 0);
+    this.worldEventNoticeText.setScrollFactor(0);
+    this.worldEventNoticeText.setDepth(1000);
+    this.worldEventNoticeText.setVisible(false);
+
+    this.scheduleNextWorldEventCheck();
+  }
+
+  private scheduleNextWorldEventCheck(): void {
+    const delay = Phaser.Math.Between(WORLD_EVENT_MIN_INTERVAL_MS, WORLD_EVENT_MAX_INTERVAL_MS);
+    this.worldEventCheckTimer = this.time.delayedCall(delay, () => {
+      this.triggerWorldEvent();
+      this.scheduleNextWorldEventCheck();
+    });
+  }
+
+  /**
+   * state/worldEvents.ts only ever tracks one active duration-based event at
+   * a time (see its own doc comment) - a roll that lands while one is still
+   * running is simply skipped rather than queued, exactly like a raid check
+   * that fires while a wave is already active. wanderingSettlers is the
+   * exception: it's an instant reward with no ongoing state, so it always
+   * fires regardless of whether another event is currently active.
+   */
+  private triggerWorldEvent(): void {
+    const type = pickRandomWorldEventType();
+
+    if (type === 'wanderingSettlers') {
+      const amount = applyWanderingSettlersReward();
+      const message = `Wandering settlers pass through and leave $${amount} in thanks for your hospitality!`;
+      this.showWorldEventNotice(message);
+      addNotification(message, 'info', getElapsedSeconds());
+      return;
+    }
+
+    if (getActiveWorldEvent()) {
+      return;
+    }
+
+    const [durationMin, durationMax] = WORLD_EVENT_DURATION_RANGE_SECONDS[type];
+    const durationSeconds = Phaser.Math.Between(durationMin, durationMax);
+    startWorldEvent(type, durationSeconds, getElapsedSeconds());
+
+    const message = `${WORLD_EVENT_LABELS[type]}! ${WORLD_EVENT_DESCRIPTIONS[type]} (${durationSeconds}s)`;
+    this.showWorldEventNotice(message);
+    addNotification(message, WORLD_EVENT_NOTIFICATION_KIND[type], getElapsedSeconds());
+  }
+
+  /** Mirrors showRaidNotice's on-screen-then-auto-hide behavior, but on its own timer/text object. */
+  private showWorldEventNotice(message: string): void {
+    this.worldEventNoticeHideTimer?.remove();
+    this.worldEventNoticeText.setText(message);
+    this.worldEventNoticeText.setVisible(true);
+    this.worldEventNoticeHideTimer = this.time.delayedCall(WORLD_EVENT_BANNER_DURATION_MS, () => {
+      this.worldEventNoticeText.setVisible(false);
+    });
+  }
+
+  /** Mirrors resetRaidState/resetMerchantState: cancel the pending check, hide any lingering banner, and start a fresh countdown. */
+  private resetWorldEventState(): void {
+    this.worldEventCheckTimer?.remove();
+    this.worldEventCheckTimer = null;
+    this.worldEventNoticeHideTimer?.remove();
+    this.worldEventNoticeHideTimer = null;
+    this.worldEventNoticeText.setVisible(false);
+    this.scheduleNextWorldEventCheck();
   }
 
   /**

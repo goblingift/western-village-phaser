@@ -39,6 +39,8 @@ import {
   WELL_MAX_WATER_DISTANCE_TILES,
   WELL_OUTPUT_BY_DISTANCE,
   CROP_OUTPUT_BY_DISTANCE,
+  WANDERING_SETTLERS_MONEY_MIN,
+  WANDERING_SETTLERS_MONEY_MAX,
 } from '../config/constants';
 import {
   BUILDING_DEFINITIONS,
@@ -75,6 +77,14 @@ import {
 import { gameEvents } from './gameEvents';
 import { addNotification, clearNotifications } from './notifications';
 import { getCurrentMarketPrice, recordMarketSaleVolume, resetMarket, runMarketTick } from './market';
+import {
+  getCattleDiseaseMultiplier,
+  getDroughtWellMultiplier,
+  getDustStormProductionMultiplier,
+  getGoldRushMultiplier,
+  resetWorldEvents,
+  runWorldEventsTick,
+} from './worldEvents';
 
 export interface Resources {
   rawMeat: number;
@@ -319,6 +329,25 @@ function createEmptyOccupancy(): (string | null)[][] {
 
 export function getMoney(): number {
   return money;
+}
+
+/**
+ * Phase 55: Wandering Settlers world event. An instant, one-shot money gift
+ * with no lasting state - population is tier-summed from real Houses (Phase
+ * 46), so a "free population" reward doesn't fit that model the way a flat
+ * cash gift does. Called directly by MainScene's world-event timer rather
+ * than routed through state/worldEvents.ts's startWorldEvent/activeEvent slot
+ * (there is nothing to expire), returning the granted amount so the caller
+ * can build its own notification/banner text, mirroring triggerMerchantDeal's
+ * pattern in MainScene.
+ */
+export function applyWanderingSettlersReward(): number {
+  const amount = Math.round(
+    WANDERING_SETTLERS_MONEY_MIN + Math.random() * (WANDERING_SETTLERS_MONEY_MAX - WANDERING_SETTLERS_MONEY_MIN),
+  );
+  money = Math.round((money + amount) * 100) / 100;
+  gameEvents.emit('money-changed', money);
+  return amount;
 }
 
 export function getResources(): Readonly<Resources> {
@@ -1592,7 +1621,9 @@ function runSupermarketSales(): void {
       addConsumedThisTick(key, soldAmount);
       // Phase 51: SUPERMARKET_SELL_RATES.price is now only the market's
       // baseline peg - the actual sale reads the live, fluctuating price.
-      const price = getCurrentMarketPrice(key);
+      // Phase 55: Gold Rush layers a temporary global spike on top of
+      // state/market.ts's own drift/pressure/merchant-deal pricing.
+      const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
@@ -1636,7 +1667,9 @@ function runSaloonSales(): void {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
       addConsumedThisTick(key, soldAmount);
-      const price = getCurrentMarketPrice(key);
+      // Phase 55: Gold Rush layers a temporary global spike on top of
+      // state/market.ts's own drift/pressure/merchant-deal pricing.
+      const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
@@ -1693,7 +1726,9 @@ function runTradingPostSales(): void {
 
       resources[key] -= soldAmount;
       addConsumedThisTick(key, soldAmount);
-      const price = getCurrentMarketPrice(key);
+      // Phase 55: Gold Rush layers a temporary global spike on top of
+      // state/market.ts's own drift/pressure/merchant-deal pricing.
+      const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
       revenue += soldAmount * price;
       recordMarketSaleVolume(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
@@ -1994,6 +2029,10 @@ export function runProductionTick(): void {
   // sell pass below reads a price that already reflects the drift/pressure/
   // merchant-deal state as of this tick, not last tick's.
   runMarketTick(elapsedSeconds);
+  // Phase 55: expire a finished world event before this tick's production
+  // loop reads the multiplier getters below, so a drought/disease/dust storm
+  // that just ended doesn't apply for one extra tick.
+  runWorldEventsTick(elapsedSeconds);
 
   runBankInterest();
   assignWorkforce();
@@ -2085,14 +2124,27 @@ export function runProductionTick(): void {
       addConsumedThisTick(key, amount);
     }
     let bonus = building.connected ? 1.1 : 1;
+    // Phase 55: Dust Storm applies a small flat production dip to every
+    // producing building uniformly (harvesters included, since harvestOutputs
+    // is also scaled by `bonus` below) - a 1x multiplier when no dust storm
+    // is active, so this is a no-op outside the event.
+    bonus *= getDustStormProductionMultiplier();
     // Phase 30: a Well's yield falls off with its distance to open water.
+    // Phase 55: Drought layers an additional, temporary penalty on top of
+    // that existing distance-based falloff rather than replacing it.
     if (building.type === BuildingType.Well) {
-      bonus *= wellOutputMultiplier(building);
+      bonus *= wellOutputMultiplier(building) * getDroughtWellMultiplier();
     }
     // Phase 54: a water-dependent crop's yield falls off with its (Water
     // Tower-assisted) distance to water, the same shape as a Well above.
     if (building.type === BuildingType.PotatoField) {
       bonus *= getCropOutputMultiplier(building.tileX, building.tileY, building.type);
+    }
+    // Phase 55: Cattle Disease applies a temporary output penalty to every
+    // animal-owning building (Chicken/Pig/Cattle Farm, Cow Ranch) alongside
+    // whatever connection/well/crop bonus already applies.
+    if (animalConfig) {
+      bonus *= getCattleDiseaseMultiplier();
     }
     // Animal buildings scale their per-animal rate by how many animals are owned instead of using a flat production.outputs amount.
     const outputs = harvestOutputs
@@ -2368,6 +2420,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   clearNotifications();
   unlockNotified.clear();
   resetMarket();
+  resetWorldEvents();
 
   // Terrain is intentionally kept across a reset (the player replays the same
   // map they just learned), but vegetation is reseeded so a run that felled

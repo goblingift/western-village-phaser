@@ -3,6 +3,7 @@ import type { BuildingCategory, BuildingType, PlacedBuilding, ResourceKey } from
 import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
 import type { NotificationEntry } from './notifications';
 import type { VegetationEntity } from './vegetation';
+import type { DurationWorldEventType, WorldEventType } from './worldEvents';
 
 /**
  * Phase 31: why a building left the world. The visual side reacts
@@ -107,6 +108,17 @@ export interface GameEventMap {
    * placement/selection).
    */
   'rally-point-mode-changed': (buildingId: string | null) => void;
+  /**
+   * Phase 55: Random World Events. Fired by state/worldEvents.ts's
+   * startWorldEvent/runWorldEventsTick/resetWorldEvents whenever a
+   * duration-based event (drought/goldRush/cattleDisease/dustStorm) starts or
+   * expires - ui/DustStormOverlay.ts is the only listener that cares about a
+   * specific type (dustStorm), everything else reacts through gameState's own
+   * multiplier getters instead. wanderingSettlers never fires these - it's an
+   * instant reward with no lasting state.
+   */
+  'world-event-started': (payload: { type: DurationWorldEventType; expiresAtElapsedSeconds: number }) => void;
+  'world-event-ended': (payload: { type: WorldEventType }) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

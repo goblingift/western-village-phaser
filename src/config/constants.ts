@@ -295,3 +295,46 @@ export const CROP_OUTPUT_BY_DISTANCE: readonly number[] = [1, 1, 0.85, 0.7, 0.55
  */
 export const WATER_TOWER_IRRIGATION_RADIUS_TILES = 6;
 export const WATER_TOWER_ASSIST_OFFSET_TILES = 1;
+
+/**
+ * Phase 55: Random World Events. Self-rescheduling timer in MainScene,
+ * following scheduleNextRaidCheck/scheduleNextMerchantCheck's exact shape
+ * (roll a random delay, fire if nothing else is active, reschedule). Widened
+ * slightly past MERCHANT_MIN/MAX_INTERVAL_MS (90-180s) so the two timers
+ * don't habitually land on top of each other.
+ */
+export const WORLD_EVENT_MIN_INTERVAL_MS = 120000;
+export const WORLD_EVENT_MAX_INTERVAL_MS = 200000;
+/** How long the brief on-screen banner (mirrors raidNoticeText) stays visible, independent of the underlying event's own duration. */
+export const WORLD_EVENT_BANNER_DURATION_MS = 6000;
+
+/** Drought: layered on top of (not replacing) wellOutputMultiplier's existing distance-based falloff. */
+export const DROUGHT_DURATION_MIN_SECONDS = 60;
+export const DROUGHT_DURATION_MAX_SECONDS = 90;
+export const DROUGHT_WELL_OUTPUT_MULTIPLIER = 0.5;
+
+/** Gold Rush: a temporary global sell-price multiplier, applied alongside (not replacing) state/market.ts's per-key merchant deal. */
+export const GOLD_RUSH_DURATION_MIN_SECONDS = 30;
+export const GOLD_RUSH_DURATION_MAX_SECONDS = 60;
+export const GOLD_RUSH_SELL_PRICE_MULTIPLIER = 1.5;
+
+/** Cattle Disease: a flat temporary output penalty on every animal-owning building (CattleFarm/PigFarm/CowRanch/ChickenFarm) - simpler and less punishing than animal-death bookkeeping. */
+export const CATTLE_DISEASE_DURATION_MIN_SECONDS = 60;
+export const CATTLE_DISEASE_DURATION_MAX_SECONDS = 90;
+export const CATTLE_DISEASE_OUTPUT_MULTIPLIER = 0.5;
+
+/**
+ * Dust Storm: no fog-of-war/vision system exists to dim, so "vision" is
+ * interpreted as a cosmetic screen-tint (ui/DustStormOverlay.ts, mirroring
+ * NightOverlay's shape) paired with a small flat production dip applied to
+ * every producing building (harvesters/animal buildings/flat producers alike).
+ */
+export const DUST_STORM_DURATION_MIN_SECONDS = 45;
+export const DUST_STORM_DURATION_MAX_SECONDS = 75;
+export const DUST_STORM_PRODUCTION_MULTIPLIER = 0.85;
+export const DUST_STORM_OVERLAY_ALPHA = 0.3;
+export const DUST_STORM_TRANSITION_MS = 3000;
+
+/** Wandering Settlers: a one-time immediate money gift rather than a lasting effect - population is tier-summed from real Houses (Phase 46), so a free-population reward doesn't fit that model. */
+export const WANDERING_SETTLERS_MONEY_MIN = 150;
+export const WANDERING_SETTLERS_MONEY_MAX = 400;
