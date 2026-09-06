@@ -28,6 +28,8 @@ import {
   TRADING_POST_DEFAULT_THRESHOLD,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
+  WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
+  WATER_TOWER_IRRIGATION_RADIUS_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
 } from '../config/constants';
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
@@ -36,10 +38,13 @@ import {
   clearRallyPoint,
   demolishBuilding,
   depositToBank,
+  getCropOutputMultiplier,
+  getCropWaterDistance,
   getGravelDistance,
   getHarvestCenterTile,
   getLaborShortfall,
   getMoney,
+  getNearestStaffedWaterTowerDistance,
   getRepairCost,
   getWellWaterDistance,
   hasAdjacentFence,
@@ -208,6 +213,43 @@ export class BuildingInfoPanel {
           : `Gravel ${gravelDistance} tile${gravelDistance === 1 ? '' : 's'} away`
       : null;
 
+    // Phase 54: PotatoField's water-dependent output - mirrors the Well/
+    // Gravel distance status lines above, plus a note when a Water Tower is
+    // actually the thing keeping it alive.
+    const isPotatoField = this.selected.type === BuildingType.PotatoField;
+    const cropWaterDistance = isPotatoField
+      ? getCropWaterDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const cropTowerDistance = isPotatoField
+      ? getNearestStaffedWaterTowerDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const cropMultiplier = isPotatoField
+      ? getCropOutputMultiplier(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const cropWaterText = isPotatoField
+      ? cropWaterDistance === null
+        ? `No water within ${WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES} tiles - dry, producing nothing`
+        : `Water ${cropWaterDistance} tile${cropWaterDistance === 1 ? '' : 's'} away (${Math.round(
+            (cropMultiplier ?? 0) * 100,
+          )}% output)${
+            cropTowerDistance !== null
+              ? ` - irrigated by Water Tower ${cropTowerDistance} tile${cropTowerDistance === 1 ? '' : 's'} away`
+              : ''
+          }`
+      : null;
+
+    // Phase 54: Water Tower's own status - the same hard-gated water-distance
+    // readout as a Well (it shares the placement gate), plus its service radius.
+    const isWaterTower = this.selected.type === BuildingType.WaterTower;
+    const waterTowerDistance = isWaterTower
+      ? getWellWaterDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const waterTowerText = isWaterTower
+      ? waterTowerDistance === null
+        ? `No water within ${WELL_MAX_WATER_DISTANCE_TILES} tiles`
+        : `Water ${waterTowerDistance} tile${waterTowerDistance === 1 ? '' : 's'} away | Irrigates Potato Fields within ${WATER_TOWER_IRRIGATION_RADIUS_TILES} tiles`
+      : null;
+
     // Phase 46: House tier/needs/population/tax block. Houses have no
     // `production`/`animal`/`harvest` config, so none of the lines above
     // apply to them - this is the entirety of a House's panel content besides
@@ -227,6 +269,8 @@ export class BuildingInfoPanel {
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}
       ${gravelText ? `<div>${gravelText}</div>` : ''}
+      ${cropWaterText ? `<div>${cropWaterText}</div>` : ''}
+      ${waterTowerText ? `<div>${waterTowerText}</div>` : ''}
       ${houseTierText ? `<div>${houseTierText}</div>` : ''}
       ${houseNeedsText ? `<div>${houseNeedsText}</div>` : ''}
       ${houseProgressText ? `<div>${houseProgressText}</div>` : ''}

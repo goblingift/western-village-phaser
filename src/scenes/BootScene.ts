@@ -245,6 +245,27 @@ const WELL_SPRITE: PixelSprite = {
   ],
 };
 
+/**
+ * Phase 54: Water Tower - a raised tank on a center-pipe frame, deliberately
+ * NOT another windmill/crank silhouette (that's the Well's motif) so the two
+ * water buildings read as distinct at a glance. A cone roof and dark rim cap
+ * a barrel-shaped tank with a small blue gauge window, standing on a narrow
+ * two-legged frame rather than Watchtower's crossed stilts.
+ */
+const WATER_TOWER_SPRITE: PixelSprite = {
+  palette: { R: 0x455a64, D: 0x263238, T: 0x607d8b, W: 0x0d47a1, P: 0x5d4037 },
+  pattern: [
+    '..RRRR..',
+    '.RRRRRR.',
+    'DTTTTTTD',
+    'DTWWWWTD',
+    'DTWWWWTD',
+    'DTTTTTTD',
+    '...PP...',
+    '..P..P..',
+  ],
+};
+
 const HOUSE_SPRITE: PixelSprite = {
   // Narrowed top cap (row 0) reads as a raised saloon-style false-front
   // parapet rather than a gable peak. This is the Tier 1 look.
@@ -879,6 +900,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.IronMine]: IRON_MINE_SPRITE,
   [BuildingType.Blacksmith]: BLACKSMITH_SPRITE,
   [BuildingType.TradingPost]: TRADING_POST_SPRITE,
+  [BuildingType.WaterTower]: WATER_TOWER_SPRITE,
 };
 
 /**

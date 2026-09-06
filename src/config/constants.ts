@@ -263,3 +263,35 @@ export const MERCHANT_DEAL_MIN_SECONDS = 30;
 export const MERCHANT_DEAL_MAX_SECONDS = 60;
 export const MERCHANT_MULTIPLIER_MIN = 1.5;
 export const MERCHANT_MULTIPLIER_MAX = 2;
+
+/**
+ * Phase 54: Irrigation & Crop Water Needs. A water-dependent crop
+ * (PotatoField) is never hard-gated on water at placement - unlike a Well, it
+ * CAN be built far from water - but its flat production output falls off
+ * with distance using the same distance-band shape as WELL_OUTPUT_BY_DISTANCE,
+ * just over a longer range and reaching 0 rather than bottoming out, since a
+ * bone-dry field really should yield nothing. WATER_DEPENDENT_CROP_MAX_
+ * DISTANCE_TILES both bounds the distanceToNearestWater search and is the
+ * last index CROP_OUTPUT_BY_DISTANCE holds a non-zero value for; a null
+ * distance from getCropWaterDistance (nothing in range even with Water Tower
+ * assist, see below) means 0 output, mirroring wellOutputMultiplier's
+ * null-means-0 handling exactly.
+ */
+export const WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES = 6;
+export const CROP_OUTPUT_BY_DISTANCE: readonly number[] = [1, 1, 0.85, 0.7, 0.55, 0.4, 0.25];
+
+/**
+ * Phase 54: Water Tower. A staffed relay building, hard-gated on its own
+ * placement exactly like a Well (must be within WELL_MAX_WATER_DISTANCE_TILES
+ * of open water - it relays an existing source rather than conjuring one).
+ * Once staffed and enabled, it extends irrigation out to
+ * WATER_TOWER_IRRIGATION_RADIUS_TILES around itself: any water-dependent crop
+ * within that radius has its effective water distance recomputed as
+ * `min(actualDistanceToWater, distanceToTower + WATER_TOWER_ASSIST_OFFSET_TILES)`
+ * (see getCropWaterDistance in gameState.ts) - i.e. the tower stands in for a
+ * water source exactly WATER_TOWER_ASSIST_OFFSET_TILES tiles further away
+ * than the tower itself, so a field built right next to the tower reads as
+ * almost-at-the-water-line regardless of how far the real water actually is.
+ */
+export const WATER_TOWER_IRRIGATION_RADIUS_TILES = 6;
+export const WATER_TOWER_ASSIST_OFFSET_TILES = 1;

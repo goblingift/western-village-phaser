@@ -33,8 +33,12 @@ import {
   VEGETATION_CLEAR_COST,
   VEGETATION_CLEAR_TREE_LOGS,
   WAREHOUSE_STORAGE_BONUS,
+  WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
+  WATER_TOWER_ASSIST_OFFSET_TILES,
+  WATER_TOWER_IRRIGATION_RADIUS_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
   WELL_OUTPUT_BY_DISTANCE,
+  CROP_OUTPUT_BY_DISTANCE,
 } from '../config/constants';
 import {
   BUILDING_DEFINITIONS,
@@ -582,6 +586,88 @@ export function getGravelDistance(tileX: number, tileY: number, type: BuildingTy
 }
 
 /**
+ * Phase 54: Chebyshev tile distance from a footprint's center to the nearest
+ * staffed, enabled Water Tower within WATER_TOWER_IRRIGATION_RADIUS_TILES, or
+ * null when none is in range. Only an actually-running tower counts (hp>0,
+ * not upkeep-disabled, staffed) - the same "active" gate Well output and
+ * Watchtower fire already use - so a tower going idle (destroyed/unstaffed/
+ * unpaid) drops any PotatoField relying on it back to its raw water distance
+ * the very next tick, exactly like every other staffing-gated effect here.
+ */
+export function getNearestStaffedWaterTowerDistance(
+  tileX: number,
+  tileY: number,
+  type: BuildingType,
+): number | null {
+  const center = getHarvestCenterTile(tileX, tileY, type);
+  let best: number | null = null;
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.WaterTower) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled || !building.staffed) {
+      continue;
+    }
+    const towerCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const distance = Math.max(
+      Math.abs(center.tileX - towerCenter.tileX),
+      Math.abs(center.tileY - towerCenter.tileY),
+    );
+    if (distance > WATER_TOWER_IRRIGATION_RADIUS_TILES) {
+      continue;
+    }
+    if (best === null || distance < best) {
+      best = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * Phase 54: a water-dependent crop's (PotatoField) effective distance to
+ * water. Unlike getWellWaterDistance this is never a hard placement gate -
+ * null just means "dry" - and the raw distanceToNearestWater search (bounded
+ * to WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES) is floored against any
+ * in-range staffed Water Tower's assist: `distanceToTower +
+ * WATER_TOWER_ASSIST_OFFSET_TILES` stands in as a virtual water distance, so
+ * a field beside a tower reads as nearly-at-the-water-line even when the
+ * nearest real water tile is out of CROP_OUTPUT_BY_DISTANCE's range entirely.
+ */
+export function getCropWaterDistance(tileX: number, tileY: number, type: BuildingType): number | null {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  const actualDistance = distanceToNearestWater(
+    tileX,
+    tileY,
+    width,
+    height,
+    WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
+  );
+  const towerDistance = getNearestStaffedWaterTowerDistance(tileX, tileY, type);
+  const assistedDistance = towerDistance === null ? null : towerDistance + WATER_TOWER_ASSIST_OFFSET_TILES;
+  if (actualDistance === null) {
+    return assistedDistance;
+  }
+  if (assistedDistance === null) {
+    return actualDistance;
+  }
+  return Math.min(actualDistance, assistedDistance);
+}
+
+/**
+ * CROP_OUTPUT_BY_DISTANCE lookup keyed off getCropWaterDistance, 0 once that
+ * returns null (out of range even with tower assist) - same null-means-0
+ * shape as wellOutputMultiplier. Exported so both runProductionTick and the
+ * placement preview/info panel share one source of truth for the multiplier.
+ */
+export function getCropOutputMultiplier(tileX: number, tileY: number, type: BuildingType): number {
+  const distance = getCropWaterDistance(tileX, tileY, type);
+  if (distance === null) {
+    return 0;
+  }
+  return CROP_OUTPUT_BY_DISTANCE[Math.min(distance, CROP_OUTPUT_BY_DISTANCE.length - 1)];
+}
+
+/**
  * Phase 30: the single source of truth for "why can't I put this here",
  * returning a player-facing reason string (or null when placement is legal).
  * canPlaceBuilding is now a thin boolean wrapper over it so the preview
@@ -606,6 +692,12 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
   }
   if (type === BuildingType.Well && getWellWaterDistance(tileX, tileY, type) === null) {
     return `Well must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water`;
+  }
+  // Phase 54: Water Tower reuses the exact Well hard-gate - it relays an
+  // existing water source rather than conjuring one, so it needs the same
+  // proximity to real water a Well does.
+  if (type === BuildingType.WaterTower && getWellWaterDistance(tileX, tileY, type) === null) {
+    return `Water Tower must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water`;
   }
   if (
     (type === BuildingType.Quarry || type === BuildingType.IronMine) &&
@@ -651,19 +743,33 @@ export function getHarvestCenterTile(
  */
 export function getPlacementWarning(tileX: number, tileY: number, type: BuildingType): string | null {
   const { harvest } = BUILDING_DEFINITIONS[type];
-  if (!harvest) {
+  if (harvest) {
+    const center = getHarvestCenterTile(tileX, tileY, type);
+    const count = countVegetationInRadius(harvest.kind, center.tileX, center.tileY, harvest.radiusTiles);
+    const { label, pluralLabel } = VEGETATION_DEFINITIONS[harvest.kind];
+    if (count === 0) {
+      return `No ${pluralLabel} in range - this will produce nothing here`;
+    }
+    if (count <= 2) {
+      return `Only ${count} ${count === 1 ? label : pluralLabel} in range`;
+    }
     return null;
   }
 
-  const center = getHarvestCenterTile(tileX, tileY, type);
-  const count = countVegetationInRadius(harvest.kind, center.tileX, center.tileY, harvest.radiusTiles);
-  const { label, pluralLabel } = VEGETATION_DEFINITIONS[harvest.kind];
-  if (count === 0) {
-    return `No ${pluralLabel} in range - this will produce nothing here`;
+  // Phase 54: same soft-advisory shape as the harvest warning above, for the
+  // other kind of "legal to place, but you probably don't want to yet"
+  // building - a water-dependent crop far from water (and no Water Tower
+  // assist) still places fine, it just won't produce much.
+  if (type === BuildingType.PotatoField) {
+    const multiplier = getCropOutputMultiplier(tileX, tileY, type);
+    if (multiplier === 0) {
+      return 'Too far from water - this Potato Field will produce nothing here';
+    }
+    if (multiplier < 1) {
+      return `Far from water - output reduced to ${Math.round(multiplier * 100)}%`;
+    }
   }
-  if (count <= 2) {
-    return `Only ${count} ${count === 1 ? label : pluralLabel} in range`;
-  }
+
   return null;
 }
 
@@ -1982,6 +2088,11 @@ export function runProductionTick(): void {
     // Phase 30: a Well's yield falls off with its distance to open water.
     if (building.type === BuildingType.Well) {
       bonus *= wellOutputMultiplier(building);
+    }
+    // Phase 54: a water-dependent crop's yield falls off with its (Water
+    // Tower-assisted) distance to water, the same shape as a Well above.
+    if (building.type === BuildingType.PotatoField) {
+      bonus *= getCropOutputMultiplier(building.tileX, building.tileY, building.type);
     }
     // Animal buildings scale their per-animal rate by how many animals are owned instead of using a flat production.outputs amount.
     const outputs = harvestOutputs

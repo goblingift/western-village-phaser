@@ -8,6 +8,8 @@ import {
   POPULATION_PER_HOUSE,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
+  WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
+  WATER_TOWER_IRRIGATION_RADIUS_TILES,
   WELL_MAX_WATER_DISTANCE_TILES,
 } from './constants';
 import { VegetationKind } from './vegetationConfig';
@@ -39,6 +41,7 @@ export enum BuildingType {
   IronMine = 'IronMine',
   Blacksmith = 'Blacksmith',
   TradingPost = 'TradingPost',
+  WaterTower = 'WaterTower',
 }
 
 /**
@@ -797,6 +800,29 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     maxHp: 100,
     unlockRequirement: { netWorthAtLeast: 5000, dayAtLeast: 3 },
   },
+  /**
+   * Phase 54: Irrigation & Crop Water Needs. A small staffed relay - no
+   * `production` output field of its own - that extends usable irrigation
+   * range out to water-dependent crops (PotatoField) that would otherwise be
+   * too far from real water to yield much. Placement is hard-gated on being
+   * within WELL_MAX_WATER_DISTANCE_TILES of open water exactly like a Well
+   * (getPlacementRejection in gameState.ts); its ongoing effect on nearby
+   * PotatoFields is computed in getCropWaterDistance, also gameState.ts.
+   * Deliberately material-free and cheap like Well/Fence - it's an
+   * infrastructure add-on, not a new production chain.
+   */
+  [BuildingType.WaterTower]: {
+    type: BuildingType.WaterTower,
+    label: 'Water Tower',
+    cost: 90,
+    size: { width: 1, height: 1 },
+    color: 0x455a64,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0.8,
+    requiresWorkers: true,
+    maxHp: 55,
+    unlockRequirement: { populationAtLeast: 6 },
+  },
 };
 
 /**
@@ -1112,6 +1138,16 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Quarry || definition.type === BuildingType.IronMine) {
     parts.push(`Must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`);
+  }
+  if (definition.type === BuildingType.PotatoField) {
+    parts.push(
+      `Output falls off beyond ${WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES} tiles from water (or a Water Tower's irrigation)`,
+    );
+  }
+  if (definition.type === BuildingType.WaterTower) {
+    parts.push(
+      `Must be within ${WELL_MAX_WATER_DISTANCE_TILES} tiles of water; irrigates Potato Fields within ${WATER_TOWER_IRRIGATION_RADIUS_TILES} tiles`,
+    );
   }
   if (definition.animal) {
     const { animalLabel, costPerAnimal, maxAnimals, outputPerAnimal } = definition.animal;
