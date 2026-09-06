@@ -81,6 +81,17 @@
         padding: 5px 6px;
         font-size: 12px;
       }
+      /* The speed group takes margin-left:auto to push the right-hand controls
+         over; the audio group follows it, so it must not claim that margin
+         again or it would push itself onto its own edge. */
+      #building-bar .audio-group {
+        margin-left: 8px;
+        align-items: center;
+      }
+      #building-bar .volume {
+        width: 72px;
+        accent-color: #c9a063;
+      }
       #building-bar .building-panel {
         min-height: 52px;
       }

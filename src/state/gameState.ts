@@ -19,6 +19,9 @@ import {
   REPAIR_COST_FRACTION,
   STARTING_MONEY,
   THREAT_NET_WORTH_FULL,
+  VEGETATION_CLEAR_CACTUS_JUICE,
+  VEGETATION_CLEAR_COST,
+  VEGETATION_CLEAR_TREE_LOGS,
   WAREHOUSE_STORAGE_BONUS,
   WELL_MAX_WATER_DISTANCE_TILES,
   WELL_OUTPUT_BY_DISTANCE,
@@ -41,9 +44,11 @@ import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import {
   countVegetationInRadius,
   findNearestVegetation,
+  getVegetationAtTile,
   harvestVegetation,
   isTileBlockedByVegetation,
   plantVegetation,
+  removeVegetation,
   resetVegetation,
 } from './vegetation';
 import { gameEvents } from './gameEvents';
@@ -437,6 +442,35 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
   if (reason === 'destroyed' && placedBuildings.length === 0) {
     endGame('destroyed');
   }
+}
+
+/**
+ * Phase 34: the player-initiated counterpart to depletion-driven removal.
+ * Before this, removeVegetation was only ever reached by a harvester draining
+ * an entity to zero, which meant a tree sitting on the one tile you needed was
+ * an unresolvable dead end unless you happened to want a Forestry there.
+ * Costs cash and hands back a little of what was felled.
+ */
+export function clearVegetationAt(tileX: number, tileY: number): boolean {
+  const entity = getVegetationAtTile(tileX, tileY);
+  if (!entity || money < VEGETATION_CLEAR_COST) {
+    return false;
+  }
+
+  money = Math.round((money - VEGETATION_CLEAR_COST) * 100) / 100;
+  const storageCap = getStorageCap();
+  if (entity.kind === 'Tree') {
+    resources.logs = Math.min(storageCap, resources.logs + VEGETATION_CLEAR_TREE_LOGS);
+  } else {
+    resources.agaveJuice = Math.min(storageCap, resources.agaveJuice + VEGETATION_CLEAR_CACTUS_JUICE);
+  }
+
+  removeVegetation(entity);
+
+  gameEvents.emit('money-changed', money);
+  gameEvents.emit('resources-changed', { ...resources });
+
+  return true;
 }
 
 /** Called by the combat tick once a building's HP has been driven to 0. */

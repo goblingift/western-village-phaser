@@ -25,6 +25,7 @@ import {
   RAID_WAVE_TIMEOUT_MS,
   RAIDER_UNIT_ATTACK_RANGE_TILES,
   TILE_SIZE,
+  VEGETATION_CLEAR_COST,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
 } from '../config/constants';
@@ -34,7 +35,12 @@ import {
   VEGETATION_DEFINITIONS,
   vegetationTextureKey,
 } from '../config/vegetationConfig';
-import { VegetationEntity, getVegetation } from '../state/vegetation';
+import {
+  VegetationEntity,
+  countVegetationInRadius,
+  getVegetation,
+  getVegetationAtTile,
+} from '../state/vegetation';
 import { NightOverlay } from '../ui/NightOverlay';
 import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
@@ -63,13 +69,22 @@ import {
   accentTextureKey,
   animalTextureKey,
   buildingTextureKey,
+  getWorkersRequired,
   raiderTextureKey,
 } from '../config/buildingConfig';
-import { playPlacementSound } from '../audio/sound';
+import {
+  installAudioUnlock,
+  playPlacementSound,
+  playUiSound,
+  playWorldSound,
+  setAudioGameSpeed,
+  setAudioListenerRect,
+} from '../audio/sound';
 import { BuildingRemovedPayload, gameEvents } from '../state/gameEvents';
 import {
   DayPhase,
   DayPhaseChange,
+  clearVegetationAt,
   computeNetWorth,
   damageUnit,
   demolishBuilding,
@@ -80,11 +95,13 @@ import {
   getDayPhase,
   getElapsedSeconds,
   getFenceLinks,
+  getHarvestCenterTile,
   getPhaseAtElapsed,
   getPlacedBuildings,
   getPlacementRejection,
   getPlacementWarning,
   getThreatLevel,
+  isGameOver,
   placeBuilding,
   runProductionTick,
   tickTimer,
@@ -221,6 +238,30 @@ const SELECTION_RECT_FILL_ALPHA = 0.15;
 const SELECTION_RECT_DEPTH = 13.4;
 
 /**
+ * Phase 34: the harvest radius ring. A Forestry/Cactus Milker's 5-tile reach
+ * is 160px - a sixth of the viewport at zoom 1 - and was previously completely
+ * invisible, so "will this building reach those trees" was pure guesswork.
+ * Drawn under the buildings (depth 6, just above vegetation at 5) so it reads
+ * as a footprint marking on the ground rather than an overlay.
+ */
+const HARVEST_RING_DEPTH = 6;
+const HARVEST_RING_COLOR = 0x8bc34a;
+const HARVEST_RING_EMPTY_COLOR = 0xef5350;
+const HARVEST_RING_FILL_ALPHA = 0.08;
+
+/**
+ * Phase 34: understaffed / upkeep-unpaid badges. These sit at the HP bar's
+ * depth band (they answer the same question - "why isn't this building
+ * working") but slightly above it so a damaged AND understaffed building shows
+ * both without the badge hiding behind the bar.
+ */
+const STATUS_BADGE_DEPTH = 13.2;
+const STATUS_BADGE_SIZE = 8;
+const STATUS_BADGE_UNSTAFFED_COLOR = 0xffca28;
+const STATUS_BADGE_UNPAID_COLOR = 0xef5350;
+const STATUS_BADGE_OUTLINE_COLOR = 0x2b1d12;
+
+/**
  * Phase 34 night polish. The window light and campfire are created once with
  * the rest of a building's accents and simply faded in/out with the cycle, so
  * nothing is created or destroyed at a phase boundary.
@@ -230,6 +271,19 @@ const NIGHT_ACCENT_MAX_ALPHA = 0.95;
 const CAMPFIRE_FLICKER_MS = 420;
 /** Cool blue-grey multiply tint applied to tree/cactus sprites at night; daytime is untinted. */
 const VEGETATION_NIGHT_TINT = 0x6f86b8;
+
+/**
+ * Phase 34 combat audio. Above this many cowboys firing in one combat tick,
+ * a single "volley" voice is played instead of N gunshots - see
+ * playCombatVolley.
+ */
+const VOLLEY_SHOT_THRESHOLD = 4;
+const GUNSHOT_MAX_STAGGER_MS = 150;
+/** Footstep ticks are only emitted for selected units, and no more often than this globally. */
+const FOOTSTEP_INTERVAL_MS = 320;
+/** Per-animal ambient call scheduling; each animal picks a fresh delay in this range every time. */
+const ANIMAL_SOUND_MIN_DELAY_MS = 6000;
+const ANIMAL_SOUND_MAX_DELAY_MS = 16000;
 
 interface BuildingVisual {
   building: PlacedBuilding;
@@ -320,6 +374,10 @@ export class MainScene extends Phaser.Scene {
   private selectedBuildingId: string | null = null;
   private phaseRemainingDisplay = DAY_PHASE_SECONDS;
   private nightOverlay!: NightOverlay;
+  private harvestRingGraphics!: Phaser.GameObjects.Graphics;
+  private statusBadgeGraphics!: Phaser.GameObjects.Graphics;
+  private lastFootstepAt = 0;
+  private animalSoundTimer: Phaser.Time.TimerEvent | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private pointerDownX = 0;
@@ -379,13 +437,22 @@ export class MainScene extends Phaser.Scene {
     this.setupCowboyVisuals();
     this.setupUnitControl();
     this.setupHpBarVisuals();
+    this.setupStatusBadges();
+    this.setupHarvestRadiusRing();
     this.setupDayNightCycle();
+    this.setupAudio();
     this.setupRaidSystem();
+    this.setupGameOverHalt();
     this.setupGameReset();
   }
 
   update(): void {
     this.redrawSelectionRing();
+    // The audio engine culls/pans world sounds against the camera's current
+    // view; pushing it here (rather than reading a scene reference from inside
+    // the audio module) keeps that module free of any Phaser dependency.
+    setAudioListenerRect(this.cameras.main.worldView);
+    this.emitFootstepTicks();
   }
 
   private buildTilemap(): void {
@@ -651,6 +718,15 @@ export class MainScene extends Phaser.Scene {
       delay: PRODUCTION_TICK_MS,
       loop: true,
       callback: () => {
+        // Phase 34: the explicit pause/game-over guard setupSpeedControl's
+        // comment used to *claim* lived inside runProductionTick. It didn't -
+        // runProductionTick only ever early-returned on gameOver, never on
+        // pause. In practice time.timeScale = 0 stops this timer from firing
+        // at all, so the bug was latent rather than visible, but a guard that
+        // is documented to exist should exist.
+        if (this.gameSpeed === 0 || isGameOver()) {
+          return;
+        }
         runProductionTick();
         this.runRaidCombatTick();
       },
@@ -666,14 +742,20 @@ export class MainScene extends Phaser.Scene {
    * of 0 freezes both, which is exactly what "paused" means here: production
    * ticks stop firing and raids neither spawn nor advance.
    *
-   * runProductionTick additionally early-returns while paused, so even a
-   * timer that somehow fires mid-transition can't advance the simulation.
+   * Phase 34: the production timer's own callback additionally checks
+   * gameSpeed/isGameOver, so a timer that fires mid-transition can't advance
+   * the simulation (this comment previously described that guard as living
+   * inside runProductionTick, where it did not in fact exist).
    */
   private setupSpeedControl(): void {
     gameEvents.on('speed-changed', (speed: number) => {
       this.gameSpeed = speed;
       this.time.timeScale = speed;
       this.tweens.timeScale = speed;
+      // Paused means silent; faster speeds deliberately do NOT get a matching
+      // increase in sound trigger rate beyond what the sped-up timers already
+      // cause (see the audio module's header).
+      setAudioGameSpeed(speed);
       this.timerText.setText(this.formatTimerText());
     });
   }
@@ -945,6 +1027,10 @@ export class MainScene extends Phaser.Scene {
     const { tileX, tileY } = this.pointerToTile(pointer);
     this.previewImage.setPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
 
+    // Phase 34: a harvester's reach is drawn under the preview so "will this
+    // actually reach anything" is answerable before paying for it.
+    this.redrawHarvestRing(tileX, tileY);
+
     const rejection = getPlacementRejection(tileX, tileY, this.selectedType);
     this.previewImage.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
 
@@ -998,6 +1084,37 @@ export class MainScene extends Phaser.Scene {
       const building = getBuildingAtTile(tileX, tileY);
       if (building) {
         demolishBuilding(building.id);
+        return;
+      }
+
+      // Phase 34: the bulldozer now also clears a tree/cactus. Until now the
+      // only thing that ever removed vegetation was a harvester draining it,
+      // so a tile blocked by a species you had no harvester for could not be
+      // built on at all - a genuine dead end, not a difficulty choice.
+      // Buildings take priority on a shared tile (a building and vegetation
+      // can't coexist today, but the ordering makes the intent explicit).
+      const vegetation = getVegetationAtTile(tileX, tileY);
+      if (vegetation && clearVegetationAt(tileX, tileY)) {
+        playWorldSound('clear', tileX * TILE_SIZE + TILE_SIZE / 2, tileY * TILE_SIZE + TILE_SIZE / 2);
+      } else if (vegetation) {
+        this.showTransientHint(
+          `Need $${VEGETATION_CLEAR_COST} to clear`,
+          tileX * TILE_SIZE,
+          (tileY + 1) * TILE_SIZE + 4,
+        );
+      }
+    });
+  }
+
+  /** Reuses the placement hint text object for a brief, position-anchored message outside placement mode. */
+  private showTransientHint(text: string, worldX: number, worldY: number): void {
+    this.placementHintText.setText(text);
+    this.placementHintText.setBackgroundColor('#c62828dd');
+    this.placementHintText.setPosition(worldX, worldY);
+    this.placementHintText.setVisible(true);
+    this.time.delayedCall(1200, () => {
+      if (this.selectedType === null) {
+        this.placementHintText.setVisible(false);
       }
     });
   }
@@ -1455,6 +1572,114 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Phase 34: understaffed / upkeep-unpaid badge over the building sprite.
+   *
+   * These two states are by far the most common reason a building silently
+   * produces nothing, and until now the only way to find out was to click the
+   * building and read the info panel - which is exactly why Bug 1's bogus "no
+   * trees nearby" message went unchallenged for so long. Redrawn on the
+   * production tick alongside the HP bars, since both staffing and upkeep are
+   * recomputed from scratch every tick in gameState.
+   */
+  private setupStatusBadges(): void {
+    this.statusBadgeGraphics = this.add.graphics().setDepth(STATUS_BADGE_DEPTH);
+    gameEvents.on('production-tick', () => this.redrawStatusBadges());
+  }
+
+  private redrawStatusBadges(): void {
+    this.statusBadgeGraphics.clear();
+
+    for (const { building } of this.buildingVisuals.values()) {
+      const workersRequired = getWorkersRequired(building.type);
+      const understaffed = workersRequired > 0 && !building.staffed;
+      if (!understaffed && !building.disabled) {
+        continue;
+      }
+
+      // Unpaid outranks understaffed: an unpaid building has money as its
+      // blocker, and the player fixing staffing first would achieve nothing.
+      const color = building.disabled ? STATUS_BADGE_UNPAID_COLOR : STATUS_BADGE_UNSTAFFED_COLOR;
+      const { width } = BUILDING_DEFINITIONS[building.type].size;
+      const x = building.tileX * TILE_SIZE + width * TILE_SIZE - STATUS_BADGE_SIZE - 1;
+      const y = building.tileY * TILE_SIZE + 1;
+
+      this.statusBadgeGraphics.fillStyle(STATUS_BADGE_OUTLINE_COLOR, 0.9);
+      this.statusBadgeGraphics.fillRect(x - 1, y - 1, STATUS_BADGE_SIZE + 2, STATUS_BADGE_SIZE + 2);
+      this.statusBadgeGraphics.fillStyle(color, 1);
+      this.statusBadgeGraphics.fillRect(x, y, STATUS_BADGE_SIZE, STATUS_BADGE_SIZE);
+      // A dark notch punched out of the middle reads as an exclamation mark
+      // at this size, which two solid colours alone would not.
+      this.statusBadgeGraphics.fillStyle(STATUS_BADGE_OUTLINE_COLOR, 1);
+      this.statusBadgeGraphics.fillRect(x + 3, y + 1, 2, 4);
+      this.statusBadgeGraphics.fillRect(x + 3, y + 6, 2, 1);
+    }
+  }
+
+  /**
+   * Phase 34: the harvest radius, drawn both while previewing a harvester's
+   * placement and while one is selected. Deliberately drawn as a square rather
+   * than a circle: findNearestVegetation/countVegetationInRadius both use a
+   * square (Chebyshev) radius test, so a circle would be a picture of a rule
+   * the game does not implement - the corners would look out of range and
+   * still be harvested.
+   */
+  private setupHarvestRadiusRing(): void {
+    this.harvestRingGraphics = this.add.graphics().setDepth(HARVEST_RING_DEPTH);
+
+    gameEvents.on('building-selected', () => this.redrawHarvestRing());
+    gameEvents.on('cancel-placement', () => this.redrawHarvestRing());
+    // Vegetation appearing/disappearing inside the ring flips its colour.
+    gameEvents.on('vegetation-added', () => this.redrawHarvestRing());
+    gameEvents.on('vegetation-removed', () => this.redrawHarvestRing());
+    gameEvents.on('game-reset', () => this.harvestRingGraphics.clear());
+  }
+
+  /**
+   * Drawn for whichever of the two contexts is live: the placement preview
+   * takes priority (the player is actively deciding where to put one), and
+   * otherwise the currently selected building's own radius is shown.
+   */
+  private redrawHarvestRing(previewTileX?: number, previewTileY?: number): void {
+    this.harvestRingGraphics.clear();
+
+    if (this.selectedType !== null) {
+      const harvest = BUILDING_DEFINITIONS[this.selectedType].harvest;
+      if (harvest && previewTileX !== undefined && previewTileY !== undefined) {
+        const center = getHarvestCenterTile(previewTileX, previewTileY, this.selectedType);
+        this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+      }
+      return;
+    }
+
+    const selected = this.selectedBuildingId ? getBuildingById(this.selectedBuildingId) : null;
+    const harvest = selected ? BUILDING_DEFINITIONS[selected.type].harvest : null;
+    if (!selected || !harvest) {
+      return;
+    }
+    const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
+    this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+  }
+
+  private drawHarvestRing(
+    centerTileX: number,
+    centerTileY: number,
+    radiusTiles: number,
+    kind: VegetationEntity['kind'],
+  ): void {
+    const hasVegetation = countVegetationInRadius(kind, centerTileX, centerTileY, radiusTiles) > 0;
+    const color = hasVegetation ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR;
+
+    const px = (centerTileX - radiusTiles) * TILE_SIZE;
+    const py = (centerTileY - radiusTiles) * TILE_SIZE;
+    const size = (radiusTiles * 2 + 1) * TILE_SIZE;
+
+    this.harvestRingGraphics.fillStyle(color, HARVEST_RING_FILL_ALPHA);
+    this.harvestRingGraphics.fillRect(px, py, size, size);
+    this.harvestRingGraphics.lineStyle(2, color, 0.9);
+    this.harvestRingGraphics.strokeRect(px, py, size, size);
+  }
+
+  /**
    * Phase 34: the day/night cycle's visual side. The cycle itself is state
    * (gameState owns dayNumber/phase/elapsed and emits 'day-phase-changed');
    * this only reacts to it - darken the screen, light the windows, cool the
@@ -1515,6 +1740,156 @@ export class MainScene extends Phaser.Scene {
       if (!this.raidActive) {
         this.raidNoticeText.setVisible(false);
       }
+    });
+  }
+
+  /**
+   * Phase 34: audio wiring. The engine itself (src/audio/sound.ts) is
+   * scene-agnostic; this is the only place that knows both where things are
+   * in the world and what just happened to them.
+   */
+  private setupAudio(): void {
+    installAudioUnlock();
+    setAudioGameSpeed(this.gameSpeed);
+
+    gameEvents.on('building-removed', ({ building, reason }: BuildingRemovedPayload) => {
+      const center = this.tileCenter(building);
+      playWorldSound(reason === 'destroyed' ? 'buildingCollapse' : 'clear', center.x, center.y);
+    });
+
+    this.scheduleAnimalSounds();
+    gameEvents.on('game-reset', () => this.scheduleAnimalSounds());
+  }
+
+  /**
+   * Phase 34 animal ambience. One shared self-rescheduling timer picks ONE
+   * on-screen animal per firing rather than every animal owning its own timer:
+   * a full town can hold 30+ critters, and 30 independent timers would both
+   * cost more and (far worse) all try to play at once. The engine's own
+   * per-sound minGapMs is the final backstop.
+   */
+  private scheduleAnimalSounds(): void {
+    this.animalSoundTimer?.remove();
+    const delay = Phaser.Math.Between(ANIMAL_SOUND_MIN_DELAY_MS, ANIMAL_SOUND_MAX_DELAY_MS);
+
+    this.animalSoundTimer = this.time.delayedCall(delay, () => {
+      this.playRandomAnimalSound();
+      this.scheduleAnimalSounds();
+    });
+  }
+
+  private playRandomAnimalSound(): void {
+    const candidates: { x: number; y: number; sound: 'animalChicken' | 'animalPig' | 'animalCow' }[] = [];
+    const worldView = this.cameras.main.worldView;
+
+    for (const visual of this.buildingVisuals.values()) {
+      const animalConfig = BUILDING_DEFINITIONS[visual.building.type].animal;
+      if (!animalConfig || visual.animalImages.length === 0) {
+        continue;
+      }
+      const sound =
+        animalConfig.animalLabel === 'Chicken'
+          ? 'animalChicken'
+          : animalConfig.animalLabel === 'Pig'
+            ? 'animalPig'
+            : 'animalCow';
+
+      for (const image of visual.animalImages) {
+        // Cheap pre-cull so the random pick can't keep landing on off-screen
+        // animals and producing silence (the engine would drop them anyway).
+        if (worldView.contains(image.x, image.y)) {
+          candidates.push({ x: image.x, y: image.y, sound });
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      return;
+    }
+    const pick = candidates[Phaser.Math.Between(0, candidates.length - 1)];
+    playWorldSound(pick.sound, pick.x, pick.y);
+  }
+
+  /**
+   * Phase 34: footsteps for *selected* units only, and globally throttled.
+   * Per-step audio for all ~30 wandering villagers and animals was explicitly
+   * ruled out - at that density it stops being footsteps and becomes rain.
+   */
+  private emitFootstepTicks(): void {
+    if (this.selectedUnits.length === 0 || this.gameSpeed === 0) {
+      return;
+    }
+    if (this.time.now - this.lastFootstepAt < FOOTSTEP_INTERVAL_MS) {
+      return;
+    }
+
+    const moving = this.selectedUnits.find((unit) => unit.moveTween !== null);
+    if (!moving) {
+      return;
+    }
+
+    this.lastFootstepAt = this.time.now;
+    playWorldSound('footstep', moving.image.x, moving.image.y);
+  }
+
+  /**
+   * Phase 34: N cowboys firing in one combat tick is N shots, and a defended
+   * town can field 10-15 shooters. Below VOLLEY_SHOT_THRESHOLD each shot is
+   * its own voice with a small random stagger (a perfectly simultaneous
+   * volley sounds like a single click); above it the whole exchange collapses
+   * into one louder "volley" voice, which is both cheaper and closer to what a
+   * line of gunfire actually sounds like.
+   */
+  private playCombatVolley(shots: { x: number; y: number }[]): void {
+    if (shots.length === 0) {
+      return;
+    }
+
+    if (shots.length >= VOLLEY_SHOT_THRESHOLD) {
+      const centerX = shots.reduce((sum, shot) => sum + shot.x, 0) / shots.length;
+      const centerY = shots.reduce((sum, shot) => sum + shot.y, 0) / shots.length;
+      playWorldSound('volley', centerX, centerY);
+      return;
+    }
+
+    for (const shot of shots) {
+      this.time.delayedCall(Phaser.Math.Between(0, GUNSHOT_MAX_STAGGER_MS), () => {
+        playWorldSound('gunshot', shot.x, shot.y);
+      });
+    }
+  }
+
+  /**
+   * Phase 34: the world used to keep running behind the game-over screen -
+   * raiders went on chewing through buildings, tweens went on tweening, and
+   * the final net-worth number on screen could be describing a town that no
+   * longer existed. Nothing here touches gameState (which has already frozen
+   * itself via its own gameOver flag); this is purely stopping the scene.
+   */
+  private setupGameOverHalt(): void {
+    gameEvents.on('game-over', () => {
+      this.endRaidWave();
+      this.raidCheckTimer?.remove();
+      this.raidCheckTimer = null;
+      this.raidWarningTimer?.remove();
+      this.raidWarningTimer = null;
+      this.raidWaveTimer?.remove();
+      this.raidWaveTimer = null;
+      this.animalSoundTimer?.remove();
+      this.animalSoundTimer = null;
+      this.hideRaidNotice();
+
+      this.cancelPlacement();
+      this.selectedUnits = [];
+      this.selectionRingGraphics.clear();
+      this.cowboySelectionHintText.setVisible(false);
+
+      // Freezes every remaining timer and tween (villager/animal wander, unit
+      // moves, idle accents) in place behind the overlay. resetGame's
+      // 'game-reset' handler restores both to the player's chosen speed.
+      this.time.timeScale = 0;
+      this.tweens.timeScale = 0;
+      setAudioGameSpeed(0);
     });
   }
 
@@ -1820,6 +2195,9 @@ export class MainScene extends Phaser.Scene {
 
   /** One move order per selected unit, each aimed at the click point plus a small random offset so a multi-unit order doesn't stack every unit on one pixel. */
   private issueUnitMoveOrders(pointer: Phaser.Input.Pointer): void {
+    // One confirmation per order, not per unit - a 5-unit order is still a
+    // single player action.
+    playUiSound('moveConfirm');
     for (const unit of this.selectedUnits) {
       const jitterX = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
@@ -1965,6 +2343,15 @@ export class MainScene extends Phaser.Scene {
       this.connectionGraphics.clear();
       this.fenceLineGraphics.clear();
       this.hpBarGraphics.clear();
+      this.statusBadgeGraphics.clear();
+      this.harvestRingGraphics.clear();
+
+      // Phase 34: setupGameOverHalt froze the scene's clocks behind the
+      // game-over screen; Play Again is the one path back, so it restores
+      // them to the speed the player had selected.
+      this.time.timeScale = this.gameSpeed;
+      this.tweens.timeScale = this.gameSpeed;
+      setAudioGameSpeed(this.gameSpeed);
 
       for (const villager of this.villagers) {
         this.tweens.killTweensOf(villager);
@@ -2376,6 +2763,7 @@ export class MainScene extends Phaser.Scene {
     unit.moveTween?.stop();
     this.tweens.killTweensOf(unit.image);
     this.spawnDeathPuff(unit.image.x, unit.image.y);
+    playWorldSound('unitDeath', unit.image.x, unit.image.y);
     unit.image.destroy();
 
     this.cowboyUnits = this.cowboyUnits.filter((candidate) => candidate !== unit);
@@ -2423,6 +2811,11 @@ export class MainScene extends Phaser.Scene {
    */
   private resolveCowboyFire(): void {
     const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
+    // Phase 34: shots are collected first and sounded once, so the audio layer
+    // can decide between N staggered gunshots and a single volley voice
+    // (playCombatVolley) with the full shot count in hand.
+    const shots: { x: number; y: number }[] = [];
+    let anyHit = false;
 
     for (const unit of this.cowboyUnits) {
       if (!this.isCowboyUnitAlive(unit)) {
@@ -2435,6 +2828,16 @@ export class MainScene extends Phaser.Scene {
       }
       target.hp -= COWBOY_DAMAGE;
       this.spawnCowboyShotVisual(position, target.image);
+      shots.push(position);
+      anyHit = true;
+    }
+
+    this.playCombatVolley(shots);
+    if (anyHit) {
+      // One hit acknowledgement per tick, not per shot: the engine would
+      // throttle the rest anyway and they'd only muddy the volley.
+      const first = shots[0];
+      playWorldSound('raiderHit', first.x, first.y);
     }
   }
 
@@ -2485,6 +2888,7 @@ export class MainScene extends Phaser.Scene {
         continue;
       }
       this.tweens.killTweensOf(raider.image);
+      playWorldSound('unitDeath', raider.image.x, raider.image.y);
       raider.image.destroy();
     }
     this.raiders = survivors;

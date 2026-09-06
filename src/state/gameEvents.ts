@@ -40,6 +40,8 @@ export interface GameEventMap {
   'building-icons-ready': () => void;
   /** Phase 34: fired on every day->night / night->day boundary (and on reset). */
   'day-phase-changed': (change: DayPhaseChange) => void;
+  /** Phase 34: audio master mute/volume, owned by the audio engine, driven from the building bar. */
+  'audio-settings-changed': (settings: { muted: boolean; volume: number }) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

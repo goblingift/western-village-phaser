@@ -120,3 +120,13 @@ export const CAMERA_ZOOM_STEP = 0.1;
 
 /** Phase 33: selectable game speeds; 0 is the paused state. */
 export const GAME_SPEEDS: readonly number[] = [1, 2, 4];
+
+/**
+ * Phase 34: manual vegetation clearing with the bulldozer. Before this, the
+ * only thing that ever removed a tree/cactus was a harvester draining it, so
+ * a tile blocked by vegetation the player had no harvester for was a dead
+ * end. Clearing costs cash and hands back a little of the felled material.
+ */
+export const VEGETATION_CLEAR_COST = 8;
+export const VEGETATION_CLEAR_TREE_LOGS = 2;
+export const VEGETATION_CLEAR_CACTUS_JUICE = 1;

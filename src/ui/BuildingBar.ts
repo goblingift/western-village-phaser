@@ -8,6 +8,7 @@ import {
 import { GAME_SPEEDS } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
 import { canAfford, getMoney } from '../state/gameState';
+import { getAudioVolume, isAudioMuted, setAudioMuted, setAudioVolume } from '../audio/sound';
 import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
 
 /**
@@ -30,6 +31,8 @@ export class BuildingBar {
   private panels = new Map<BuildingCategory, HTMLDivElement>();
   private speedButtons: HTMLButtonElement[] = [];
   private demolishButton: HTMLButtonElement;
+  private muteButton!: HTMLButtonElement;
+  private volumeSlider!: HTMLInputElement;
   private activeCategory: BuildingCategory = BuildingCategory.Infrastructure;
   private demolishMode = false;
 
@@ -61,6 +64,7 @@ export class BuildingBar {
     topRow.appendChild(this.demolishButton);
 
     topRow.appendChild(this.createSpeedControls());
+    topRow.appendChild(this.createAudioControls());
     bar.appendChild(topRow);
 
     for (const category of Object.values(BuildingCategory)) {
@@ -146,6 +150,53 @@ export class BuildingBar {
     }
 
     return group;
+  }
+
+  /**
+   * Phase 34: mute toggle + volume slider, sitting next to the speed control
+   * because they answer the same kind of question ("how is the game running
+   * right now") and share the top row's chrome. The audio engine owns the
+   * actual state; this is a view over it, which is why the initial values are
+   * read back from the engine rather than duplicated here.
+   */
+  private createAudioControls(): HTMLDivElement {
+    const group = document.createElement('div');
+    group.className = 'speed-group audio-group';
+
+    this.muteButton = document.createElement('button');
+    this.muteButton.className = 'speed';
+    this.muteButton.title = 'Mute / unmute all sound';
+    this.muteButton.addEventListener('click', () => {
+      setAudioMuted(!isAudioMuted());
+      this.refreshAudioControls();
+    });
+    group.appendChild(this.muteButton);
+
+    this.volumeSlider = document.createElement('input');
+    this.volumeSlider.type = 'range';
+    this.volumeSlider.min = '0';
+    this.volumeSlider.max = '100';
+    this.volumeSlider.value = `${Math.round(getAudioVolume() * 100)}`;
+    this.volumeSlider.className = 'volume';
+    this.volumeSlider.title = 'Volume';
+    this.volumeSlider.addEventListener('input', () => {
+      setAudioVolume(Number(this.volumeSlider.value) / 100);
+      // Dragging the slider off 0 is an unambiguous "I want sound".
+      if (isAudioMuted() && Number(this.volumeSlider.value) > 0) {
+        setAudioMuted(false);
+      }
+      this.refreshAudioControls();
+    });
+    group.appendChild(this.volumeSlider);
+
+    this.refreshAudioControls();
+    return group;
+  }
+
+  private refreshAudioControls(): void {
+    const muted = isAudioMuted();
+    this.muteButton.textContent = muted ? 'Muted' : 'Sound';
+    this.muteButton.classList.toggle('active', !muted);
   }
 
   private setSpeed(speed: number, button: HTMLButtonElement): void {

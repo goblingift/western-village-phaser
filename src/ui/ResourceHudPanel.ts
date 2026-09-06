@@ -8,6 +8,7 @@ import {
 } from '../config/buildingConfig';
 import {
   getEmployedPopulation,
+  getIdlePopulation,
   getMoney,
   getResourceTrends,
   getResources,
@@ -133,8 +134,15 @@ export class ResourceHudPanel {
 
   refresh(): void {
     const round1 = (n: number) => Math.round(n * 10) / 10;
+    // Phase 34: idle population is surfaced here for the first time.
+    // gameState has computed it every tick since Phase 12 and nothing ever
+    // read it, while "why is my building not working" (answer: no spare
+    // workers) stayed invisible. Shown only when non-zero so the common case
+    // doesn't carry a permanent "Idle 0".
+    const idle = getIdlePopulation();
+    const idleText = idle > 0 ? `   Idle ${idle}` : '';
     this.headerText.setText(
-      `$${round1(getMoney())}   Pop ${getEmployedPopulation()}/${getTotalPopulation()}   Cap ${getStorageCap()}`,
+      `$${round1(getMoney())}   Pop ${getEmployedPopulation()}/${getTotalPopulation()}${idleText}   Cap ${getStorageCap()}`,
     );
 
     const resources = getResources();
