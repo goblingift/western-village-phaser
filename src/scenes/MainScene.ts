@@ -4,6 +4,7 @@ import {
   CAMERA_MIN_ZOOM,
   CAMERA_ZOOM_STEP,
   COWBOY_DAMAGE,
+  COWBOY_MAX_HP,
   COWBOY_RANGE_TILES,
   DAY_PHASE_SECONDS,
   MAP_HEIGHT_TILES,
@@ -11,6 +12,7 @@ import {
   MINIMAP_HEIGHT,
   MINIMAP_MARGIN,
   MINIMAP_WIDTH,
+  MOUNTED_COWBOY_MAX_HP,
   MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
   POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
@@ -210,6 +212,19 @@ const HP_BAR_MARGIN_ABOVE_BUILDING = 3;
 const HP_BAR_BG_COLOR = 0x2b1d12;
 const HP_BAR_FILL_COLOR = 0x4caf50;
 const HP_BAR_EMPTY_COLOR = 0xd32f2f;
+/**
+ * Phase 40: unit HP bars (Cowboy/Cowboy-on-Horse/Raider) share the exact
+ * fill/background palette and depth as building HP bars above, but get their
+ * own smaller width/height and a separate shared Graphics object
+ * (unitHpBarGraphics) - a 12-16px unit sprite can't fit a building-width bar,
+ * and keeping the two loops (buildingVisuals vs cowboyUnits+raiders) apart is
+ * simpler than branching one draw call on "what kind of thing is this".
+ */
+const UNIT_HP_BAR_WIDTH = 14;
+const UNIT_HP_BAR_HEIGHT = 3;
+const UNIT_HP_BAR_MARGIN_ABOVE_PX = 2;
+/** Half-height of every small-unit sprite class (animals/villagers/Cowboys/mounted Cowboys/raiders all sit in the 12px-tall band, see ANIMAL_SPRITE_SIZE), used to lift the bar clear of the sprite regardless of unit kind. */
+const UNIT_SPRITE_HALF_HEIGHT_PX = 6;
 /** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. */
 const VILLAGER_CAP = 30;
 const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
@@ -229,6 +244,8 @@ const COWBOY_SHOT_FADE_MS = 200;
 /** Phase 24: Cowboys are player-directed units, so their selection/movement constants live near the combat ones above. */
 const COWBOY_WALK_SPEED_PX_PER_SEC = 60;
 const COWBOY_SELECT_HIT_RADIUS_PX = 10;
+/** Phase 40: same hit-test radius as unit selection, used to tell "right-clicked a raider" (attack order) from "right-clicked empty ground" (plain move order). */
+const RAIDER_ATTACK_HIT_RADIUS_PX = 10;
 const COWBOY_SELECTION_RING_RADIUS_PX = 10;
 const COWBOY_SELECTION_RING_COLOR = 0x42a5f5;
 const COWBOY_SELECTION_RING_DEPTH = 13.6;
@@ -312,9 +329,13 @@ interface BuildingVisual {
  * single source of truth.
  */
 interface Raider {
+  /** Phase 40: stable identity so a unit's attack order (CombatUnit.attackTargetRaiderId) can survive this raider's hp changing/moving across ticks without holding a live object reference across the array's own churn. */
+  id: string;
   image: Phaser.GameObjects.Image;
   faction: RaiderFaction;
   hp: number;
+  /** Phase 40: RAIDER_DEFINITIONS.maxHp scaled by this wave's threat hpMultiplier at spawn time (see startRaid) - the HP bar needs the *scaled* cap, not the base table value, to read correctly on an escalated wave. */
+  maxHp: number;
   targetBuildingId: string | null;
   /** True once this raider's walk-to-target tween has completed; only then does it attack instead of moving. */
   arrived: boolean;
@@ -361,6 +382,18 @@ interface CombatUnit {
   index: number;
   moveTween: Phaser.Tweens.Tween | null;
   kind: UnitKind;
+  /**
+   * Phase 40: an explicit attack order (issueUnitAttackOrder) on a specific
+   * raider, by Raider.id. While set, this unit's combat-tick behavior
+   * (resolveUnitAttackOrders/resolveCowboyFire) locks onto that one raider -
+   * approaching into range and then focus-firing it every tick - instead of
+   * the default "auto-fire at whichever raider is nearest" rule. Cleared the
+   * moment the ordered raider is no longer found alive (dead, or the wave
+   * ended) so the unit falls back to auto-targeting on its own, and also
+   * cleared by any new plain move order (issueUnitMoveOrders), since that's
+   * an explicit new command superseding the standing attack order.
+   */
+  attackTargetRaiderId: string | null;
 }
 
 export class MainScene extends Phaser.Scene {
@@ -389,6 +422,8 @@ export class MainScene extends Phaser.Scene {
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
   private raiders: Raider[] = [];
+  /** Phase 40: monotonically increasing so every Raider.id is unique for the life of the scene, even across waves/resets - a stray stale attackTargetRaiderId can then never accidentally match a later, unrelated raider. */
+  private raiderIdCounter = 0;
   private raidActive = false;
   private raidNoticeText!: Phaser.GameObjects.Text;
   private raidCheckTimer: Phaser.Time.TimerEvent | null = null;
@@ -404,6 +439,8 @@ export class MainScene extends Phaser.Scene {
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fenceLineGraphics!: Phaser.GameObjects.Graphics;
   private hpBarGraphics!: Phaser.GameObjects.Graphics;
+  /** Phase 40: separate shared Graphics object for Cowboy/Cowboy-on-Horse/Raider HP bars, mirroring hpBarGraphics' one-Graphics-per-tick-redraw discipline rather than a GameObject per unit. */
+  private unitHpBarGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
   private tileData: TileType[][] = [];
@@ -1546,11 +1583,19 @@ export class MainScene extends Phaser.Scene {
   private setupHpBarVisuals(): void {
     this.hpBarGraphics = this.add.graphics();
     this.hpBarGraphics.setDepth(HP_BAR_DEPTH);
+    this.unitHpBarGraphics = this.add.graphics();
+    this.unitHpBarGraphics.setDepth(HP_BAR_DEPTH);
 
     // Redrawn every tick (cheap at this building count) rather than only on
     // damage events, since no damage source exists yet - this keeps the bars
     // correct automatically once one is added later.
     gameEvents.on('production-tick', () => this.redrawHpBars());
+    // Phase 40: unit HP doesn't regenerate, so this only ever needs to react
+    // to combat (runRaidCombatTick already calls it directly after damage is
+    // applied) - but it's also hooked to the same production-tick cadence as
+    // the building bars above so a unit trained/healed mid-tick still reads
+    // correctly even outside an active raid.
+    gameEvents.on('production-tick', () => this.redrawUnitHpBars());
   }
 
   private redrawHpBars(): void {
@@ -1572,6 +1617,60 @@ export class MainScene extends Phaser.Scene {
       this.hpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
       this.hpBarGraphics.fillRect(px, py, barWidth * ratio, HP_BAR_HEIGHT);
     }
+  }
+
+  /**
+   * Phase 40: one shared Graphics object for every live Cowboy/Cowboy-on-Horse
+   * and every live raider, redrawn wholesale each call - same discipline as
+   * redrawHpBars, just iterating cowboyUnits/raiders instead of
+   * buildingVisuals. Player units hide their bar at full HP (matching the
+   * building convention); raiders always show theirs since they're
+   * transient, combat-only entities where "how close is this one to dying"
+   * is useful at a glance even at full health.
+   */
+  private redrawUnitHpBars(): void {
+    this.unitHpBarGraphics.clear();
+
+    for (const unit of this.cowboyUnits) {
+      const hp = this.getUnitHp(unit);
+      if (hp === null) {
+        continue;
+      }
+      const maxHp = unit.kind === 'cowboy' ? COWBOY_MAX_HP : MOUNTED_COWBOY_MAX_HP;
+      if (hp >= maxHp) {
+        continue;
+      }
+      this.drawUnitHpBar(unit.image.x, unit.image.y, hp, maxHp);
+    }
+
+    for (const raider of this.raiders) {
+      if (raider.hp <= 0) {
+        continue;
+      }
+      this.drawUnitHpBar(raider.image.x, raider.image.y, raider.hp, raider.maxHp);
+    }
+  }
+
+  /** Reads a unit's live HP straight out of its owning building's parallel HP array - gameState stays the single source of truth for unit HP, same pattern isCowboyUnitAlive already uses. */
+  private getUnitHp(unit: CombatUnit): number | null {
+    const building = getBuildingById(unit.barracksId);
+    if (!building) {
+      return null;
+    }
+    const hpArray = unit.kind === 'cowboy' ? building.cowboyHp : building.mountedCowboyHp;
+    return hpArray[unit.index] ?? null;
+  }
+
+  /** Same two-fill-rect background/fill technique as redrawHpBars, just centered on a unit's live x/y instead of anchored to a building's tile footprint. */
+  private drawUnitHpBar(centerX: number, centerY: number, hp: number, maxHp: number): void {
+    const px = centerX - UNIT_HP_BAR_WIDTH / 2;
+    const py = centerY - UNIT_SPRITE_HALF_HEIGHT_PX - UNIT_HP_BAR_MARGIN_ABOVE_PX - UNIT_HP_BAR_HEIGHT;
+    const ratio = Math.max(0, hp / maxHp);
+
+    this.unitHpBarGraphics.fillStyle(HP_BAR_BG_COLOR, 1);
+    this.unitHpBarGraphics.fillRect(px, py, UNIT_HP_BAR_WIDTH, UNIT_HP_BAR_HEIGHT);
+    this.unitHpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
+    this.unitHpBarGraphics.fillRect(px, py, UNIT_HP_BAR_WIDTH * ratio, UNIT_HP_BAR_HEIGHT);
   }
 
   /**
@@ -2032,7 +2131,7 @@ export class MainScene extends Phaser.Scene {
     const image = this.add
       .image(slot.x, slot.y, COWBOYS_ATLAS_KEY, COWBOY_TEXTURE_KEY)
       .setDepth(COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboy' });
+    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboy', attackTargetRaiderId: null });
   }
 
   /** Mirrors spawnCowboyUnit exactly, spawning at a Horsery's mounted-slot layout and tagging the unit 'cowboyOnHorse'. */
@@ -2041,7 +2140,7 @@ export class MainScene extends Phaser.Scene {
     const image = this.add
       .image(slot.x, slot.y, MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_TEXTURE_KEY)
       .setDepth(MOUNTED_COWBOY_SPRITE_DEPTH);
-    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboyOnHorse' });
+    this.cowboyUnits.push({ image, barracksId: building.id, index, moveTween: null, kind: 'cowboyOnHorse', attackTargetRaiderId: null });
   }
 
   /** Same deterministic row/column slot layout as getAnimalSlotPosition; still used as a Cowboy's spawn point, just no longer as its "current position" for combat. */
@@ -2159,7 +2258,16 @@ export class MainScene extends Phaser.Scene {
         if (dragDistance > CLICK_MOVE_THRESHOLD || this.selectedUnits.length === 0) {
           return;
         }
-        this.issueUnitMoveOrders(pointer);
+        // Phase 40: right-clicking directly on a live raider issues a focus-fire
+        // attack order on that specific raider instead of a plain move order;
+        // right-clicking anything else (empty ground, a building, etc.) keeps
+        // the original move-order behavior unchanged.
+        const raider = this.findRaiderAt(pointer.worldX, pointer.worldY);
+        if (raider) {
+          this.issueUnitAttackOrder(raider);
+        } else {
+          this.issueUnitMoveOrders(pointer);
+        }
         return;
       }
 
@@ -2212,16 +2320,84 @@ export class MainScene extends Phaser.Scene {
     this.cowboySelectionHintText.setVisible(this.selectedUnits.length > 0);
   }
 
-  /** One move order per selected unit, each aimed at the click point plus a small random offset so a multi-unit order doesn't stack every unit on one pixel. */
+  /**
+   * One move order per selected unit, each aimed at the click point plus a
+   * small random offset so a multi-unit order doesn't stack every unit on one
+   * pixel. Note this is Phase 40's "attack-move" too, not just a plain move:
+   * resolveCowboyFire reads each unit's live image.x/y (kept current by
+   * Phaser's own tween stepping, independent of the 2s combat-tick timer)
+   * rather than only checking position once a tween completes, so a unit
+   * already auto-fires at whatever's nearest-in-range while mid-walk to this
+   * order's destination. A separate attack-move keybind would just be this
+   * same behavior under a second name, so none was added.
+   */
   private issueUnitMoveOrders(pointer: Phaser.Input.Pointer): void {
     // One confirmation per order, not per unit - a 5-unit order is still a
     // single player action.
     playUiSound('moveConfirm');
     for (const unit of this.selectedUnits) {
+      // An explicit new move order supersedes any standing attack order -
+      // otherwise resolveUnitAttackOrders would immediately start steering
+      // the unit back toward its old target on the next combat tick.
+      unit.attackTargetRaiderId = null;
       const jitterX = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       this.issueUnitMoveOrder(unit, pointer.worldX + jitterX, pointer.worldY + jitterY);
     }
+  }
+
+  /** Nearest live raider to a world point within RAIDER_ATTACK_HIT_RADIUS_PX, or null - the hit-test that tells a right-click-on-a-raider (attack order) apart from a right-click-on-ground (move order). */
+  private findRaiderAt(worldX: number, worldY: number): Raider | null {
+    let best: Raider | null = null;
+    let bestDistance = RAIDER_ATTACK_HIT_RADIUS_PX;
+
+    for (const raider of this.raiders) {
+      if (raider.hp <= 0) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(worldX, worldY, raider.image.x, raider.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = raider;
+      }
+    }
+
+    return best;
+  }
+
+  /**
+   * Phase 40: locks every selected unit onto one specific raider by id. Unlike
+   * a plain move order, this survives across combat ticks
+   * (resolveUnitAttackOrders re-issues the approach each tick and
+   * resolveCowboyFire focus-fires this raider specifically once in range)
+   * until the raider dies or otherwise stops being found alive, at which
+   * point the unit falls back to auto-targeting on its own.
+   */
+  private issueUnitAttackOrder(raider: Raider): void {
+    // Same one-confirmation-per-order rule as issueUnitMoveOrders.
+    playUiSound('moveConfirm');
+    for (const unit of this.selectedUnits) {
+      unit.attackTargetRaiderId = raider.id;
+      this.approachOrEngageRaiderTarget(unit, raider);
+    }
+  }
+
+  /**
+   * Shared by issueUnitAttackOrder (immediate feedback the moment the order is
+   * given) and resolveUnitAttackOrders (the per-combat-tick refresh): if the
+   * unit is already within COWBOY_RANGE_TILES of the raider, stop closing the
+   * distance and hold position so resolveCowboyFire can start focus-firing it;
+   * otherwise (re)issue a move order toward the raider's current position.
+   */
+  private approachOrEngageRaiderTarget(unit: CombatUnit, raider: Raider): void {
+    const rangePx = COWBOY_RANGE_TILES * TILE_SIZE;
+    const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, raider.image.x, raider.image.y);
+    if (distance <= rangePx) {
+      unit.moveTween?.stop();
+      unit.moveTween = null;
+      return;
+    }
+    this.issueUnitMoveOrder(unit, raider.image.x, raider.image.y);
   }
 
   /** Same point-to-point tween technique as villagers/raiders (distance/speed -> duration, setFlipX for facing), clamped to map bounds. */
@@ -2362,6 +2538,7 @@ export class MainScene extends Phaser.Scene {
       this.connectionGraphics.clear();
       this.fenceLineGraphics.clear();
       this.hpBarGraphics.clear();
+      this.unitHpBarGraphics.clear();
       this.statusBadgeGraphics.clear();
       this.harvestRingGraphics.clear();
 
@@ -2590,10 +2767,13 @@ export class MainScene extends Phaser.Scene {
       .image(spawn.x, spawn.y, RAIDERS_ATLAS_KEY, raiderTextureKey(faction))
       .setDepth(RAIDER_SPRITE_DEPTH);
 
+    const scaledMaxHp = Math.round(definition.maxHp * hpMultiplier);
     const raider: Raider = {
+      id: `raider-${this.raiderIdCounter++}`,
       image,
       faction,
-      hp: Math.round(definition.maxHp * hpMultiplier),
+      hp: scaledMaxHp,
+      maxHp: scaledMaxHp,
       targetBuildingId: null,
       arrived: false,
     };
@@ -2757,12 +2937,38 @@ export class MainScene extends Phaser.Scene {
     for (const raider of this.raiders) {
       this.updateRaiderTargeting(raider);
     }
+    this.resolveUnitAttackOrders();
     this.resolveRaiderAttacks();
     this.resolveCowboyFire();
     this.resolveWatchtowerFire();
     this.removeDeadRaiders();
     this.removeDestroyedBuildings();
     this.redrawHpBars();
+    this.redrawUnitHpBars();
+  }
+
+  /**
+   * Phase 40: advances every unit under a live attack order (see
+   * issueUnitAttackOrder) one step ahead of resolveRaiderAttacks/
+   * resolveCowboyFire - closing the distance if the ordered raider is still
+   * out of range, or holding position once it's in range. A target that died
+   * or otherwise vanished since the order was given clears
+   * attackTargetRaiderId, which is what lets resolveCowboyFire's default
+   * nearest-in-range rule take back over for that unit starting this same
+   * tick.
+   */
+  private resolveUnitAttackOrders(): void {
+    for (const unit of this.cowboyUnits) {
+      if (!unit.attackTargetRaiderId || !this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const raider = this.raiders.find((candidate) => candidate.id === unit.attackTargetRaiderId);
+      if (!raider || raider.hp <= 0) {
+        unit.attackTargetRaiderId = null;
+        continue;
+      }
+      this.approachOrEngageRaiderTarget(unit, raider);
+    }
   }
 
   /**
@@ -2889,7 +3095,7 @@ export class MainScene extends Phaser.Scene {
         continue;
       }
       const position = { x: unit.image.x, y: unit.image.y };
-      const target = this.findNearestRaider(position.x, position.y, rangePx);
+      const target = this.resolveUnitFireTarget(unit, position, rangePx);
       if (!target) {
         continue;
       }
@@ -2906,6 +3112,31 @@ export class MainScene extends Phaser.Scene {
       const first = shots[0];
       playWorldSound('raiderHit', first.x, first.y);
     }
+  }
+
+  /**
+   * Phase 40: a unit under a live, in-range attack order focus-fires that
+   * specific raider - ignoring whatever is nearest - so it doesn't get pulled
+   * off its ordered target onto a closer raider mid-fight. resolveUnitAttackOrders
+   * already ran earlier this same tick and either closed the distance or is
+   * holding position, so "still out of range" here just means "keep
+   * approaching, don't fire yet" rather than falling back to auto-targeting.
+   */
+  private resolveUnitFireTarget(
+    unit: CombatUnit,
+    position: { x: number; y: number },
+    rangePx: number,
+  ): Raider | null {
+    if (unit.attackTargetRaiderId) {
+      const raider = this.raiders.find(
+        (candidate) => candidate.id === unit.attackTargetRaiderId && candidate.hp > 0,
+      );
+      if (raider) {
+        const distance = Phaser.Math.Distance.Between(position.x, position.y, raider.image.x, raider.image.y);
+        return distance <= rangePx ? raider : null;
+      }
+    }
+    return this.findNearestRaider(position.x, position.y, rangePx);
   }
 
   /**
