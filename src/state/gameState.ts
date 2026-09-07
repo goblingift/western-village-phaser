@@ -24,6 +24,7 @@ import {
   ENCLOSURE_RECOMPUTE_RADIUS_TILES,
   ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
+  GRANARY_STORAGE_BONUS,
   GRAVEL_MAX_DISTANCE_TILES,
   HOUSE_TIER_HYSTERESIS_TICKS,
   MAP_HEIGHT_TILES,
@@ -182,6 +183,15 @@ export interface GameOverSummary {
    */
   reason: GameOverReason;
   daysSurvived: number;
+  /**
+   * Phase 64: the run's own settings and length, carried on the summary so
+   * GameOverOverlay can look the result up in the persistent records store
+   * (which is keyed per difficulty+mode) without having to reach back into
+   * gameState for context that belongs to the run that just ended.
+   */
+  difficulty: Difficulty;
+  mode: RunMode;
+  elapsedSeconds: number;
 }
 
 export type GameOverReason = 'time' | 'destroyed';
@@ -2184,11 +2194,22 @@ export function getTotalBankBalance(): number {
 }
 
 export function getStorageCap(): number {
-  const staffedWarehouses = placedBuildings.filter(
-    (building) =>
-      building.type === BuildingType.Warehouse && building.staffed && !building.disabled && building.hp > 0,
-  ).length;
-  return BASE_STORAGE_CAP + WAREHOUSE_STORAGE_BONUS * staffedWarehouses;
+  // Phase 64: Granaries stack into the same sum on the exact same
+  // staffed/enabled/alive terms as Warehouses - a disabled or 0-HP one
+  // contributes nothing, so losing storage to a raid works identically for
+  // both building types.
+  let bonus = 0;
+  for (const building of placedBuildings) {
+    if (!building.staffed || building.disabled || building.hp <= 0) {
+      continue;
+    }
+    if (building.type === BuildingType.Warehouse) {
+      bonus += WAREHOUSE_STORAGE_BONUS;
+    } else if (building.type === BuildingType.Granary) {
+      bonus += GRANARY_STORAGE_BONUS;
+    }
+  }
+  return BASE_STORAGE_CAP + bonus;
 }
 
 /**
@@ -3043,6 +3064,9 @@ function endGame(reason: GameOverReason): void {
     buildingCounts: countBuildingsByType(),
     reason,
     daysSurvived: getDayNumber(),
+    difficulty: currentDifficulty,
+    mode: currentRunMode,
+    elapsedSeconds,
   });
 }
 

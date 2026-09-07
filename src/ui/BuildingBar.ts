@@ -79,6 +79,7 @@ export class BuildingBar {
     topRow.appendChild(this.createSpeedControls());
     topRow.appendChild(this.createAudioControls());
     topRow.appendChild(this.createStatsButton());
+    topRow.appendChild(this.createHelpButton());
     topRow.appendChild(this.createSaveLoadControls());
     bar.appendChild(topRow);
 
@@ -259,6 +260,16 @@ export class BuildingBar {
    * itself holds no shown/hidden state - it just emits the same toggle event
    * the 'V' hotkey does, and StatisticsPanel is the sole listener.
    */
+  /** Phase 64: the tutorial is dismissible and only auto-runs once, so the help panel needs a permanently visible entry point for anyone who skipped it or forgot the H key. */
+  private createHelpButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'speed';
+    button.textContent = 'Help';
+    button.title = 'Hotkeys and resource chains (H)';
+    button.addEventListener('click', () => gameEvents.emit('toggle-help-overlay'));
+    return button;
+  }
+
   private createStatsButton(): HTMLButtonElement {
     const button = document.createElement('button');
     button.className = 'speed';

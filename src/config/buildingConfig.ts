@@ -47,6 +47,7 @@ export enum BuildingType {
   Blacksmith = 'Blacksmith',
   TradingPost = 'TradingPost',
   WaterTower = 'WaterTower',
+  Granary = 'Granary',
 }
 
 /**
@@ -216,9 +217,12 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
  * Phase 47: Milestone-Gated Building Unlocks. Every field is an "at least"
  * floor, all present fields must hold simultaneously (isBuildingUnlocked in
  * gameState.ts ANDs them), and an entirely undefined `unlockRequirement`
- * means always-unlocked - kept on the six buildings a brand-new player needs
- * immediately (House, Well, Road, Fence, OstrichFarm, ChickenFarm) so the
- * opening minute is never gated on anything. `netWorthAtLeast` is checked
+ * means always-unlocked - kept on the buildings a brand-new player needs
+ * immediately (House, Well, Road, Fence, ChickenFarm, and since Phase 64 the
+ * Granary) so the opening minute is never gated on anything. OstrichFarm was
+ * in that set until Phase 64's livestock rebalance moved it behind
+ * populationAtLeast 4, leaving ChickenFarm as the sole always-available
+ * livestock starter. `netWorthAtLeast` is checked
  * against computeNetWorth().total, which starts near STARTING_MONEY (1800) -
  * thresholds below that would be satisfied at t=0 and gate nothing, so every
  * net-worth-gated building here sits comfortably above it.
@@ -512,17 +516,31 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
    * ChickenFarm produces 4 animals x 0.2 eggs/tick = 0.8 eggs/tick at full
    * stock; OstrichFarm intentionally goes the other way on the same
    * AnimalConfig shape - fewer, pricier birds at a much higher per-animal
-   * rate - landing at 4 x 0.5 = 2.0 eggs/tick fully stocked. Kept
-   * unlockRequirement-less (like the old CattleFarm) so the opening game
-   * still has an always-available starter livestock building alongside
-   * ChickenFarm; PigFarm's populationAtLeast was lowered from 5 to 4 (see its
+   * rate - landing at 4 x 0.45 = 1.8 eggs/tick fully stocked. Phase 64 moved
+   * it behind populationAtLeast 4 (see its own doc comment) so ChickenFarm is
+   * the always-available starter and OstrichFarm is the upgrade;
+   * PigFarm's populationAtLeast was lowered from 5 to 4 (see its
    * own doc comment below) so the Butcher's rawMeat chain isn't stranded
    * between CattleFarm's removal and PigFarm's old unlock tier.
    */
   [BuildingType.OstrichFarm]: {
     type: BuildingType.OstrichFarm,
     label: 'Ostrich Farm',
-    cost: 130,
+    // Phase 64 rebalance: was cost 130, always-unlocked, 0.5 eggs/animal.
+    // At those numbers it made 2.0 eggs/tick against ChickenFarm's 0.8 for
+    // only 1.86x the price with both available at t=0 - ChickenFarm was
+    // strictly dominated and had no reason to ever be built. It is now a
+    // deliberate mid-game *upgrade* rather than a t=0 alternative: gated
+    // behind populationAtLeast 4 (the same tier as Butcher/PigFarm, i.e. two
+    // Houses in), priced at 180, and its per-animal rate trimmed 0.5 -> 0.45
+    // (1.8 eggs/tick fully stocked). Its real cost was always more than the
+    // sticker price - 4x ChickenFarm's footprint, 4x the enclosure area per
+    // animal (ANIMAL_ENCLOSURE_TILES_PER_ANIMAL Ostrich 4 vs Chicken 1, so 16
+    // enclosed tiles vs 4 at full stock) and 7x the per-animal price - so the
+    // unlock gate plus the higher entry cost is enough to make ChickenFarm's
+    // cheap, tiny, fast-payback pen the correct opening play and keep it
+    // worth building afterwards wherever space is tight.
+    cost: 180,
     size: { width: 2, height: 2 },
     color: 0xd7ccc8,
     category: BuildingCategory.Livestock,
@@ -532,9 +550,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
       animalLabel: 'Ostrich',
       costPerAnimal: 35,
       maxAnimals: 4,
-      outputPerAnimal: { eggs: 0.5 },
+      outputPerAnimal: { eggs: 0.45 },
     },
     maxHp: 80,
+    unlockRequirement: { populationAtLeast: 4 },
   },
   [BuildingType.Butcher]: {
     type: BuildingType.Butcher,
@@ -688,6 +707,28 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     requiresWorkers: true,
     maxHp: 100,
     unlockRequirement: { netWorthAtLeast: 2200 },
+  },
+  /**
+   * Phase 64: early storage relief. BASE_STORAGE_CAP (50) is hit within
+   * minutes, but the Warehouse - the only prior remedy - needs netWorth 2200
+   * *and* a Wood+Tools chain that doesn't exist yet at that point, so the
+   * storage-cap waste notifications (Phase 44) fired with nothing the player
+   * could actually do about them. The Granary closes that window: cheap
+   * ($60), material-free, always-unlocked, 1x1 like the Well. It is
+   * deliberately still a real building choice rather than a stat giveaway -
+   * requiresWorkers means it competes for the same population pool as a farm,
+   * and its upkeep is charged every tick like any other infrastructure.
+   */
+  [BuildingType.Granary]: {
+    type: BuildingType.Granary,
+    label: 'Granary',
+    cost: 60,
+    size: { width: 1, height: 1 },
+    color: 0xc9a227,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0.5,
+    requiresWorkers: true,
+    maxHp: 45,
   },
   [BuildingType.Supermarket]: {
     type: BuildingType.Supermarket,

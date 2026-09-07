@@ -849,6 +849,42 @@ export class MainScene extends Phaser.Scene {
   private shiftKey: Phaser.Input.Keyboard.Key | null = null;
   /** Phase 43: previous pointermove's line-drag state, so hideLinePreview only runs on the drag-ended transition rather than every idle mousemove. */
   private lineDragWasActive = false;
+  /**
+   * Phase 65: touch/tablet controls. Every currently-active (finger-down)
+   * touch pointer, keyed by Pointer.id - the only way to reason about a
+   * genuine two-finger gesture, since Phaser's leftButtonDown()/rightButtonDown()
+   * collapse any touch to "the primary button" regardless of finger count.
+   * Populated/cleared purely from pointerdown/pointerup/pointerupoutside, never
+   * from pointermove (a moving finger doesn't change which fingers are down).
+   */
+  private activeTouchPointers = new Map<number, Phaser.Input.Pointer>();
+  /** Phase 65: true for exactly the frames where 2+ touch pointers are simultaneously down - the two-finger pan/zoom gesture is active and every single-finger interpretation (box-select, line preview, tap-to-place/select/order) must be suppressed. */
+  private twoFingerGestureActive = false;
+  /**
+   * Phase 65: the two specific pointer ids currently driving the gesture,
+   * locked in the instant the gesture starts (first-two-by-arrival, ignoring
+   * any stray 3rd+ touch such as a resting palm). Tracking this explicitly -
+   * rather than re-deriving "the first two" from activeTouchPointers'
+   * iteration order every frame - is what keeps a stray 3rd finger from ever
+   * silently swapping into the pair whichever driving finger lifts first:
+   * the moment either id in this pair lifts, the WHOLE gesture ends (even if
+   * a 3rd finger is still down), rather than the 3rd finger being promoted
+   * into a new, differently-baselined pair.
+   */
+  private twoFingerGestureIds: [number, number] | null = null;
+  /** Phase 65: two-finger gesture baseline, re-captured every frame the gesture runs (delta-based, not compared back to gesture-start) so a finger's tiny per-frame jitter can't accumulate into a jump. Null whenever the gesture isn't active. */
+  private twoFingerLastMidpointX: number | null = null;
+  private twoFingerLastMidpointY: number | null = null;
+  private twoFingerLastDistance: number | null = null;
+  /**
+   * Phase 65: pointer ids that participated in a two-finger gesture during
+   * their current press-to-release lifetime. Marked the instant a second
+   * finger lands (both ids) and checked (then cleared) on that pointer's own
+   * eventual pointerup, so a pinch/pan ending - in any finger-lift order -
+   * can never be misread as a tap-to-place/select/move-order by whichever
+   * finger happens to lift last.
+   */
+  private touchPointersSuppressedForTap = new Set<number>();
   private buildingVisuals = new Map<string, BuildingVisual>();
   private villagers: Phaser.GameObjects.Image[] = [];
   /** Phase 60: Goods Carts on Roads - short-lived travel sprites, tracked only so game-reset can kill their tweens and destroy them; MAX_VISIBLE_CARTS is enforced against this array's length. */
@@ -938,6 +974,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Phase 65: touch/tablet controls. Phaser defaults to a single active
+    // touch pointer (mousePointer + pointer1); a two-finger pinch/pan gesture
+    // needs a second concurrently-tracked pointer to exist at all. Must run
+    // before setupTouchGestures (and is harmless before everything else -
+    // addPointer only allocates pointer slots, it registers no listeners).
+    this.input.addPointer(2);
+
     // Must run before anything that calls registerUiObject (setupInfoText
     // onward); buildTilemap/setupVegetationVisuals create world-only objects
     // and are unaffected by ordering here.
@@ -946,6 +989,7 @@ export class MainScene extends Phaser.Scene {
     this.setupVegetationVisuals();
     this.setupCameraDrag();
     this.setupCameraZoom();
+    this.setupTouchGestures();
     this.setupKeyboardCamera();
     this.setupInfoText();
     this.setupResourceHud();
@@ -1222,6 +1266,17 @@ export class MainScene extends Phaser.Scene {
 
   private setupCameraDrag(): void {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      // Phase 65: a two-finger gesture owns all interpretation of both its
+      // pointers' movement (see setupTouchGestures, registered separately);
+      // every single-finger drag branch below (pan/box-select/line-preview)
+      // must sit out entirely while it's active, not just decline to redraw -
+      // updateSelectionRectangle/updateLinePreview would otherwise keep
+      // stretching a stale box/line toward whichever finger this handler
+      // happens to be called for.
+      if (this.twoFingerGestureActive) {
+        return;
+      }
+
       if (this.minimapPointerActive) {
         if (pointer.isDown) {
           this.navigateMinimapTo(pointer);
@@ -1293,6 +1348,250 @@ export class MainScene extends Phaser.Scene {
         this.navigateMinimapTo(pointer);
       }
     });
+  }
+
+  /**
+   * Phase 65: touch/tablet controls - two-finger pan+pinch-zoom, plus the
+   * bookkeeping (activeTouchPointers/twoFingerGestureActive/
+   * touchPointersSuppressedForTap) every other touch-aware branch in this
+   * file reads. This method OWNS tracking which touch pointers are currently
+   * down; it registers its own pointerdown/pointerup/pointerupoutside/
+   * pointermove listeners rather than reusing setupCameraDrag's, so a
+   * two-finger gesture's start/end can be detected the instant it happens
+   * (on the pointerdown/up that changes the count) rather than inferred later
+   * from pointermove.
+   *
+   * State machine:
+   * - 0->1 touch pointers down: nothing special: normal single-finger path
+   *   (setupCameraDrag/setupBuildingPlacement/setupUnitControl etc.) runs
+   *   completely unmodified, since wasTouch-gated code here never fires for a
+   *   single touch.
+   * - 1->2: the just-added pointer's pointerdown handler here detects
+   *   activeTouchPointers.size reaching 2, flips twoFingerGestureActive on,
+   *   captures the two pointers' midpoint/distance as this frame's baseline,
+   *   marks BOTH pointer ids in touchPointersSuppressedForTap (so neither
+   *   finger's eventual lift can fire a tap action), and immediately clears
+   *   any in-flight single-finger drag visuals (selection rectangle, line
+   *   preview) - a second finger landing mid-drag must not leave either
+   *   stranded on screen.
+   * - while 2 (or more - a stray 3rd touch is ignored, only the first two
+   *   tracked ids drive the gesture): every pointermove from either
+   *   participating pointer recomputes the midpoint/distance from BOTH
+   *   pointers' latest known positions and pans/zooms by the delta against
+   *   the previous frame's baseline (not gesture-start), then rewrites the
+   *   baseline - so per-frame jitter can't accumulate and a finger that
+   *   simply isn't moving this event doesn't cause a jump.
+   * - 2->1 (one finger lifts, one stays down): the lifted pointer is removed
+   *   from activeTouchPointers, twoFingerGestureActive turns off, and -
+   *   critically - the REMAINING pointer's lastPointerX/Y (which
+   *   setupCameraDrag's single-finger pan math reads a raw delta against) and
+   *   pointerDownX/Y/dragStartWorldX/Y (which click-vs-drag distance and
+   *   box-select/line-preview read) are all re-baselined to that pointer's
+   *   current position. Without this, the very next pointermove for the
+   *   surviving finger would compute a pan/drag delta against wherever it was
+   *   dragged to potentially several inches ago, at the moment it first
+   *   pressed down - a large, jarring jump.
+   * - 1->0 or 2->0 (last finger(s) lift): activeTouchPointers empties,
+   *   twoFingerGestureActive turns off, baseline nulled. Both orders (lift
+   *   one-then-other vs both nearly simultaneously) reduce to the same final
+   *   state since each pointerup is handled independently.
+   */
+  private setupTouchGestures(): void {
+    const endTwoFingerGesture = (): void => {
+      this.twoFingerGestureActive = false;
+      this.twoFingerGestureIds = null;
+      this.twoFingerLastMidpointX = null;
+      this.twoFingerLastMidpointY = null;
+      this.twoFingerLastDistance = null;
+    };
+
+    // Re-baseline the surviving finger so the ordinary single-finger
+    // pan/drag/tap code (which only ever reads lastPointerX/Y and
+    // pointerDownX/Y, with no knowledge a pinch just ended) starts fresh
+    // from here rather than jumping back to that finger's original
+    // touchdown point (or, worse, computing a delta against the OTHER
+    // finger's last position).
+    const rebaselineSingleFinger = (pointer: Phaser.Input.Pointer): void => {
+      this.lastPointerX = pointer.x;
+      this.lastPointerY = pointer.y;
+      this.pointerDownX = pointer.x;
+      this.pointerDownY = pointer.y;
+      const world = this.pointerWorldPoint(pointer);
+      this.dragStartWorldX = world.x;
+      this.dragStartWorldY = world.y;
+    };
+
+    const removeTouchPointer = (pointer: Phaser.Input.Pointer): void => {
+      this.activeTouchPointers.delete(pointer.id);
+
+      const wasDrivingGesture =
+        this.twoFingerGestureIds !== null &&
+        (this.twoFingerGestureIds[0] === pointer.id || this.twoFingerGestureIds[1] === pointer.id);
+
+      if (wasDrivingGesture) {
+        // Either driving finger lifting ends the WHOLE gesture outright, even
+        // if a stray 3rd touch is still down - see twoFingerGestureIds' own
+        // doc comment for why a 3rd finger is never promoted into the pair.
+        endTwoFingerGesture();
+
+        // Exactly one other touch pointer remains (the gesture's other
+        // finger, if it's still down) -> that's a real single-finger
+        // continuation and needs re-baselining. Zero or 2+ remaining means
+        // either everything lifted (nothing to re-baseline) or a stray extra
+        // finger makes "the" remaining pointer ambiguous, so no single-finger
+        // gesture resumes until it's down to exactly one.
+        if (this.activeTouchPointers.size === 1) {
+          const remaining = this.activeTouchPointers.values().next().value as
+            | Phaser.Input.Pointer
+            | undefined;
+          if (remaining) {
+            rebaselineSingleFinger(remaining);
+          }
+        }
+      }
+    };
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.wasTouch) {
+        return;
+      }
+      this.activeTouchPointers.set(pointer.id, pointer);
+
+      if (this.twoFingerGestureIds === null && this.activeTouchPointers.size === 2) {
+        const [p1, p2] = [...this.activeTouchPointers.values()];
+        this.twoFingerGestureActive = true;
+        this.twoFingerGestureIds = [p1.id, p2.id];
+        this.twoFingerLastMidpointX = (p1.x + p2.x) / 2;
+        this.twoFingerLastMidpointY = (p1.y + p2.y) / 2;
+        this.twoFingerLastDistance = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+        this.touchPointersSuppressedForTap.add(p1.id);
+        this.touchPointersSuppressedForTap.add(p2.id);
+
+        // A second finger landing mid-drag must not leave a stray selection
+        // box or line-placement preview on screen once the gesture takes
+        // over - these are the only two "drawn while a single finger is held
+        // down" visuals a pinch could interrupt (the placement preview
+        // itself is harmless to leave showing, and hiding it here would
+        // fight updatePreview's own per-move redraw the moment the pinch
+        // ends).
+        this.selectionRectGraphics.clear();
+        if (this.lineDragWasActive) {
+          this.hideLinePreview();
+          this.lineDragWasActive = false;
+        }
+      } else if (this.twoFingerGestureIds !== null) {
+        // A stray 3rd+ touch while a gesture is already locked in (e.g. a
+        // resting palm) is tracked for cleanup purposes only - it never
+        // joins the driving pair and can't affect the gesture's math -
+        // but is still marked non-tap-worthy in case it's the finger that
+        // ends up lifting last.
+        this.touchPointersSuppressedForTap.add(pointer.id);
+      }
+    });
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.wasTouch || !this.activeTouchPointers.has(pointer.id)) {
+        return;
+      }
+      // Keep the tracked pointer reference fresh (Phaser reuses the same
+      // Pointer object per slot, so this is mostly a no-op, but the
+      // activeTouchPointers.has check above is what matters for correctness
+      // here).
+      this.activeTouchPointers.set(pointer.id, pointer);
+
+      if (
+        !this.twoFingerGestureActive ||
+        this.twoFingerGestureIds === null ||
+        this.twoFingerLastMidpointX === null ||
+        this.twoFingerLastMidpointY === null ||
+        this.twoFingerLastDistance === null
+      ) {
+        return;
+      }
+
+      // Only the two pointers actually driving the gesture ever feed its
+      // math - a moving stray 3rd finger is fully ignored, not just excluded
+      // from "the first two by iteration order" (see twoFingerGestureIds).
+      const p1 = this.activeTouchPointers.get(this.twoFingerGestureIds[0]);
+      const p2 = this.activeTouchPointers.get(this.twoFingerGestureIds[1]);
+      if (!p1 || !p2) {
+        return;
+      }
+
+      const midpointX = (p1.x + p2.x) / 2;
+      const midpointY = (p1.y + p2.y) / 2;
+      const distance = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+
+      const camera = this.cameras.main;
+
+      // Pan: same raw, unscaled-by-zoom screen-px delta straight onto
+      // scrollX/scrollY that the existing right-drag pan uses (setupCameraDrag).
+      const panDx = midpointX - this.twoFingerLastMidpointX;
+      const panDy = midpointY - this.twoFingerLastMidpointY;
+      camera.scrollX -= panDx;
+      camera.scrollY -= panDy;
+
+      // Zoom: re-anchor the pre-zoom world point under the (post-pan) midpoint,
+      // mirroring setupCameraZoom's wheel-zoom-to-cursor logic exactly, just
+      // driven by a distance ratio instead of a fixed step per wheel notch.
+      if (this.twoFingerLastDistance > 0) {
+        const preZoomWorld = camera.getWorldPoint(midpointX, midpointY);
+        const zoomRatio = distance / this.twoFingerLastDistance;
+        const nextZoom = Phaser.Math.Clamp(
+          camera.zoom * zoomRatio,
+          this.getMinZoom(),
+          CAMERA_MAX_ZOOM,
+        );
+        if (nextZoom !== camera.zoom) {
+          camera.setZoom(nextZoom);
+          const postZoomWorld = camera.getWorldPoint(midpointX, midpointY);
+          camera.scrollX += preZoomWorld.x - postZoomWorld.x;
+          camera.scrollY += preZoomWorld.y - postZoomWorld.y;
+        }
+      }
+
+      this.twoFingerLastMidpointX = midpointX;
+      this.twoFingerLastMidpointY = midpointY;
+      this.twoFingerLastDistance = distance;
+      this.redrawMinimapViewportThrottled();
+    });
+
+    const handleTouchRelease = (pointer: Phaser.Input.Pointer): void => {
+      if (!pointer.wasTouch) {
+        return;
+      }
+      removeTouchPointer(pointer);
+    };
+
+    this.input.on('pointerup', handleTouchRelease);
+    this.input.on('pointerupoutside', handleTouchRelease);
+
+    gameEvents.on('game-reset', () => {
+      this.activeTouchPointers.clear();
+      endTwoFingerGesture();
+      this.touchPointersSuppressedForTap.clear();
+    });
+  }
+
+  /**
+   * Phase 65: true if this pointerup should NOT trigger a tap-action (place/
+   * select/box-select-resolve/move-order/attack-order/rally-point-pick) -
+   * either it just took part in a two-finger gesture, or the gesture is
+   * somehow still flagged active (defensive; the count-based check in
+   * removeTouchPointer should already have cleared it by the time any
+   * pointerup listener runs, since setupTouchGestures' own pointerup handler
+   * is registered before setupBuildingPlacement/setupBuildingSelection/
+   * setupUnitControl in create()'s call order and Phaser fires listeners for
+   * the same event in registration order). Consumes (deletes) the pointer's
+   * suppression flag so a later, genuinely-fresh single-finger tap on the
+   * same recycled pointer slot isn't permanently suppressed.
+   */
+  private consumeTouchTapSuppression(pointer: Phaser.Input.Pointer): boolean {
+    if (!pointer.wasTouch) {
+      return false;
+    }
+    const wasSuppressed = this.touchPointersSuppressedForTap.delete(pointer.id);
+    return wasSuppressed || this.twoFingerGestureActive;
   }
 
   /**
@@ -1869,6 +2168,24 @@ export class MainScene extends Phaser.Scene {
       if (this.isPointerInMinimap(pointer)) {
         return;
       }
+      // Phase 65: setupTouchGestures' own pointerdown listener (registered
+      // earlier in create()) has already flipped twoFingerGestureActive on by
+      // the time this runs, the instant a second finger lands - a single-tap
+      // placement must not fire off the finger that happens to complete the
+      // pinch's pointerdown pair.
+      if (this.twoFingerGestureActive) {
+        return;
+      }
+      // Phase 65: touch produces no hover - pointermove only fires while a
+      // finger is already down - so without this, the placement preview
+      // (and its rejection-reason hint) would only appear after the finger
+      // started moving, one full drag-distance late. Gated to wasTouch so
+      // mouse behavior (which never called updatePreview from pointerdown)
+      // is unaffected; a mouse's own hover already drives updatePreview via
+      // pointermove well before any click.
+      if (pointer.wasTouch && this.selectedType !== null) {
+        this.updatePreview(pointer);
+      }
       if (pointer.rightButtonDown()) {
         gameEvents.emit('cancel-placement');
         return;
@@ -1888,6 +2205,13 @@ export class MainScene extends Phaser.Scene {
     });
 
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      // Phase 65: a two-finger gesture ending must never be read as "commit
+      // the line" - consumeTouchTapSuppression both checks and clears this
+      // pointer's flag, so a later genuine single-finger tap isn't stuck
+      // suppressed forever.
+      if (this.consumeTouchTapSuppression(pointer)) {
+        return;
+      }
       if (
         this.selectedType === null ||
         !isLinePlacementBuilding(this.selectedType) ||
@@ -1905,6 +2229,13 @@ export class MainScene extends Phaser.Scene {
       const wasMinimapClick = this.minimapPointerActive;
       this.minimapPointerActive = false;
       if (wasMinimapClick) {
+        return;
+      }
+
+      // Phase 65: same two-finger-gesture-ending guard as the line-placement
+      // commit above - a pinch/pan releasing must not be read as "tap to
+      // select/deselect a building".
+      if (this.consumeTouchTapSuppression(pointer)) {
         return;
       }
 
@@ -2216,6 +2547,9 @@ export class MainScene extends Phaser.Scene {
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.twoFingerGestureActive) {
+        return;
+      }
       if (!this.demolishMode || !pointer.leftButtonDown() || this.isPointerInMinimap(pointer)) {
         return;
       }
@@ -3809,6 +4143,15 @@ export class MainScene extends Phaser.Scene {
       // guard below fires next, so no stray box can ever outlive its drag.
       this.selectionRectGraphics.clear();
 
+      // Phase 65: a pinch/pan gesture ending must never be read as a unit
+      // command, a rally-point pick, or a selection change - checked (and
+      // cleared) before every other branch below, mirroring the same guard
+      // added to setupBuildingPlacement/setupBuildingSelection's pointerup
+      // handlers.
+      if (this.consumeTouchTapSuppression(pointer)) {
+        return;
+      }
+
       if (this.selectedType !== null || this.isPointerInMinimap(pointer)) {
         return;
       }
@@ -3822,44 +4165,33 @@ export class MainScene extends Phaser.Scene {
       const world = this.pointerWorldPoint(pointer);
 
       if (pointer.rightButtonReleased()) {
-        // Phase 53: an armed rally-point pick takes over this right-click
-        // entirely, ahead of the unit move/attack-order logic below - a
-        // qualifying click (not a right-drag pan past the threshold) sets the
-        // rally point and disarms; anything else (a pan) leaves the mode
-        // armed for a later attempt.
-        if (this.rallyPointModeBuildingId !== null) {
-          if (dragDistance <= CLICK_MOVE_THRESHOLD) {
-            setRallyPoint(this.rallyPointModeBuildingId, world.x, world.y);
-            gameEvents.emit('rally-point-mode-changed', null);
-          }
-          return;
-        }
-
-        if (dragDistance > CLICK_MOVE_THRESHOLD || this.selectedUnits.length === 0) {
-          return;
-        }
-        // Phase 40: right-clicking directly on a live raider issues a focus-fire
-        // attack order on that specific raider instead of a plain move order;
-        // Phase 57 extends the same hit-test to a live Raider Camp (checked
-        // second - a raider standing in front of its own camp still wins);
-        // right-clicking anything else (empty ground, a building, etc.) keeps
-        // the original move-order behavior unchanged.
-        const raider = this.findRaiderAt(world.x, world.y);
-        if (raider) {
-          this.issueUnitAttackOrder({ kind: 'raider', id: raider.id }, { x: raider.image.x, y: raider.image.y });
-          return;
-        }
-        const camp = this.findCampAt(world.x, world.y);
-        if (camp) {
-          this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
-        } else {
-          this.issueUnitMoveOrders(pointer);
-        }
+        this.resolveRallyOrCommandOrder(pointer, world, dragDistance);
         return;
       }
 
       if (!pointer.leftButtonReleased()) {
         return;
+      }
+
+      // Phase 65: single-finger tap-to-order, mode-aware. A plain left-click
+      // release on desktop (mouse) still ONLY selects/box-selects, exactly as
+      // before - this branch is gated on the release having come from a touch
+      // pointer specifically, so mouse behavior is untouched byte-for-byte.
+      // See resolveTouchTapAction's own doc comment for the full precedence
+      // rule (rally-pick > select-a-unit > raider/camp/move-order). An armed
+      // rally-point pick (item 3 of the phase spec) is reachable via touch
+      // even with zero units selected - it's a building-mode action, not a
+      // unit-order one - so it's checked here independently of
+      // selectedUnits.length rather than folded into that same guard.
+      if (pointer.wasTouch && dragDistance <= CLICK_MOVE_THRESHOLD && !this.demolishMode) {
+        if (this.rallyPointModeBuildingId !== null) {
+          this.resolveRallyOrCommandOrder(pointer, world, dragDistance);
+          return;
+        }
+        if (this.selectedUnits.length > 0) {
+          this.resolveTouchTapAction(pointer, world, dragDistance);
+          return;
+        }
       }
 
       if (dragDistance <= CLICK_MOVE_THRESHOLD) {
@@ -3871,6 +4203,95 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Phase 65: the right-click-release command chain, extracted verbatim out
+   * of setupUnitControl's pointerup handler so touch's single-finger-tap
+   * order (resolveTouchTapAction) can call the exact same raider/camp/
+   * move-order resolution instead of a second copy. Behavior for the mouse
+   * right-click caller is completely unchanged - this is a pure extraction,
+   * not a rewrite.
+   */
+  private resolveRallyOrCommandOrder(
+    pointer: Phaser.Input.Pointer,
+    world: Phaser.Math.Vector2,
+    dragDistance: number,
+  ): void {
+    // Phase 53: an armed rally-point pick takes over this right-click
+    // entirely, ahead of the unit move/attack-order logic below - a
+    // qualifying click (not a right-drag pan past the threshold) sets the
+    // rally point and disarms; anything else (a pan) leaves the mode
+    // armed for a later attempt.
+    if (this.rallyPointModeBuildingId !== null) {
+      if (dragDistance <= CLICK_MOVE_THRESHOLD) {
+        setRallyPoint(this.rallyPointModeBuildingId, world.x, world.y);
+        gameEvents.emit('rally-point-mode-changed', null);
+      }
+      return;
+    }
+
+    if (dragDistance > CLICK_MOVE_THRESHOLD || this.selectedUnits.length === 0) {
+      return;
+    }
+    // Phase 40: right-clicking directly on a live raider issues a focus-fire
+    // attack order on that specific raider instead of a plain move order;
+    // Phase 57 extends the same hit-test to a live Raider Camp (checked
+    // second - a raider standing in front of its own camp still wins);
+    // right-clicking anything else (empty ground, a building, etc.) keeps
+    // the original move-order behavior unchanged.
+    const raider = this.findRaiderAt(world.x, world.y);
+    if (raider) {
+      this.issueUnitAttackOrder({ kind: 'raider', id: raider.id }, { x: raider.image.x, y: raider.image.y });
+      return;
+    }
+    const camp = this.findCampAt(world.x, world.y);
+    if (camp) {
+      this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
+    } else {
+      this.issueUnitMoveOrders(pointer);
+    }
+  }
+
+  /**
+   * Phase 65: a single-finger TAP (drag distance <= CLICK_MOVE_THRESHOLD)
+   * with units currently selected AND no armed rally-point pick (that case is
+   * intercepted one level up, in setupUnitControl's pointerup handler, before
+   * this is ever called - see its own comment). Only reachable with
+   * pointer.wasTouch - mouse left-clicks never call this, so desktop behavior
+   * is unaffected.
+   *
+   * Precedence (documented per the phase spec):
+   * 1. An armed rally-point pick wins outright (handled by the caller, ahead
+   *    of this method - not repeated here to avoid two sources of truth for
+   *    the same branch).
+   * 2. Otherwise, if the tap hits a LIVE UNIT (findAliveUnitAt, using the
+   *    same COWBOY_SELECT_HIT_RADIUS_PX selectUnitAt already hit-tests
+   *    against - practical because it's a generous 10px radius, roughly a
+   *    fingertip's worth of slop at this game's zoom range), selecting that
+   *    unit wins over issuing an order onto it. Without this rule a touch
+   *    player could tap a second unit while one is already selected and
+   *    NEVER change their selection - every tap would be interpreted as a
+   *    move/attack order onto the point they were trying to select at,
+   *    a genuine dead end this phase's brief explicitly calls out.
+   * 3. Only a tap that hits no unit falls through to the shared raider/camp/
+   *    move-order chain - the same deselect-by-tapping-empty-ground-issues-a-
+   *    move-order behavior the brief accepts as the intended escape hatch
+   *    (Escape/re-opening the building/placement UI already clears unit
+   *    selection elsewhere).
+   */
+  private resolveTouchTapAction(
+    pointer: Phaser.Input.Pointer,
+    world: Phaser.Math.Vector2,
+    dragDistance: number,
+  ): void {
+    const hitUnit = this.findAliveUnitAt(world.x, world.y);
+    if (hitUnit) {
+      this.selectUnitAt(pointer);
+      return;
+    }
+
+    this.resolveRallyOrCommandOrder(pointer, world, dragDistance);
+  }
+
+  /**
    * Phase 41: a second click-select on the SAME unit within
    * UNIT_DOUBLE_CLICK_MS selects every currently-alive unit of that unit's
    * kind (cowboy vs cowboyOnHorse) rather than just the one clicked -
@@ -3879,20 +4300,8 @@ export class MainScene extends Phaser.Scene {
    * Cowboy, on-screen or not).
    */
   private selectUnitAt(pointer: Phaser.Input.Pointer): void {
-    let hit: CombatUnit | null = null;
-    let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
     const world = this.pointerWorldPoint(pointer);
-
-    for (const unit of this.cowboyUnits) {
-      if (!this.isCowboyUnitAlive(unit)) {
-        continue;
-      }
-      const distance = Phaser.Math.Distance.Between(world.x, world.y, unit.image.x, unit.image.y);
-      if (distance <= bestDistance) {
-        bestDistance = distance;
-        hit = unit;
-      }
-    }
+    const hit = this.findAliveUnitAt(world.x, world.y);
 
     if (!hit) {
       this.selectedUnits = [];
@@ -3955,6 +4364,32 @@ export class MainScene extends Phaser.Scene {
       const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       this.issueUnitMoveOrder(unit, world.x + jitterX, world.y + jitterY);
     }
+  }
+
+  /**
+   * Nearest currently-alive CombatUnit to a world point within
+   * COWBOY_SELECT_HIT_RADIUS_PX, or null. Extracted out of selectUnitAt
+   * (Phase 65) so the touch tap-order path can run the same "did this tap
+   * actually hit one of my own units" check selectUnitAt uses, without
+   * duplicating the loop - see resolveTouchTapAction's doc comment for why
+   * that check has to happen before the raider/camp/move-order chain.
+   */
+  private findAliveUnitAt(worldX: number, worldY: number): CombatUnit | null {
+    let best: CombatUnit | null = null;
+    let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
+
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(worldX, worldY, unit.image.x, unit.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = unit;
+      }
+    }
+
+    return best;
   }
 
   /** Nearest live raider to a world point within RAIDER_ATTACK_HIT_RADIUS_PX, or null - the hit-test that tells a right-click-on-a-raider (attack order) apart from a right-click-on-ground (move order). */
@@ -4189,6 +4624,16 @@ export class MainScene extends Phaser.Scene {
       // emitting a bare event.
       if (event.code === 'KeyE') {
         this.toggleEnclosureDebugOverlay();
+        event.preventDefault();
+      }
+
+      // Phase 64: 'H' (or '?', the conventional help key - Slash carries it
+      // on most layouts) toggles the hotkey/resource-chain reference. Bare
+      // emit like 'C'/'V': HelpOverlay owns all of its own state. Neither key
+      // was previously bound (checked against WASD/arrows, Shift, digits 1-9,
+      // Space, Delete/Backspace, C, V, E and Esc).
+      if (event.code === 'KeyH' || event.code === 'Slash') {
+        gameEvents.emit('toggle-help-overlay');
         event.preventDefault();
       }
     });

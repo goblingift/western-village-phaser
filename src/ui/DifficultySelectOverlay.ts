@@ -2,6 +2,7 @@ import { Difficulty, DIFFICULTY_SETTINGS, RunMode } from '../config/constants';
 import { resetGame } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
 import { getMostRecentSaveSlotName, loadFromSlot } from '../state/persistence';
+import { RunRecord, formatDuration, getAllRecords, recordKey } from '../state/records';
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   easy: 'Easy',
@@ -94,9 +95,48 @@ export class DifficultySelectOverlay {
       <h3>Run Length</h3>
       <div class="option-row">${modeButtons}</div>
       <div class="stat">${MODE_DESCRIPTIONS[this.selectedMode]}</div>
+      ${this.renderRecordsSection()}
       <button id="start-run-button">Start New Game</button>
     `;
 
+    this.attachHandlers(mostRecentSlot);
+  }
+
+  /**
+   * Phase 64: shows what the player is chasing BEFORE the run starts. The
+   * currently-selected difficulty+mode is called out in full (it re-renders on
+   * every option click, so it always describes the combo about to be played),
+   * with the remaining combos listed compactly underneath for context. Combos
+   * never played are omitted entirely rather than listed as rows of zeroes.
+   */
+  private renderRecordsSection(): string {
+    const all = getAllRecords();
+    const selectedKey = recordKey(this.selectedDifficulty, this.selectedMode);
+    const selected: RunRecord | undefined = all[selectedKey];
+
+    const selectedBlock = selected
+      ? `<div class="stat">Best here: $${selected.bestNetWorth} &middot; ${formatDuration(
+          selected.longestSurvivalSeconds,
+        )} &middot; day ${selected.mostDaysSurvived}</div>`
+      : '<div class="stat">No record yet on these settings.</div>';
+
+    const others = Object.entries(all)
+      .filter(([key]) => key !== selectedKey)
+      .map(([key, record]) => {
+        const [difficulty, mode] = key.split(':') as [Difficulty, RunMode];
+        const label = `${DIFFICULTY_LABELS[difficulty] ?? difficulty} / ${MODE_LABELS[mode] ?? mode}`;
+        return `<div class="record-row">${label}: $${record.bestNetWorth} &middot; day ${record.mostDaysSurvived}</div>`;
+      })
+      .join('');
+
+    return `
+      <h3>Records</h3>
+      ${selectedBlock}
+      ${others}
+    `;
+  }
+
+  private attachHandlers(mostRecentSlot: string | null): void {
     this.content.querySelectorAll<HTMLButtonElement>('.difficulty-option').forEach((button) => {
       button.addEventListener('click', () => {
         this.selectedDifficulty = button.dataset.difficulty as Difficulty;

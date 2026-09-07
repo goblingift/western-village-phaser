@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>Western Village</title>
     <style>
       html,
@@ -10,13 +13,116 @@
         margin: 0;
         padding: 0;
         background: #2b1d12;
+        /* Kill pull-to-refresh/rubber-band scrolling: without this, any
+           downward swipe near the top of the page (e.g. panning the camera
+           with a two-finger drag that starts near the top edge) can trigger
+           the browser's own refresh/overscroll gesture on top of the game's
+           own gesture handling. */
+        overscroll-behavior: none;
+      }
+      /* Mobile-browser interference guards, scoped precisely so they never
+         defeat a real scroll region (NotificationLogPanel/StatisticsPanel/
+         DifficultySelectOverlay/GameOverOverlay all rely on native
+         overflow-y:auto scrolling and must stay scrollable). */
+      html,
+      body,
+      #stage,
+      #stage canvas,
+      #building-bar,
+      #resource-tooltip,
+      #objectives-panel {
+        /* Long-press must never start a text selection or show the iOS
+           text-selection callout/magnifier - both would interrupt a raid
+           attack-order tap-and-hold or a drag gesture. */
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        /* Removes the grey flash Android/iOS browsers paint on every tap. */
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* The canvas is the one element that must claim 100% of touch gestures
+         itself: MainScene now implements its own two-finger pan/pinch-zoom
+         and single-finger tap/drag, and the browser's native pinch-zoom,
+         double-tap-zoom and scroll-via-drag would otherwise fight it directly.
+         touch-action:none is deliberately NOT applied to html/body/#app (that
+         would also swallow touches over the scrollable DOM panels below,
+         since touch-action does not "pierce" descendant elements the way
+         overflow does) - only to the actual play-area surface. */
+      #stage,
+      #stage canvas {
+        touch-action: none;
+      }
+      /* Scrollable DOM overlays: allow vertical panning/scrolling but still
+         suppress the browser's own double-tap-to-zoom and horizontal pan
+         inside them, matching how a native app's scroll views behave. */
+      #building-info-panel,
+      #notification-log-panel .notification-log-list,
+      #statistics-panel,
+      #help-panel,
+      #game-over-panel,
+      #difficulty-select-panel {
+        touch-action: pan-y;
       }
       #app {
         display: flex;
         flex-direction: column;
         align-items: center;
         min-height: 100vh;
+        max-height: 100vh;
         justify-content: center;
+      }
+      /* Phase 64: with Scale.FIT the canvas resizes to whatever box it's given,
+         so #stage must be allowed to shrink (min-height:0 defeats the default
+         flex-item min-content floor) and must not grow past the space the
+         building bar leaves. Without this the canvas would happily size itself
+         to the full viewport height and push the bar off-screen on short
+         windows - the exact clipping FIT was adopted to fix. */
+      #stage {
+        /* Shrink-wrap the canvas rather than stretch: FIT letterboxes to
+           preserve the 3:2 aspect, and a stretched wrapper would leave the
+           right/bottom-anchored overlays floating out in the letterbox bars
+           instead of sitting on the play area's actual corners. Sizing to the
+           canvas keeps every overlay glued to the visible game edge.
+
+           Phase 65 (regression fix): this shrink-wrap only actually happens
+           because gameConfig.ts now sets `expandParent: false`. Phaser's
+           ScaleManager.getParent() runs before the canvas is injected, sees a
+           still-empty #stage measuring 0 tall, decides "clearly no CSS has
+           been set on it" and writes `width:100%; height:100%` as an INLINE
+           style onto the parent - which beats every rule in this stylesheet,
+           pinned #stage to the full 1440px of #app, made `align-items:center`
+           a no-op (an item already filling the cross axis has nothing left to
+           center) and left the 960px canvas laid out at that block's top-left
+           origin. `width: fit-content` is what makes the wrapper adopt the
+           canvas's real letterboxed size once Phaser stops overriding it.
+
+           The wrapper is sized INDEPENDENTLY of the canvas, not shrink-wrapped
+           to it. Shrink-wrapping (width/height: fit-content) centres correctly
+           but is genuinely circular under FIT: Phaser sizes the canvas from
+           parentSize (= #stage), while #stage would size from the canvas. That
+           deadlock is one-directional in practice - the canvas can shrink the
+           wrapper but can never grow it again - so dragging a window smaller
+           and back left the canvas permanently stuck at its smallest-ever size
+           (615x410 in a 1600x1000 window) even though the max-height cap had
+           correctly reopened to 640px.
+
+           Instead #stage derives its own box from the 3:2 aspect of
+           VIEWPORT_WIDTH x VIEWPORT_HEIGHT (960x640): it takes the width
+           available to it, never exceeds the native 960px (no upscaling of
+           pixel art past 1:1) and never exceeds --stage-max-h (the viewport
+           height minus the building bar - see main.ts). aspect-ratio then
+           derives the height, so FIT fills the wrapper exactly and #stage
+           still hugs the visible play area on all four edges, keeping every
+           anchored overlay glued to it. flex-shrink is 0 so #app's
+           `max-height: 100vh` can't squeeze the wrapper shorter than the
+           canvas inside it - that squeeze is what made `overflow: hidden`
+           silently clip the bottom ~83px of the play area at 800x600. */
+        flex: 0 0 auto;
+        aspect-ratio: 960 / 640;
+        width: min(100%, 960px, calc(var(--stage-max-h, 640px) * 960 / 640));
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
       }
       #building-bar {
         display: flex;
@@ -165,6 +271,20 @@
          sitting on top of it (and swallowing its clicks). */
       #stage {
         position: relative;
+      }
+      /* Phase 64: FIT writes the scaled size onto the canvas's own style, so
+         the wrapper tracks it automatically and every #stage-anchored overlay
+         (info panel, notification log, statistics, objectives, tooltip) stays
+         glued to the play area's real on-screen corners at any window size.
+
+         Phase 65: #stage now carries the real size constraints (see its rule
+         above), so the canvas simply fills it. FIT computes the same 3:2
+         letterbox the wrapper already has, so these caps just stop a
+         sub-pixel rounding difference from spilling out of the wrapper and
+         being clipped. */
+      #stage canvas {
+        max-width: 100%;
+        max-height: 100%;
       }
       /* Block display (rather than line-height:0 on the wrapper) removes the
          canvas's inline-element descender gap without imposing a zero
@@ -599,6 +719,18 @@
         padding: 24px 32px;
         min-width: 260px;
         text-align: center;
+        /* Phase 64 added a records section to this panel, so on a short window
+           it can now outgrow the viewport - scroll rather than clip the Play
+           Again button out of reach. */
+        max-height: 90vh;
+        overflow-y: auto;
+      }
+      /* Phase 64: the "NEW BEST!" flag next to a beaten record. */
+      #game-over-panel .new-best {
+        color: #8bc34a;
+        font-weight: bold;
+        font-size: 12px;
+        margin-left: 6px;
       }
       #game-over-panel h2 {
         margin-top: 0;
@@ -645,6 +777,140 @@
       #difficulty-select-overlay[hidden] {
         display: none;
       }
+      /* Phase 64: the first-run tutorial card. Docked bottom-center - the one
+         band not already taken by the HUD/minimap (top-left), statistics
+         (top-right), objectives (top-center), info panel (bottom-right) or
+         notification log (bottom-left). Deliberately narrow and offset from
+         both bottom corners so it sits between the two bottom panels rather
+         than over either of them. */
+      #tutorial-panel {
+        position: absolute;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        /* The bottom-left notification log (280px) and bottom-right info panel
+           are CSS-sized and do NOT shrink with the canvas, so on a small
+           window this card can't stay clear of both. It caps at 340px, never
+           drops below 240px, and is centered - so at worst it slightly
+           overlaps a panel edge on a very narrow window rather than
+           collapsing to an unreadable strip. */
+        width: 340px;
+        max-width: calc(100% - 32px);
+        min-width: 240px;
+        background: #2b1d12f2;
+        border: 1px solid #ffd54f;
+        border-radius: 6px;
+        padding: 10px 14px;
+        color: #f2e6d8;
+        font-family: sans-serif;
+        font-size: 12px;
+        z-index: 1400;
+        box-shadow: 0 2px 12px #0008;
+      }
+      #tutorial-panel .tutorial-progress {
+        font-size: 10px;
+        color: #8d7f6e;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      #tutorial-panel .tutorial-title {
+        color: #ffd54f;
+        font-weight: bold;
+        margin: 2px 0 4px;
+      }
+      #tutorial-panel .tutorial-body {
+        line-height: 1.45;
+      }
+      #tutorial-panel .tutorial-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      #tutorial-panel button {
+        background: #4a3524;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      #tutorial-panel .tutorial-advance {
+        background: #4caf50;
+        border-color: #4caf50;
+        color: #fff;
+      }
+      /* Phase 64: help/reference modal. Same fixed-backdrop pattern as
+         #game-over-overlay / #difficulty-select-overlay. */
+      #help-overlay {
+        position: fixed;
+        inset: 0;
+        background: #000000b3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+      }
+      #help-overlay[hidden] {
+        display: none;
+      }
+      #help-panel {
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 8px;
+        padding: 20px 26px;
+        width: 620px;
+        max-width: 92vw;
+        max-height: 88vh;
+        overflow-y: auto;
+        font-family: sans-serif;
+        font-size: 12px;
+      }
+      #help-panel h2 {
+        margin-top: 0;
+      }
+      #help-panel h3 {
+        margin-bottom: 4px;
+        font-size: 13px;
+        color: #ffd54f;
+      }
+      #help-panel .help-note {
+        color: #8d7f6e;
+        font-size: 11px;
+        margin-bottom: 6px;
+      }
+      #help-panel .help-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      #help-panel .help-table td {
+        padding: 3px 6px;
+        vertical-align: top;
+        border-bottom: 1px solid #ffffff14;
+        line-height: 1.4;
+      }
+      #help-panel .help-key {
+        color: #ffd54f;
+        white-space: nowrap;
+        width: 150px;
+        font-weight: bold;
+      }
+      #help-panel .help-actions {
+        margin-top: 14px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      #help-panel button {
+        background: #4a3524;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 6px 14px;
+        cursor: pointer;
+      }
       #difficulty-select-panel {
         background: #2b1d12;
         color: #f2e6d8;
@@ -653,6 +919,16 @@
         padding: 24px 32px;
         min-width: 320px;
         text-align: center;
+        /* Same rationale as #game-over-panel: Phase 64's records list made
+           this panel taller, so it must scroll rather than push its Start
+           button off a short viewport. */
+        max-height: 90vh;
+        overflow-y: auto;
+      }
+      /* Phase 64: one compact per-difficulty/mode line in the records list. */
+      #difficulty-select-panel .record-row {
+        font-size: 11px;
+        color: #b8a894;
       }
       #difficulty-select-panel h2 {
         margin-top: 0;
@@ -718,6 +994,269 @@
       }
       #difficulty-select-panel button#continue-run-button:hover {
         background: #448aff;
+      }
+
+      /* Touch-target sizing pass, scoped to touch-primary devices only via
+         `pointer: coarse` (the standards-based way to detect "the primary
+         input is a finger, not a mouse") - never a blanket resize, so the
+         desktop mouse/trackpad layout above is completely untouched. Every
+         rule here only ADDS min-height/min-width/padding/margin so a small
+         icon/label/slider keeps its exact look and just gets a larger,
+         easier-to-hit hit area (~44x44 CSS px, the common mobile guideline)
+         around it. Declared last so normal CSS source-order cascading (not
+         !important) is enough to win over the desktop rules above at equal
+         specificity. */
+      @media (pointer: coarse) {
+        /* --- Building bar: top-row controls --- */
+        /* Category tabs. Before: padding 5px 8px, font 12px (~22px tall).
+           After: min 44x44. */
+        #building-bar button.tab {
+          min-height: 44px;
+          min-width: 44px;
+          padding: 10px 12px;
+        }
+        /* Bulldoze / speed (pause, 1x/2x/4x) / mute / Stats / Help / Save /
+           Load buttons all share button.speed or are plain buttons in the
+           top row. Before: min-width 34px, padding 5px 6px, font 12px
+           (~22px tall). After: min 44x44. */
+        #building-bar button.danger,
+        #building-bar button.speed {
+          min-height: 44px;
+          min-width: 44px;
+          padding: 10px 12px;
+        }
+        /* Row gap widened so adjacent 44px targets don't visually/physically
+           touch, which invites mis-taps. */
+        #building-bar .bar-row {
+          gap: 10px;
+          row-gap: 10px;
+        }
+        #building-bar .speed-group {
+          gap: 8px;
+        }
+        /* SFX/music volume sliders. Before: 72px wide track, native thumb
+           (~12-16px on most mobile browsers - well under the guideline).
+           After: taller track + explicit larger thumb on both slider engines
+           (WebKit/Blink and Gecko need separate pseudo-elements - there is no
+           shared standard one), width also increased since the track itself
+           is a draggable target, not just the thumb. */
+        #building-bar .volume {
+          width: 120px;
+          height: 28px;
+        }
+        #building-bar .volume::-webkit-slider-thumb {
+          width: 28px;
+          height: 28px;
+        }
+        #building-bar .volume::-moz-range-thumb {
+          width: 28px;
+          height: 28px;
+        }
+        /* --- Building bar: building icon buttons --- */
+        /* Before: padding 4px 8px, min-width 74px, height driven by content
+           (28px icon + label + cost + gaps) - roughly 74x58, already close on
+           height but tight on gap-driven mis-taps between neighbors. After:
+           slightly larger footprint plus more breathing room around each. */
+        #building-bar button.building-button {
+          min-width: 80px;
+          min-height: 64px;
+          padding: 8px 10px;
+        }
+        #building-bar .building-panel {
+          gap: 10px;
+          row-gap: 10px;
+          min-height: 64px;
+        }
+
+        /* --- BuildingInfoPanel: action buttons (Buy Animal / Repair /
+           Demolish / Train Cowboy-Brawler-Dynamiter / Set-Clear Rally Point
+           etc, all plain `#building-info-panel button`). Before: padding
+           6px 10px, font 13px (~25px tall). After: min 44px tall, full
+           min-width guideline too since several of these are short-label
+           buttons ("Buy", "Repair"). --- */
+        #building-info-panel button {
+          min-height: 44px;
+          min-width: 44px;
+          padding: 10px 14px;
+        }
+        /* Priority (High/Normal/Low) and House-tier tab buttons are a denser
+           row of several buttons side by side - kept compact horizontally
+           (full 44px min-width per button would overflow the panel width
+           with 3-4 buttons in a row) but still given a full 44px tap height
+           and more inter-button gap. Before: padding 4px 8px, font 12px
+           (~20px tall). After: 44px tall. */
+        #building-info-panel button.priority-button,
+        #building-info-panel button.house-tier-tab {
+          min-height: 44px;
+          padding: 10px 10px;
+        }
+        #building-info-panel .priority-row,
+        #building-info-panel .house-tier-tabs {
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        /* Trading Post per-resource order row: the enable toggle is already
+           `button.priority-button` (covered above). The two number inputs
+           are the real problem - before: 44px wide, no explicit height
+           (browser default ~20-24px), PLUS native up/down spinner arrows
+           that are far smaller than 44px and notoriously mis-tappable.
+           After: full 44px-tall field, spinners removed (the field is still
+           directly typable/tappable-then-keyboard-editable, just without the
+           tiny stepper buttons), enough horizontal room to actually place a
+           thumb without covering the digits. */
+        #building-info-panel input.trade-order-input {
+          min-height: 44px;
+          width: 64px;
+          font-size: 14px;
+          padding: 6px 8px;
+        }
+        #building-info-panel input.trade-order-input::-webkit-outer-spin-button,
+        #building-info-panel input.trade-order-input::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        #building-info-panel input.trade-order-input {
+          -moz-appearance: textfield;
+        }
+        #building-info-panel .trade-order-row {
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        /* --- NotificationLogPanel: collapse header + clickable entries.
+           Before: header padding 6px 10px, font-weight bold at inherited
+           12px (~25px tall); entries padding 3px 0 at font-size 12px,
+           line-height 1.35 (~22px tall, and only the text's own width is
+           tappable). After: header to 44px tall; entries get vertical
+           padding pushing them to ~44px and the clickable ones become
+           full-width tap targets via block display. --- */
+        #notification-log-panel .notification-log-header {
+          min-height: 44px;
+          box-sizing: border-box;
+          padding: 12px 10px;
+          display: flex;
+          align-items: center;
+        }
+        #notification-log-panel .notification-log-entry {
+          padding: 10px 0;
+        }
+        #notification-log-panel .notification-log-entry.clickable {
+          display: block;
+        }
+
+        /* --- StatisticsPanel: click-to-sort column heading. Before: padding
+           8px 10px 4px at ~11px font (~23px tall, and only as wide as the
+           text). After: 44px tall, full-width tap target. --- */
+        #statistics-panel .statistics-panel-sort-heading {
+          min-height: 44px;
+          box-sizing: border-box;
+          padding: 12px 10px;
+          display: flex;
+          align-items: center;
+        }
+        #statistics-panel .statistics-panel-close {
+          min-height: 44px;
+          min-width: 44px;
+        }
+
+        /* --- Full-screen overlays: DifficultySelectOverlay option/Continue/
+           Start buttons, GameOverOverlay Play Again, TutorialOverlay
+           Continue/Skip, HelpOverlay Close/Replay-tutorial. All are plain
+           buttons inside their panel, so one rule per panel covers every
+           button in it. Before: ~8px 14-16px padding at 12-14px font
+           (~28-30px tall) for the overlay buttons; tutorial buttons are
+           smaller still (padding 4px 10px at 11px font, ~19px tall). After:
+           min 44px tall on every one, with tutorial's own tighter padding
+           bumped the most since it started smallest. --- */
+        #difficulty-select-panel button,
+        #game-over-panel button,
+        #help-panel button {
+          min-height: 44px;
+          min-width: 44px;
+          padding: 12px 16px;
+        }
+        #difficulty-select-panel .option-row {
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        #help-panel .help-actions {
+          gap: 10px;
+        }
+        #tutorial-panel button {
+          min-height: 44px;
+          min-width: 44px;
+          padding: 10px 14px;
+          font-size: 13px;
+        }
+        #tutorial-panel .tutorial-actions {
+          gap: 10px;
+        }
+
+        /* --- Narrow-screen layout: on a phone-width screen the building bar
+           (already several rows of 44px-tall buttons after the sizing above)
+           would eat a large share of the viewport height that #stage's
+           shrink-wrapped canvas needs, and the four corner/top overlay panels
+           (info panel bottom-right, notification log bottom-left, statistics
+           top-right, objectives top-center) can visually collide once the
+           canvas itself is narrow. Both are addressed only inside this same
+           coarse-pointer query so desktop's layout is untouched. --- */
+        @media (max-width: 720px) {
+          /* Each category's building panel becomes a single horizontally
+             scrollable row instead of wrapping into many rows - wrapping is
+             what actually eats vertical space (rows stack), a horizontal
+             scroller does not. Momentum scrolling kept (pan-x) since this IS
+             a real scroll region, distinct from the canvas above. */
+          #building-bar .building-panel {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            touch-action: pan-x;
+            -webkit-overflow-scrolling: touch;
+          }
+          #building-bar button.building-button {
+            flex: 0 0 auto;
+          }
+          /* The top control row (tabs, bulldoze, speed, audio, stats/help,
+             save/load) is the other source of wrapping-induced height; letting
+             it scroll horizontally too keeps the bar to two short rows total
+             instead of four-plus tall ones. */
+          #building-bar .bar-row:not(.building-panel) {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            touch-action: pan-x;
+            -webkit-overflow-scrolling: touch;
+          }
+          #building-bar .money {
+            flex: 0 0 auto;
+          }
+          #building-bar .speed-group {
+            margin-left: 12px;
+          }
+
+          /* Shrink the always-on read-only overlays so they stop competing
+             for the play area on a small canvas - both are informational
+             widgets (Phase 44/56), not primary controls, so making them
+             smaller/narrower costs nothing functionally. */
+          #notification-log-panel {
+            width: 200px;
+            max-height: 160px;
+          }
+          #objectives-panel {
+            width: 180px;
+            max-width: calc(100vw - 220px);
+          }
+          #building-info-panel {
+            max-width: calc(100vw - 32px);
+            max-height: 55%;
+          }
+          /* Statistics is opt-in/hidden by default (Phase 49) but when a
+             player does open it on a small screen it must not swallow the
+             whole play area. */
+          #statistics-panel {
+            width: calc(100vw - 32px);
+            max-height: 60%;
+          }
+        }
       }
     </style>
   </head>

@@ -68,7 +68,7 @@ const TREND_UP_COLOR = '#8bc34a';
 const TREND_DOWN_COLOR = '#ef5350';
 const TREND_FLAT_COLOR = '#8d7f6e';
 const SELECTED_ROW_COLOR = 0xffd54f;
-/** Offset (px) of the DOM tooltip from the cursor, in the same game-pixel space pointer.x/y already report (Scale.NONE means 1:1 with #stage's CSS pixels). */
+/** Offset (px) of the DOM tooltip from the cursor, in CSS pixels - applied in positionTooltip AFTER the game-to-CSS scale conversion (Phase 64), so the gap is a constant on-screen distance at any canvas scale. */
 const TOOLTIP_OFFSET_PX = 14;
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -192,9 +192,22 @@ export class ResourceHudPanel {
     return tooltip;
   }
 
+  /**
+   * Phase 64: pointer.x/y are GAME-space pixels (the ScaleManager already
+   * divided out the canvas scale), but this tooltip is a real DOM element
+   * positioned inside #stage, which under Scale.FIT is sized in CSS pixels
+   * that no longer match 1:1. Multiplying by the live displaySize/gameSize
+   * ratio converts back, so the tooltip tracks the cursor at any window size;
+   * under the old Scale.NONE this ratio is exactly 1 and the behavior is
+   * unchanged. The offset is applied after scaling so the gap stays a
+   * constant on-screen distance rather than shrinking with the canvas.
+   */
   private positionTooltip(pointer: Phaser.Input.Pointer): void {
-    this.tooltip.style.left = `${pointer.x + TOOLTIP_OFFSET_PX}px`;
-    this.tooltip.style.top = `${pointer.y + TOOLTIP_OFFSET_PX}px`;
+    const scale = this.scene.scale;
+    const scaleX = scale.displaySize.width / scale.gameSize.width;
+    const scaleY = scale.displaySize.height / scale.gameSize.height;
+    this.tooltip.style.left = `${pointer.x * scaleX + TOOLTIP_OFFSET_PX}px`;
+    this.tooltip.style.top = `${pointer.y * scaleY + TOOLTIP_OFFSET_PX}px`;
   }
 
   /** Phase 51: "$5.20 &uarr;" (above its drifting baseline), "$4.10 &darr;" (below), or plain "$5.00" when it's sitting right on it - the tooltip's only fluctuation cue, since the HUD grid itself has no room for a price column. */

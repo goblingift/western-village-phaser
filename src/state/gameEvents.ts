@@ -89,6 +89,19 @@ export interface GameEventMap {
    */
   'toggle-statistics-panel': () => void;
   /**
+   * Phase 64: opens/closes the static hotkey + resource-chain reference.
+   * Emitted by MainScene's 'H'/'?' hotkey and BuildingBar's Help button;
+   * HelpOverlay owns its own shown/hidden state and is the only listener,
+   * exactly like 'toggle-statistics-panel' above.
+   */
+  'toggle-help-overlay': () => void;
+  /**
+   * Phase 64: (re)starts the first-run tutorial from step 1, regardless of
+   * the "tutorial seen" flag. Emitted by the Help panel's Replay button, so a
+   * player who skipped it can always get it back.
+   */
+  'start-tutorial': () => void;
+  /**
    * Phase 52: fired once, after a loaded save has fully repopulated gameState
    * (buildings/vegetation/market/resources/clock all restored) but before
    * `updateConnections()` runs - MainScene is the only listener, and it

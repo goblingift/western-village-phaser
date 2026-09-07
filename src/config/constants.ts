@@ -30,6 +30,14 @@ export const NIGHT_OVERLAY_ALPHA = 0.45;
 // for every currently-staffed Warehouse. Production beyond the cap is wasted.
 export const BASE_STORAGE_CAP = 50;
 export const WAREHOUSE_STORAGE_BONUS = 150;
+/**
+ * Phase 64: the Granary's storage bonus. Deliberately well under the
+ * Warehouse's 150 - the Granary is early relief for a cap that BASE_STORAGE_CAP
+ * (50) lets a player hit within minutes, not a replacement for the Warehouse
+ * (which stays the real, net-worth-gated fix). Two Granaries (+80) still land
+ * under one Warehouse, so the upgrade path keeps its point.
+ */
+export const GRANARY_STORAGE_BONUS = 40;
 // Minimap dims match the 40x30 tile map's 4:3 aspect ratio (5px per tile).
 export const MINIMAP_WIDTH = 200;
 export const MINIMAP_HEIGHT = 150;

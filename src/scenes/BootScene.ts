@@ -305,6 +305,26 @@ const WATER_TOWER_SPRITE: PixelSprite = {
   ],
 };
 
+/**
+ * Phase 64: a round-shouldered grain silo with a conical cap, corrugated
+ * banding (alternating B/G rows) and a small dark chute at the base. Kept
+ * deliberately tall-and-narrow so it never reads as a small Warehouse - the
+ * Warehouse is a wide, flat-roofed planked barn, this is a vertical silo.
+ */
+const GRANARY_SPRITE: PixelSprite = {
+  palette: { S: 0x6d4c41, C: 0x8d6e63, B: 0xc9a227, G: 0xe0bc4f, D: 0x4e342e },
+  pattern: [
+    '...CC...',
+    '..CCCC..',
+    '.CCCCCC.',
+    'SBBBBBBS',
+    'SGGGGGGS',
+    'SBBBBBBS',
+    'SGGDDGGS',
+    'SSSDDSSS',
+  ],
+};
+
 const HOUSE_SPRITE: PixelSprite = {
   // Narrowed top cap (row 0) reads as a raised saloon-style false-front
   // parapet rather than a gable peak. This is the Tier 1 look.
@@ -948,6 +968,7 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Fence]: FENCE_SPRITE,
   [BuildingType.Gate]: GATE_SPRITE,
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
+  [BuildingType.Granary]: GRANARY_SPRITE,
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
   [BuildingType.Barracks]: BARRACKS_SPRITE,
   [BuildingType.Sewery]: SEWERY_SPRITE,
