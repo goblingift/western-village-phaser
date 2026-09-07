@@ -69,7 +69,8 @@ export enum BuildingType {
  * it belongs in the menu.
  */
 export enum BuildingCategory {
-  Infrastructure = 'Housing & Infra',
+  Housing = 'Housing & Storage',
+  Barriers = 'Roads & Walls',
   Livestock = 'Livestock',
   Farming = 'Farming & Forestry',
   Industry = 'Industry',
@@ -637,7 +638,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 50,
     size: { width: 1, height: 1 },
     color: 0x0288d1,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 0.5,
     production: { outputs: { water: 1 } },
     maxHp: 45,
@@ -648,7 +649,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 80,
     size: { width: 1, height: 1 },
     color: 0xffa726,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 0.5,
     maxHp: 50,
   },
@@ -662,7 +663,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 4,
     size: { width: 1, height: 1 },
     color: 0x757575,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Barriers,
     upkeep: 0,
     maxHp: 15,
   },
@@ -728,7 +729,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { logs: 1 },
     size: { width: 1, height: 1 },
     color: 0xc9a063,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Barriers,
     upkeep: 0,
     maxHp: 20,
   },
@@ -751,7 +752,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { logs: 2, wood: 1 },
     size: { width: 1, height: 1 },
     color: 0x8d6748,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Barriers,
     upkeep: 0,
     maxHp: 25,
     unlockRequirement: { populationAtLeast: 3 },
@@ -777,7 +778,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { wood: 2 },
     size: { width: 1, height: 1 },
     color: 0x6d4c41,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Barriers,
     upkeep: 0,
     maxHp: 120,
     unlockRequirement: { populationAtLeast: 4 },
@@ -804,7 +805,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { wood: 3, logs: 2 },
     size: { width: 1, height: 1 },
     color: 0x8d6748,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Barriers,
     upkeep: 0,
     maxHp: 90,
     unlockRequirement: { populationAtLeast: 4 },
@@ -818,7 +819,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { wood: 8, tools: 2 },
     size: { width: 2, height: 2 },
     color: 0x6d4c41,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 100,
@@ -841,7 +842,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 60,
     size: { width: 1, height: 1 },
     color: 0xc9a227,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 0.5,
     requiresWorkers: true,
     maxHp: 45,
@@ -1149,7 +1150,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     cost: 90,
     size: { width: 1, height: 1 },
     color: 0x455a64,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 0.8,
     requiresWorkers: true,
     maxHp: 55,
@@ -1174,7 +1175,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     materials: { wood: 8 },
     size: { width: 2, height: 2 },
     color: 0xefebe9,
-    category: BuildingCategory.Infrastructure,
+    category: BuildingCategory.Housing,
     upkeep: 1.5,
     requiresWorkers: true,
     maxHp: 90,
@@ -1189,7 +1190,7 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
    * scaled by each served House's tier - a Brothel built in a dense
    * neighborhood earns real money, one built in an empty corner earns little.
    * unlockRequirement uses netWorthAtLeast rather than population, matching
-   * Warehouse/Supermarket/Bank's own net-worth-gated Commerce/Infrastructure
+   * Warehouse/Supermarket/Bank's own net-worth-gated Commerce/Housing
    * precedent for a mid-late-game money sink/faucet.
    */
   [BuildingType.Brothel]: {

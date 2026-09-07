@@ -4961,7 +4961,7 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  /** 1-indexed against BuildingCategory's declaration order (BuildingBar builds its tabs off the same Object.values(...) order); out-of-range numbers (7-9, with today's 6 categories) are simply a no-op. */
+  /** 1-indexed against BuildingCategory's declaration order (BuildingBar builds its tabs off the same Object.values(...) order); out-of-range numbers beyond the current category count are simply a no-op. */
   private trySwitchBuildingCategory(oneIndexedCategoryNumber: number): void {
     const categories = Object.values(BuildingCategory);
     const category = categories[oneIndexedCategoryNumber - 1];

@@ -44,7 +44,7 @@ export class BuildingBar {
   private muteButton!: HTMLButtonElement;
   private volumeSlider!: HTMLInputElement;
   private musicVolumeSlider!: HTMLInputElement;
-  private activeCategory: BuildingCategory = BuildingCategory.Infrastructure;
+  private activeCategory: BuildingCategory = BuildingCategory.Housing;
   private demolishMode = false;
 
   constructor(container: HTMLElement) {
