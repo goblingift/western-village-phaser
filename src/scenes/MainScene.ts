@@ -61,6 +61,8 @@ import {
   RAID_WAVE_TIMEOUT_MS,
   RAIDER_UNIT_ATTACK_RANGE_TILES,
   RAIDER_WALL_DETOUR_OFFSETS_TILES,
+  ROAD_UNIT_SPEED_MULTIPLIER,
+  ROAD_UNIT_SPEED_SAMPLE_THRESHOLD,
   TILE_SIZE,
   VEGETATION_CLEAR_COST,
   VIEWPORT_HEIGHT,
@@ -175,6 +177,7 @@ import {
   getDayNumber,
   getDayPhase,
   getElapsedSeconds,
+  getEnclosureFor,
   getFenceLinks,
   getHarvestCenterTile,
   getPhaseAtElapsed,
@@ -456,6 +459,39 @@ const HARVEST_RING_EMPTY_COLOR = 0xef5350;
 const HARVEST_RING_FILL_ALPHA = 0.08;
 
 /**
+ * Real Fence Enclosures debug overlay. Off by default, toggled with the 'E'
+ * hotkey (setupHotkeys) - the same bare-toggle-emit convention 'C'/'V'
+ * already use. Reuses the harvest ring's exact style (a tinted fill per tile
+ * plus a stroked outline, drawn under buildings) rather than inventing a
+ * second visual language: green means a valid (closed) enclosure, red means
+ * open/not enclosed at all. Drawn on demand only - redrawn on
+ * 'building-placed'/'building-removed'/'game-loaded'/'game-reset' (whichever
+ * might have changed a farm's cached enclosure), never per-tick or per-frame.
+ *
+ * Item 4 (2026-09-07): the yellow "closed but wrong Gate count" state is
+ * gone along with Gate's role in isEnclosureValid - a closed perimeter is
+ * simply green now, regardless of how many Gates (if any) sit on it.
+ * ENCLOSURE_WRONG_GATE_COUNT_COLOR was removed outright rather than kept
+ * as dead code.
+ *
+ * Item 2 verification note: the debug overlay's boundary tiles were the
+ * requested tool for confirming a farm's own footprint reads as part of the
+ * enclosure's perimeter to the player (Item 2's root-cause investigation
+ * confirmed this already works - see enclosures.ts/gameState.ts's
+ * queryEnclosureTile doc comments and CLAUDE.md's Item 2 write-up). No
+ * change was needed here: the green fill already stops exactly at the
+ * farm's own footprint edge (queryEnclosureTile returns 'building' for it,
+ * so it's never added to enclosedTiles), which visually reads as "this
+ * building's wall counts as part of the boundary" without any extra
+ * highlighting - tinting the footprint itself was considered and rejected as
+ * redundant, since the building sprite already occupies that space clearly.
+ */
+const ENCLOSURE_DEBUG_DEPTH = 6.2;
+const ENCLOSURE_DEBUG_FILL_ALPHA = 0.16;
+const ENCLOSURE_VALID_COLOR = 0x4caf50;
+const ENCLOSURE_OPEN_COLOR = 0xef5350;
+
+/**
  * Phase 53: Rally Points & Training Queue. A rally point is drawn as a tiny
  * flag-on-a-pole (a Graphics primitive, not a texture - same
  * minimal-footprint style as the harvest ring above) at depth just above the
@@ -468,6 +504,42 @@ const RALLY_POINT_FLAG_COLOR = 0xff7043;
 const RALLY_POINT_POLE_HEIGHT_PX = 16;
 const RALLY_POINT_FLAG_WIDTH_PX = 10;
 const RALLY_POINT_FLAG_HEIGHT_PX = 7;
+
+/**
+ * Enclosure Detection Fix & Exit Indicator: a placement AID, not a rule -
+ * drawn one tile outside a deterministic edge of the farm's footprint
+ * (bottom-center, projected south) so the same farm always suggests the same
+ * spot across redraws. Shown for any animal-holding farm whose enclosure is
+ * not currently valid, plus whichever farm is currently selected (so a
+ * player mid-build of a still-invalid pen keeps seeing it even after
+ * clicking the building to check status) - and hidden the instant a farm's
+ * pen becomes valid, mirroring HP bars hiding at full health, so a finished
+ * town isn't cluttered with permanent arrows. Reuses the harvest ring/rally
+ * flag's shared-Graphics-object, redraw-on-event (never per-tick) style.
+ *
+ * Item 4 (2026-09-07) repurposed this arrow's meaning. It originally read as
+ * "put your one required Gate here" - a suggestion that stopped making sense
+ * the moment Gate stopped being required for validity at all (a "suggested
+ * Gate spot" arrow for a building that needs no Gate would actively mislead
+ * players into thinking one is still needed). Two options were considered:
+ * (a) delete the feature outright, or (b) repurpose it into a generic
+ * "close your perimeter here" pointer. Kept (b): the arrow's underlying
+ * mechanism - "here's a deterministic point just outside the pen you can
+ * build wall at" - is still useful entirely independent of Gate, since a
+ * fresh player's very first question is still "where do I even start
+ * building the fence". The trigger condition changed accordingly: it now
+ * fires purely on `!enclosure.closed` rather than `!isEnclosureValid`, since
+ * a CLOSED-but-too-small pen (the only other way to be invalid post-Item-4)
+ * needs more enclosed floor area, not a wall built at this specific spot -
+ * pointing an arrow at a fixed edge tile would be actively wrong guidance
+ * there, whereas it was previously (accidentally) fine advice since a
+ * too-small pen was never reachable without deliberately fighting the old
+ * Gate-count rule first.
+ */
+const ENCLOSURE_EXIT_HINT_DEPTH = 6.3;
+const ENCLOSURE_EXIT_HINT_COLOR = 0xffca28;
+const ENCLOSURE_EXIT_HINT_ARROW_LENGTH_PX = 14;
+const ENCLOSURE_EXIT_HINT_ARROW_WIDTH_PX = 10;
 
 /**
  * Phase 34: understaffed / upkeep-unpaid badges. These sit at the HP bar's
@@ -717,6 +789,26 @@ interface CombatUnit {
 }
 
 export class MainScene extends Phaser.Scene {
+  /**
+   * Phase 63: a second, zoom-locked camera that renders the HUD/overlay band
+   * and nothing else. setScrollFactor(0) only cancels a camera's scroll on an
+   * object's position - it does NOT exempt it from camera.setZoom(), which
+   * scales the whole display list that camera draws. So before this existed,
+   * wheel-zooming the world also scaled the resource panel, minimap, timer,
+   * notice banners and the night/dust-storm tints along with it.
+   *
+   * The split is enforced by registerUiObject: the main camera ignores every
+   * UI object, this camera ignores everything else, and its zoom is never
+   * touched by setupCameraZoom.
+   */
+  private uiCamera!: Phaser.Cameras.Scene2D.Camera;
+  /**
+   * Every GameObject handed to registerUiObject - i.e. the full HUD roster.
+   * Not read by the render path (the split is carried per-object in
+   * cameraFilter); kept as the one enumerable answer to "what is on the UI
+   * camera", which is otherwise scattered across a dozen setup methods.
+   */
+  private uiObjects: Phaser.GameObjects.GameObject[] = [];
   private infoText!: Phaser.GameObjects.Text;
   private resourceHud!: ResourceHudPanel;
   private timerText!: Phaser.GameObjects.Text;
@@ -730,6 +822,11 @@ export class MainScene extends Phaser.Scene {
   private phaseRemainingDisplay = DAY_PHASE_SECONDS;
   private nightOverlay!: NightOverlay;
   private harvestRingGraphics!: Phaser.GameObjects.Graphics;
+  /** Real Fence Enclosures debug overlay - off by default, toggled by the 'E' hotkey. */
+  private enclosureDebugGraphics!: Phaser.GameObjects.Graphics;
+  private enclosureDebugVisible = false;
+  /** Enclosure Detection Fix & Exit Indicator: always-on (not gated by the 'E' debug toggle) suggested-Gate-spot arrow, one shared Graphics object. */
+  private enclosureExitHintGraphics!: Phaser.GameObjects.Graphics;
   /** Phase 53: shared Graphics redrawn from scratch over every building with a rallyPoint set, mirroring connectionGraphics'/fenceLineGraphics' one-Graphics-per-redraw discipline rather than a GameObject per flag. */
   private rallyPointGraphics!: Phaser.GameObjects.Graphics;
   /** Phase 53: non-null while a "Set Rally Point" button has armed the next qualifying right-click to set that building's rally point instead of issuing a unit move/attack order. */
@@ -841,6 +938,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Must run before anything that calls registerUiObject (setupInfoText
+    // onward); buildTilemap/setupVegetationVisuals create world-only objects
+    // and are unaffected by ordering here.
+    this.setupUiCamera();
     this.buildTilemap();
     this.setupVegetationVisuals();
     this.setupCameraDrag();
@@ -869,6 +970,8 @@ export class MainScene extends Phaser.Scene {
     this.setupHpBarVisuals();
     this.setupStatusBadges();
     this.setupHarvestRadiusRing();
+    this.setupEnclosureDebugOverlay();
+    this.setupEnclosureExitHint();
     this.setupDayNightCycle();
     this.setupAudio();
     this.setupRaidSystem();
@@ -895,6 +998,85 @@ export class MainScene extends Phaser.Scene {
     // while the camera and buildings are untouched - so this is the one
     // minimap redraw driven straight from update(), throttled the same way.
     this.redrawMinimapCombatThrottled(time);
+  }
+
+  /**
+   * Phase 63: creates the zoom-locked HUD camera. It sits above the main
+   * camera in the camera list (cameras.add appends), covers the identical
+   * viewport rect, and has transparent = true so it composites over the world
+   * rather than clearing it.
+   *
+   * Its scroll stays at 0 and its zoom stays at 1 forever - setupCameraZoom
+   * only ever touches cameras.main - which is precisely what makes every
+   * object it draws screen-fixed at a constant on-screen size.
+   */
+  private setupUiCamera(): void {
+    this.uiCamera = this.cameras.add(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT, false, 'ui');
+    this.uiCamera.setScroll(0, 0);
+    this.uiCamera.setZoom(1);
+
+    // Camera.ignore() is an additive bitmask (cameraFilter |= camera.id) with
+    // no un-ignore counterpart, so the split has to be applied to each object
+    // exactly once, in the right direction, and never "recomputed".
+    //
+    // World objects vastly outnumber HUD ones and are created continuously
+    // (buildings, units, raiders, vegetation, tweened one-shots like dust
+    // puffs and shot lines), so opting each of them out of the UI camera by
+    // hand at ~40 creation sites would be a standing trap for every future
+    // phase that adds one. Instead the default is "world-only", applied here
+    // to every object as it enters the display list; registerUiObject is the
+    // explicit opt-out for the handful of HUD objects, which flip to
+    // "UI-only" before this listener ever sees them.
+    this.events.on(
+      Phaser.Scenes.Events.ADDED_TO_SCENE,
+      (object: Phaser.GameObjects.GameObject) => {
+        this.uiCamera.ignore(object);
+      },
+    );
+  }
+
+  /**
+   * Phase 63: marks a GameObject as HUD-only - drawn by the zoom-locked UI
+   * camera and ignored by the world camera, so camera.setZoom() can never
+   * scale it.
+   *
+   * Must be called for every screen-fixed object: setScrollFactor(0) alone
+   * only pins position, and an object that skips this stays on the main
+   * camera and will visibly scale with wheel zoom (the bug this fixes).
+   */
+  private registerUiObject(
+    ...objects: (Phaser.GameObjects.GameObject | undefined | null)[]
+  ): void {
+    for (const object of objects) {
+      if (!object) {
+        continue;
+      }
+      this.uiObjects.push(object);
+      this.cameras.main.ignore(object);
+      // The ADDED_TO_SCENE listener above already ran for this object (it
+      // fires synchronously inside scene.add.*, before this call), marking it
+      // world-only by default. Phaser has no un-ignore method - ignore() only
+      // ORs the camera's id into cameraFilter - so clearing that one bit here
+      // is what promotes the object from "world default" to "UI-only".
+      object.cameraFilter &= ~this.uiCamera.id;
+    }
+  }
+
+  /**
+   * Phase 63: world coordinates under the pointer, always resolved against the
+   * MAIN camera.
+   *
+   * pointer.worldX/worldY cannot be trusted once a second camera exists:
+   * Phaser's InputManager.hitTest overwrites them using whichever camera it is
+   * currently hit-testing (InputPlugin.hitTestPointer walks cameras top-most
+   * first and stops at the first hit), so while the cursor is over an
+   * interactive HUD object - ResourceHudPanel's per-row tooltip Zones are the
+   * only ones in this scene - they hold UI-camera coordinates (i.e. raw screen
+   * position), not world position. Every placement/selection/order path reads
+   * world position through this instead.
+   */
+  private pointerWorldPoint(pointer: Phaser.Input.Pointer): Phaser.Math.Vector2 {
+    return this.cameras.main.getWorldPoint(pointer.x, pointer.y);
   }
 
   private buildTilemap(): void {
@@ -1007,8 +1189,14 @@ export class MainScene extends Phaser.Scene {
       'wheel',
       (pointer: Phaser.Input.Pointer, _objects: unknown, _dx: number, dy: number) => {
         const camera = this.cameras.main;
-        const worldPointX = pointer.worldX;
-        const worldPointY = pointer.worldY;
+        // Phase 63: read through the main camera explicitly rather than
+        // pointer.worldX/Y, which the input system may have last written using
+        // the UI camera (see pointerWorldPoint). The zoom-to-cursor re-anchor
+        // below is unchanged: capture the world point under the cursor before
+        // the zoom, then scroll by however far that same point moved after it.
+        const preZoom = this.pointerWorldPoint(pointer);
+        const worldPointX = preZoom.x;
+        const worldPointY = preZoom.y;
 
         const direction = dy > 0 ? -1 : 1;
         const nextZoom = Phaser.Math.Clamp(
@@ -1096,8 +1284,9 @@ export class MainScene extends Phaser.Scene {
       this.lastPointerY = pointer.y;
       this.pointerDownX = pointer.x;
       this.pointerDownY = pointer.y;
-      this.dragStartWorldX = pointer.worldX;
-      this.dragStartWorldY = pointer.worldY;
+      const dragStartWorld = this.pointerWorldPoint(pointer);
+      this.dragStartWorldX = dragStartWorld.x;
+      this.dragStartWorldY = dragStartWorld.y;
 
       this.minimapPointerActive = this.isPointerInMinimap(pointer);
       if (this.minimapPointerActive) {
@@ -1122,10 +1311,11 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    const minX = Math.min(this.dragStartWorldX, pointer.worldX);
-    const minY = Math.min(this.dragStartWorldY, pointer.worldY);
-    const width = Math.abs(pointer.worldX - this.dragStartWorldX);
-    const height = Math.abs(pointer.worldY - this.dragStartWorldY);
+    const world = this.pointerWorldPoint(pointer);
+    const minX = Math.min(this.dragStartWorldX, world.x);
+    const minY = Math.min(this.dragStartWorldY, world.y);
+    const width = Math.abs(world.x - this.dragStartWorldX);
+    const height = Math.abs(world.y - this.dragStartWorldY);
 
     this.selectionRectGraphics.fillStyle(SELECTION_RECT_COLOR, SELECTION_RECT_FILL_ALPHA);
     this.selectionRectGraphics.fillRect(minX, minY, width, height);
@@ -1202,6 +1392,7 @@ export class MainScene extends Phaser.Scene {
     this.infoText.setOrigin(0, 1);
     this.infoText.setScrollFactor(0);
     this.infoText.setDepth(1000);
+    this.registerUiObject(this.infoText);
 
     // World-space (no setScrollFactor(0)) so it stays pinned under the
     // preview footprint it is describing as the camera pans/zooms.
@@ -1240,6 +1431,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupResourceHud(): void {
     this.resourceHud = new ResourceHudPanel(this);
+    this.registerUiObject(...this.resourceHud.getUiObjects());
 
     gameEvents.on('money-changed', () => this.resourceHud.refresh());
     gameEvents.on('resources-changed', () => this.resourceHud.refresh());
@@ -1311,6 +1503,7 @@ export class MainScene extends Phaser.Scene {
     this.timerText.setOrigin(1, 0);
     this.timerText.setScrollFactor(0);
     this.timerText.setDepth(1000);
+    this.registerUiObject(this.timerText);
 
     gameEvents.on('timer-changed', (phaseRemainingSeconds: number) => {
       this.phaseRemainingDisplay = phaseRemainingSeconds;
@@ -1365,6 +1558,16 @@ export class MainScene extends Phaser.Scene {
     this.minimapCombatGraphics = this.add.graphics();
     this.minimapCombatGraphics.setScrollFactor(0);
     this.minimapCombatGraphics.setDepth(1002);
+
+    // Phase 63: all three minimap layers are HUD, drawn in screen coordinates
+    // (minimapX/minimapY + a tile-scaled offset). Their relative depths
+    // 1000/1001/1002 still order them against each other inside the UI
+    // camera's own render list exactly as before.
+    this.registerUiObject(
+      this.minimapGraphics,
+      this.minimapViewportGraphics,
+      this.minimapCombatGraphics,
+    );
 
     this.redrawMinimap();
 
@@ -2828,6 +3031,160 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Real Fence Enclosures debug overlay: off by default (enclosureDebugVisible
+   * starts false), toggled by the 'E' hotkey. Redrawn only on events that
+   * could plausibly change a farm's cached enclosure result - never on a
+   * timer/per-frame - and a no-op draw (just cleared) whenever it's hidden, so
+   * toggling it off costs nothing per tick either.
+   */
+  private setupEnclosureDebugOverlay(): void {
+    this.enclosureDebugGraphics = this.add.graphics().setDepth(ENCLOSURE_DEBUG_DEPTH);
+
+    const redraw = () => this.redrawEnclosureDebugOverlay();
+    gameEvents.on('building-placed', redraw);
+    gameEvents.on('building-removed', redraw);
+    gameEvents.on('building-repaired', redraw);
+    gameEvents.on('game-loaded', redraw);
+    gameEvents.on('game-reset', () => this.enclosureDebugGraphics.clear());
+  }
+
+  private toggleEnclosureDebugOverlay(): void {
+    this.enclosureDebugVisible = !this.enclosureDebugVisible;
+    this.redrawEnclosureDebugOverlay();
+  }
+
+  private redrawEnclosureDebugOverlay(): void {
+    this.enclosureDebugGraphics.clear();
+    if (!this.enclosureDebugVisible) {
+      return;
+    }
+
+    for (const building of getPlacedBuildings()) {
+      const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
+      if (!animalConfig) {
+        continue;
+      }
+      const enclosure = getEnclosureFor(building.id);
+      if (!enclosure) {
+        continue;
+      }
+
+      if (!enclosure.closed) {
+        // Nothing enclosed to shade - just outline the farm's own footprint
+        // in red so it's clear at a glance which farms are unfenced.
+        const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+        this.enclosureDebugGraphics.lineStyle(2, ENCLOSURE_OPEN_COLOR, 0.9);
+        this.enclosureDebugGraphics.strokeRect(
+          building.tileX * TILE_SIZE,
+          building.tileY * TILE_SIZE,
+          width * TILE_SIZE,
+          height * TILE_SIZE,
+        );
+        continue;
+      }
+
+      this.enclosureDebugGraphics.fillStyle(ENCLOSURE_VALID_COLOR, ENCLOSURE_DEBUG_FILL_ALPHA);
+      for (const tile of enclosure.enclosedTiles) {
+        this.enclosureDebugGraphics.fillRect(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      }
+      this.enclosureDebugGraphics.lineStyle(2, ENCLOSURE_VALID_COLOR, 0.9);
+      for (const tile of enclosure.enclosedTiles) {
+        this.enclosureDebugGraphics.strokeRect(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      }
+    }
+  }
+
+  /**
+   * Enclosure Detection Fix & Exit Indicator: unlike the 'E' debug overlay
+   * above (off by default, a diagnostic tool), this arrow is always active -
+   * it's a placement aid a player needs to see without knowing a debug
+   * hotkey exists. Redrawn on exactly the same set of "a farm's cached
+   * enclosure might have changed" events the debug overlay already listens
+   * for, plus 'building-selected' (the selected-farm-always-shown half of
+   * the visibility rule) and 'cancel-placement' (selection can change
+   * without a fresh building-selected emit in a couple of UI paths - cheap
+   * to redraw defensively here since this whole pass is O(placed farms)).
+   */
+  private setupEnclosureExitHint(): void {
+    this.enclosureExitHintGraphics = this.add.graphics().setDepth(ENCLOSURE_EXIT_HINT_DEPTH);
+
+    const redraw = () => this.redrawEnclosureExitHints();
+    gameEvents.on('building-placed', redraw);
+    gameEvents.on('building-removed', redraw);
+    gameEvents.on('building-repaired', redraw);
+    gameEvents.on('game-loaded', redraw);
+    gameEvents.on('building-selected', redraw);
+    gameEvents.on('cancel-placement', redraw);
+    gameEvents.on('game-reset', () => this.enclosureExitHintGraphics.clear());
+  }
+
+  private redrawEnclosureExitHints(): void {
+    this.enclosureExitHintGraphics.clear();
+
+    for (const building of getPlacedBuildings()) {
+      const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
+      if (!animalConfig) {
+        continue;
+      }
+      // Item 4: fires on "not closed" rather than the old "not valid" -
+      // once the perimeter is closed there is no more wall to build at this
+      // specific spot, whether or not the pen is big enough yet (a
+      // closed-but-too-small pen needs more enclosed AREA, not a wall
+      // segment here - pointing the arrow there would be misleading, see
+      // this feature's doc comment above). Unlike the pre-Item-4 behavior,
+      // a selected-but-closed farm no longer keeps showing the arrow: there
+      // is nothing left for it to usefully suggest once the loop is shut.
+      const enclosure = getEnclosureFor(building.id);
+      if (enclosure && enclosure.closed) {
+        continue;
+      }
+
+      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+      // Deterministic anchor: bottom-center tile of the footprint, one tile
+      // further south (outside the footprint) - same spot every redraw for a
+      // given building, regardless of enclosure state.
+      const anchorTileX = building.tileX + Math.floor((width - 1) / 2);
+      const anchorTileY = building.tileY + height;
+      const px = anchorTileX * TILE_SIZE + TILE_SIZE / 2;
+      const py = anchorTileY * TILE_SIZE + TILE_SIZE / 2;
+      this.drawExitArrow(px, py);
+    }
+  }
+
+  /**
+   * A small downward-pointing triangle "arrow" suggesting a spot to close off
+   * the pen's Fence perimeter - a placement aid only, never a gameplay
+   * constraint. Item 4 (2026-09-07): previously suggested a Gate spot
+   * specifically; repurposed to a generic "build wall here" pointer now that
+   * Gate no longer factors into enclosure validity (see this method's
+   * callers' doc comment for the full rationale).
+   */
+  private drawExitArrow(centerX: number, centerY: number): void {
+    const halfLength = ENCLOSURE_EXIT_HINT_ARROW_LENGTH_PX / 2;
+    const halfWidth = ENCLOSURE_EXIT_HINT_ARROW_WIDTH_PX / 2;
+    const tipY = centerY + halfLength;
+    const tailY = centerY - halfLength;
+    this.enclosureExitHintGraphics.fillStyle(ENCLOSURE_EXIT_HINT_COLOR, 0.95);
+    this.enclosureExitHintGraphics.fillTriangle(
+      centerX - halfWidth,
+      tailY,
+      centerX + halfWidth,
+      tailY,
+      centerX,
+      tipY,
+    );
+    this.enclosureExitHintGraphics.lineStyle(1, 0x5d4037, 0.8);
+    this.enclosureExitHintGraphics.strokeTriangle(
+      centerX - halfWidth,
+      tailY,
+      centerX + halfWidth,
+      tailY,
+      centerX,
+      tipY,
+    );
+  }
+
+  /**
    * Phase 53: Rally Points & Training Queue. The flag itself is drawn for
    * every Barracks/Horsery that currently has a rallyPoint set (not just the
    * selected one - unlike the harvest ring, a rally point is standing town
@@ -2850,6 +3207,7 @@ export class MainScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000)
       .setVisible(false);
+    this.registerUiObject(this.rallyPointModeHintText);
 
     gameEvents.on('rally-point-mode-changed', (buildingId: string | null) => {
       this.rallyPointModeBuildingId = buildingId;
@@ -2919,6 +3277,7 @@ export class MainScene extends Phaser.Scene {
    */
   private setupDayNightCycle(): void {
     this.nightOverlay = new NightOverlay(this);
+    this.registerUiObject(...this.nightOverlay.getUiObjects());
     this.applyVegetationTint(getDayPhase());
 
     gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
@@ -3443,6 +3802,7 @@ export class MainScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000)
       .setVisible(false);
+    this.registerUiObject(this.cowboySelectionHintText);
 
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       // The drag rectangle (if any) always ends here, regardless of which
@@ -3456,6 +3816,10 @@ export class MainScene extends Phaser.Scene {
       const dx = pointer.x - this.pointerDownX;
       const dy = pointer.y - this.pointerDownY;
       const dragDistance = Math.sqrt(dx * dx + dy * dy);
+      // Phase 63: resolved once through the main camera and reused by every
+      // branch below - pointer.worldX/Y is unreliable with a second camera in
+      // play (see pointerWorldPoint).
+      const world = this.pointerWorldPoint(pointer);
 
       if (pointer.rightButtonReleased()) {
         // Phase 53: an armed rally-point pick takes over this right-click
@@ -3465,7 +3829,7 @@ export class MainScene extends Phaser.Scene {
         // armed for a later attempt.
         if (this.rallyPointModeBuildingId !== null) {
           if (dragDistance <= CLICK_MOVE_THRESHOLD) {
-            setRallyPoint(this.rallyPointModeBuildingId, pointer.worldX, pointer.worldY);
+            setRallyPoint(this.rallyPointModeBuildingId, world.x, world.y);
             gameEvents.emit('rally-point-mode-changed', null);
           }
           return;
@@ -3480,12 +3844,12 @@ export class MainScene extends Phaser.Scene {
         // second - a raider standing in front of its own camp still wins);
         // right-clicking anything else (empty ground, a building, etc.) keeps
         // the original move-order behavior unchanged.
-        const raider = this.findRaiderAt(pointer.worldX, pointer.worldY);
+        const raider = this.findRaiderAt(world.x, world.y);
         if (raider) {
           this.issueUnitAttackOrder({ kind: 'raider', id: raider.id }, { x: raider.image.x, y: raider.image.y });
           return;
         }
-        const camp = this.findCampAt(pointer.worldX, pointer.worldY);
+        const camp = this.findCampAt(world.x, world.y);
         if (camp) {
           this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
         } else {
@@ -3501,7 +3865,7 @@ export class MainScene extends Phaser.Scene {
       if (dragDistance <= CLICK_MOVE_THRESHOLD) {
         this.selectUnitAt(pointer);
       } else {
-        this.selectUnitsInRect(this.dragStartWorldX, this.dragStartWorldY, pointer.worldX, pointer.worldY);
+        this.selectUnitsInRect(this.dragStartWorldX, this.dragStartWorldY, world.x, world.y);
       }
     });
   }
@@ -3517,12 +3881,13 @@ export class MainScene extends Phaser.Scene {
   private selectUnitAt(pointer: Phaser.Input.Pointer): void {
     let hit: CombatUnit | null = null;
     let bestDistance = COWBOY_SELECT_HIT_RADIUS_PX;
+    const world = this.pointerWorldPoint(pointer);
 
     for (const unit of this.cowboyUnits) {
       if (!this.isCowboyUnitAlive(unit)) {
         continue;
       }
-      const distance = Phaser.Math.Distance.Between(pointer.worldX, pointer.worldY, unit.image.x, unit.image.y);
+      const distance = Phaser.Math.Distance.Between(world.x, world.y, unit.image.x, unit.image.y);
       if (distance <= bestDistance) {
         bestDistance = distance;
         hit = unit;
@@ -3580,6 +3945,7 @@ export class MainScene extends Phaser.Scene {
     // One confirmation per order, not per unit - a 5-unit order is still a
     // single player action.
     playUiSound('moveConfirm');
+    const world = this.pointerWorldPoint(pointer);
     for (const unit of this.selectedUnits) {
       // An explicit new move order supersedes any standing attack order -
       // otherwise resolveUnitAttackOrders would immediately start steering
@@ -3587,7 +3953,7 @@ export class MainScene extends Phaser.Scene {
       unit.attackTarget = null;
       const jitterX = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
       const jitterY = Phaser.Math.Between(-UNIT_MOVE_ORDER_JITTER_PX, UNIT_MOVE_ORDER_JITTER_PX);
-      this.issueUnitMoveOrder(unit, pointer.worldX + jitterX, pointer.worldY + jitterY);
+      this.issueUnitMoveOrder(unit, world.x + jitterX, world.y + jitterY);
     }
   }
 
@@ -3685,6 +4051,38 @@ export class MainScene extends Phaser.Scene {
     this.issueUnitMoveOrder(unit, position.x, position.y);
   }
 
+  /**
+   * Phase 63: Roads & Logistics' own +10% PRODUCTION bonus (BFS road-network
+   * connectivity) is untouched by this - a separate, additive check for unit
+   * MOVEMENT speed. Deliberately cheap and one-shot (per CLAUDE.md's
+   * performance rules against heavy per-frame/update-loop work): samples a
+   * handful of points along the straight-line path at move-order-issue time
+   * only, same half-tile-step technique sampleForBlockingFence already uses
+   * for raider wall detection, and never rechecked again while the tween
+   * runs - a unit doesn't "enter"/"exit" road speed mid-tween, the whole leg
+   * is either road-sped or not.
+   */
+  private isPathMostlyOnRoad(x1: number, y1: number, x2: number, y2: number): boolean {
+    const distance = Phaser.Math.Distance.Between(x1, y1, x2, y2);
+    const steps = Math.max(1, Math.ceil(distance / (TILE_SIZE / 2)));
+    let onRoadCount = 0;
+    let sampleCount = 0;
+
+    for (let step = 0; step <= steps; step++) {
+      const t = step / steps;
+      const sampleTileX = Math.floor((x1 + (x2 - x1) * t) / TILE_SIZE);
+      const sampleTileY = Math.floor((y1 + (y2 - y1) * t) / TILE_SIZE);
+      sampleCount++;
+
+      const building = getBuildingAtTile(sampleTileX, sampleTileY);
+      if (building && building.type === BuildingType.Road && building.hp > 0) {
+        onRoadCount++;
+      }
+    }
+
+    return sampleCount > 0 && onRoadCount / sampleCount >= ROAD_UNIT_SPEED_SAMPLE_THRESHOLD;
+  }
+
   /** Same point-to-point tween technique as villagers/raiders (distance/speed -> duration, setFlipX for facing), clamped to map bounds. */
   private issueUnitMoveOrder(unit: CombatUnit, targetWorldX: number, targetWorldY: number): void {
     const targetX = Phaser.Math.Clamp(targetWorldX, 0, MAP_WIDTH_TILES * TILE_SIZE);
@@ -3694,7 +4092,10 @@ export class MainScene extends Phaser.Scene {
     unit.image.setFlipX(targetX < unit.image.x);
 
     const distance = Phaser.Math.Distance.Between(unit.image.x, unit.image.y, targetX, targetY);
-    const duration = (distance / UNIT_KIND_CONFIG[unit.kind].walkSpeedPxPerSec) * 1000;
+    const onRoad = this.isPathMostlyOnRoad(unit.image.x, unit.image.y, targetX, targetY);
+    const effectiveSpeed =
+      UNIT_KIND_CONFIG[unit.kind].walkSpeedPxPerSec * (onRoad ? ROAD_UNIT_SPEED_MULTIPLIER : 1);
+    const duration = (distance / effectiveSpeed) * 1000;
 
     unit.moveTween = this.tweens.add({
       targets: unit.image,
@@ -3778,6 +4179,16 @@ export class MainScene extends Phaser.Scene {
       // listener - so this is a bare emit, same shape as the 'C' hotkey above.
       if (event.code === 'KeyV') {
         gameEvents.emit('toggle-statistics-panel');
+        event.preventDefault();
+      }
+
+      // Real Fence Enclosures: 'E' ("enclosure") toggles the debug overlay
+      // showing every farm's cached enclosure state. Unlike 'C'/'V' this is a
+      // local MainScene toggle (the overlay is drawn straight onto the world,
+      // not a separate panel), so it calls its own method rather than
+      // emitting a bare event.
+      if (event.code === 'KeyE') {
+        this.toggleEnclosureDebugOverlay();
         event.preventDefault();
       }
     });
@@ -4214,6 +4625,7 @@ export class MainScene extends Phaser.Scene {
     this.raidNoticeText.setScrollFactor(0);
     this.raidNoticeText.setDepth(1000);
     this.raidNoticeText.setVisible(false);
+    this.registerUiObject(this.raidNoticeText);
 
     this.scheduleNextRaidCheck();
   }
@@ -4383,9 +4795,11 @@ export class MainScene extends Phaser.Scene {
    */
   private setupWorldEventSystem(): void {
     // Self-contained widget (owns its own gameEvents subscriptions/lifecycle,
-    // same as NightOverlay) - no method on it is ever called again from here,
-    // so it isn't kept as a field.
-    new DustStormOverlay(this);
+    // same as NightOverlay) - no method on it is ever called again after
+    // construction, so it still isn't kept as a field; the local exists only
+    // to hand its rect to the UI camera (Phase 63).
+    const dustStormOverlay = new DustStormOverlay(this);
+    this.registerUiObject(...dustStormOverlay.getUiObjects());
 
     this.worldEventNoticeText = this.add.text(VIEWPORT_WIDTH / 2, 68, '', {
       fontSize: '18px',
@@ -4397,6 +4811,7 @@ export class MainScene extends Phaser.Scene {
     this.worldEventNoticeText.setScrollFactor(0);
     this.worldEventNoticeText.setDepth(1000);
     this.worldEventNoticeText.setVisible(false);
+    this.registerUiObject(this.worldEventNoticeText);
 
     this.scheduleNextWorldEventCheck();
   }
@@ -5433,9 +5848,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   private pointerToTile(pointer: Phaser.Input.Pointer): { tileX: number; tileY: number } {
+    const world = this.pointerWorldPoint(pointer);
     return {
-      tileX: Math.floor(pointer.worldX / TILE_SIZE),
-      tileY: Math.floor(pointer.worldY / TILE_SIZE),
+      tileX: Math.floor(world.x / TILE_SIZE),
+      tileY: Math.floor(world.y / TILE_SIZE),
     };
   }
 }

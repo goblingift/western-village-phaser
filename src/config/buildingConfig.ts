@@ -19,7 +19,7 @@ import {
 import { VegetationKind } from './vegetationConfig';
 
 export enum BuildingType {
-  CattleFarm = 'CattleFarm',
+  OstrichFarm = 'OstrichFarm',
   Butcher = 'Butcher',
   Well = 'Well',
   House = 'House',
@@ -115,8 +115,8 @@ export interface BuildingProduction {
   outputs?: Partial<Record<ResourceKey, number>>;
 }
 
-/** The three critter sprites drawn in BootScene; matches every AnimalConfig.animalLabel in use. */
-export type AnimalKind = 'Chicken' | 'Pig' | 'Cow';
+/** The critter sprites drawn in BootScene; matches every AnimalConfig.animalLabel in use. */
+export type AnimalKind = 'Chicken' | 'Pig' | 'Cow' | 'Ostrich';
 
 /**
  * Livestock buildings own animals instead of producing a flat rate: output
@@ -217,7 +217,7 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
  * floor, all present fields must hold simultaneously (isBuildingUnlocked in
  * gameState.ts ANDs them), and an entirely undefined `unlockRequirement`
  * means always-unlocked - kept on the six buildings a brand-new player needs
- * immediately (House, Well, Road, Fence, CattleFarm, ChickenFarm) so the
+ * immediately (House, Well, Road, Fence, OstrichFarm, ChickenFarm) so the
  * opening minute is never gated on anything. `netWorthAtLeast` is checked
  * against computeNetWorth().total, which starts near STARTING_MONEY (1800) -
  * thresholds below that would be satisfied at t=0 and gate nothing, so every
@@ -505,20 +505,34 @@ export function setUnitCount(building: PlacedBuilding, kind: UnitKind, value: nu
 }
 
 export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
-  [BuildingType.CattleFarm]: {
-    type: BuildingType.CattleFarm,
-    label: 'Cattle Farm',
-    cost: 100,
+  /**
+   * Replaces the old CattleFarm (Phase 62): CattleFarm and CowRanch were
+   * near-duplicate cow buildings, so the always-unlocked starter slot now
+   * goes to a distinct egg-focused farm instead of a third cow building.
+   * ChickenFarm produces 4 animals x 0.2 eggs/tick = 0.8 eggs/tick at full
+   * stock; OstrichFarm intentionally goes the other way on the same
+   * AnimalConfig shape - fewer, pricier birds at a much higher per-animal
+   * rate - landing at 4 x 0.5 = 2.0 eggs/tick fully stocked. Kept
+   * unlockRequirement-less (like the old CattleFarm) so the opening game
+   * still has an always-available starter livestock building alongside
+   * ChickenFarm; PigFarm's populationAtLeast was lowered from 5 to 4 (see its
+   * own doc comment below) so the Butcher's rawMeat chain isn't stranded
+   * between CattleFarm's removal and PigFarm's old unlock tier.
+   */
+  [BuildingType.OstrichFarm]: {
+    type: BuildingType.OstrichFarm,
+    label: 'Ostrich Farm',
+    cost: 130,
     size: { width: 2, height: 2 },
-    color: 0xa1887f,
+    color: 0xd7ccc8,
     category: BuildingCategory.Livestock,
     upkeep: 1,
     production: {},
     animal: {
-      animalLabel: 'Cow',
-      costPerAnimal: 20,
-      maxAnimals: 5,
-      outputPerAnimal: { rawMeat: 0.2, leather: 0.05 },
+      animalLabel: 'Ostrich',
+      costPerAnimal: 35,
+      maxAnimals: 4,
+      outputPerAnimal: { eggs: 0.5 },
     },
     maxHp: 80,
   },
@@ -559,7 +573,11 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   [BuildingType.Road]: {
     type: BuildingType.Road,
     label: 'Road',
-    cost: 10,
+    // Phase 63: 10 -> 4. Roads were priced high enough relative to their
+    // footprint that laying out even a short connective run (Roads &
+    // Logistics' +10% production bonus) competed hard with actual production
+    // buildings for early money; cheap enough now to lay out freely.
+    cost: 4,
     size: { width: 1, height: 1 },
     color: 0x757575,
     category: BuildingCategory.Infrastructure,
@@ -589,7 +607,12 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     production: {},
     animal: { animalLabel: 'Pig', costPerAnimal: 12, maxAnimals: 6, outputPerAnimal: { rawMeat: 0.25 } },
     maxHp: 80,
-    unlockRequirement: { populationAtLeast: 5 },
+    // Phase 62: lowered from 5 to 4 (matching Butcher's own populationAtLeast
+    // 4) so PigFarm - now the earliest rawMeat source once OstrichFarm
+    // replaced the always-unlocked CattleFarm - unlocks at the same
+    // milestone as the Butcher that consumes it, rather than stranding the
+    // meat chain for a population tier.
+    unlockRequirement: { populationAtLeast: 4 },
   },
   [BuildingType.CowRanch]: {
     type: BuildingType.CowRanch,
@@ -609,11 +632,18 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     maxHp: 100,
     unlockRequirement: { populationAtLeast: 6 },
   },
+  /**
+   * Real Fence Enclosures: cost dropped 15 -> 6 money / 2 -> 1 Logs. Fence now
+   * gates real gameplay (a farm's animal cap requires a genuinely closed
+   * pen - see gameState's enclosure cache), so pricing a full perimeter (a
+   * 2x2 farm's minimum ring is already 12 tiles) at the old per-tile cost
+   * would have made walling anything in prohibitively expensive.
+   */
   [BuildingType.Fence]: {
     type: BuildingType.Fence,
     label: 'Fence',
-    cost: 15,
-    materials: { logs: 2 },
+    cost: 6,
+    materials: { logs: 1 },
     size: { width: 1, height: 1 },
     color: 0xc9a063,
     category: BuildingCategory.Infrastructure,
@@ -718,7 +748,13 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
       replantChancePerTick: 0.12,
     },
     maxHp: 45,
-    unlockRequirement: { populationAtLeast: 6 },
+    // Phase 63: unlockRequirement deliberately removed - Wood/Logs are a
+    // material cost on many other buildings, so gating the wood chain's own
+    // source building behind population created an unnecessary soft
+    // dependency (a new player could get stuck unable to afford Wood-costed
+    // buildings while also being locked out of the only building that makes
+    // Wood). Always-unlocked now, alongside House/Well/Road/Fence/OstrichFarm/
+    // ChickenFarm.
   },
   [BuildingType.WoodCutter]: {
     type: BuildingType.WoodCutter,

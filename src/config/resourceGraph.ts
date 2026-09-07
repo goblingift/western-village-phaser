@@ -17,7 +17,7 @@ import {
  *
  * "Produces" deliberately checks three places, not just `production.outputs`:
  * `harvest.outputs` (Forestry/Cactus Milker draw from vegetation instead of a
- * flat production rate) and `animal.outputPerAnimal` (CattleFarm/PigFarm/
+ * flat production rate) and `animal.outputPerAnimal` (OstrichFarm/PigFarm/
  * CowRanch/ChickenFarm all declare an empty `production: {}` and make
  * everything through their AnimalConfig - a lookup that skipped this would
  * report zero producers for rawMeat, leather and eggs).

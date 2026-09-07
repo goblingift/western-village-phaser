@@ -206,12 +206,30 @@ const VEGETATION_SPRITES: Record<VegetationKind, PixelSprite> = {
   Cactus: CACTUS_SPRITE,
 };
 
-const CATTLE_FARM_SPRITE: PixelSprite = {
-  // P alternates with B across wall columns to read as vertical wood planks.
-  palette: { S: 0x4e342e, R: 0x6d4c41, B: 0x8d6748, P: 0x7a5a3d, H: 0xd7ccc8, D: 0x3e2723, F: 0xc9a063 },
+/**
+ * Phase 62: replaces CATTLE_FARM_SPRITE. A tall-bird silhouette motif (N: two
+ * long ostrich neck-and-head shapes rising above the roofline) is the
+ * distinguishing read against CowRanch's longhorn-skull roof ornament and
+ * ChickenFarm's small coop-door opening - deliberately taller/leaner than
+ * either. Walls stay the same wood-plank idiom every walled building shares.
+ */
+const OSTRICH_FARM_SPRITE: PixelSprite = {
+  palette: {
+    S: 0x4e342e,
+    R: 0x6d4c41,
+    B: 0x8d6748,
+    P: 0x7a5a3d,
+    H: 0xd7ccc8,
+    D: 0x3e2723,
+    F: 0xc9a063,
+    N: 0xefebe9,
+    E: 0x212121,
+  },
   pattern: [
+    '.....N......N..',
+    '.....N......N..',
+    '....NEN....NEN.',
     'SSSSSSSSSSSSSSSS',
-    'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SRRRRRRRRRRRRRRS',
     'SSSSSSSSSSSSSSSS',
@@ -223,8 +241,6 @@ const CATTLE_FARM_SPRITE: PixelSprite = {
     'SSSSSSSSSSSSSSSS',
     'FF..FF..FF..FF..',
     '................',
-    '................',
-    'FF..FF..FF..FF..',
     'SSSSSSSSSSSSSSSS',
   ],
 };
@@ -402,7 +418,7 @@ const PIG_FARM_SPRITE: PixelSprite = {
 
 const COW_RANCH_SPRITE: PixelSprite = {
   // Row 0: N pixels form a longhorn-skull silhouette mounted on the roof
-  // ridge. L is a lighter plank shade than CattleFarm/PigFarm's, giving
+  // ridge. L is a lighter plank shade than OstrichFarm/PigFarm's, giving
   // the "premium" ranch a whitewashed wood look. T is the hitching rail.
   palette: {
     S: 0x6d4c41,
@@ -921,7 +937,7 @@ const TRADING_POST_SPRITE: PixelSprite = {
 };
 
 const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
-  [BuildingType.CattleFarm]: CATTLE_FARM_SPRITE,
+  [BuildingType.OstrichFarm]: OSTRICH_FARM_SPRITE,
   [BuildingType.Butcher]: BUTCHER_SPRITE,
   [BuildingType.Well]: WELL_SPRITE,
   [BuildingType.House]: HOUSE_SPRITE,
@@ -1036,10 +1052,23 @@ const COW_ANIMAL_SPRITE: PixelSprite = {
   pattern: ['H....H', '.WWWW.', 'WBWWBW', 'WWWBWW', '.WWWW.', '.D..D.'],
 };
 
+/**
+ * Phase 62: Ostrich critter, matching OstrichFarm's new AnimalConfig. Reads
+ * distinctly tall/lean against the other three animal sprites on the same 6x6
+ * grid - a long neck (N) rising to a small head (K), rather than a squat
+ * feathered body like CHICKEN_ANIMAL_SPRITE. B is the body/wing plumage, Y the
+ * long legs.
+ */
+const OSTRICH_ANIMAL_SPRITE: PixelSprite = {
+  palette: { N: 0xefebe9, K: 0x212121, B: 0x424242, Y: 0xffa000 },
+  pattern: ['...K..', '...N..', '..BBB.', '.BBBB.', '..BBB.', '..Y.Y.'],
+};
+
 const ANIMAL_SPRITES: Record<AnimalKind, PixelSprite> = {
   Chicken: CHICKEN_ANIMAL_SPRITE,
   Pig: PIG_ANIMAL_SPRITE,
   Cow: COW_ANIMAL_SPRITE,
+  Ostrich: OSTRICH_ANIMAL_SPRITE,
 };
 
 /**

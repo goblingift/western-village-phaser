@@ -7,11 +7,13 @@ tools:
   - Write
   - Edit
   - Bash
+  - Agent
 allowed_tools:
   - Read
   - Write
   - Edit
   - Bash
+  - Agent
 permission_mode: auto
 ---
 

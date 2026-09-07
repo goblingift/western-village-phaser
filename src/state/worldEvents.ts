@@ -127,7 +127,7 @@ export function getDroughtWellMultiplier(): number {
   return multiplierIfActive('drought', DROUGHT_WELL_OUTPUT_MULTIPLIER);
 }
 
-/** Read by gameState's animal-output scaling (CattleFarm/PigFarm/CowRanch/ChickenFarm) alongside the existing connected/well/crop bonus multiplier. */
+/** Read by gameState's animal-output scaling (OstrichFarm/PigFarm/CowRanch/ChickenFarm) alongside the existing connected/well/crop bonus multiplier. */
 export function getCattleDiseaseMultiplier(): number {
   return multiplierIfActive('cattleDisease', CATTLE_DISEASE_OUTPUT_MULTIPLIER);
 }

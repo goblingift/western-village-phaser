@@ -242,6 +242,26 @@ export class ResourceHudPanel {
     }
   }
 
+  /**
+   * Phase 63: every GameObject this panel owns, for MainScene to hand to the
+   * zoom-locked UI camera. setScrollFactor(0) pins these to the screen but
+   * does nothing about camera.setZoom(), which scaled the whole panel along
+   * with the world until the UI camera existed.
+   *
+   * The Zones are included deliberately: they carry the per-row tooltip/click
+   * hit areas, and Phaser hit-tests an object only against cameras that
+   * actually render it (InputManager.inputCandidate -> willRender(camera)), so
+   * a Zone left on the main camera while its visuals moved to the UI camera
+   * would hit-test against the wrong, zoomed transform.
+   */
+  getUiObjects(): Phaser.GameObjects.GameObject[] {
+    const objects: Phaser.GameObjects.GameObject[] = [this.background, this.headerText];
+    for (const { icon, valueText, trendText, zone } of this.rows.values()) {
+      objects.push(icon, valueText, trendText, zone);
+    }
+    return objects;
+  }
+
   /** Y coordinate just below the panel, used by the minimap to sit under it. */
   getBottomY(): number {
     return PANEL_Y + this.panelHeight;

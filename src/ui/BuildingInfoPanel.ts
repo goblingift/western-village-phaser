@@ -7,6 +7,7 @@ import {
   DYNAMITER_TRAIN_MATERIALS,
   HOUSE_TIER_CONFIG,
   HarvestConfig,
+  HouseTier,
   MARKETABLE_RESOURCE_KEYS,
   MarketableResourceKey,
   PlacedBuilding,
@@ -47,6 +48,7 @@ import {
   depositToBank,
   getCropOutputMultiplier,
   getCropWaterDistance,
+  getEnclosureBuyStatus,
   getGravelDistance,
   getHarvestCenterTile,
   getLaborShortfall,
@@ -55,7 +57,6 @@ import {
   getRepairCost,
   getResources,
   getWellWaterDistance,
-  hasAdjacentFence,
   repairBuilding,
   setBuildingPriority,
   setTradingPostOrder,
@@ -81,6 +82,16 @@ export class BuildingInfoPanel {
    */
   private rallyPointArmedFor: string | null = null;
 
+  /**
+   * Phase 62: which tier's tab is currently open in a House's info panel.
+   * Defaults to the building's own current tier every time selection changes
+   * (a fresh look at a House should show what's actually happening, not
+   * whatever tab was left open on a previously-selected House) but otherwise
+   * persists across the per-tick re-renders `render()` already does, so
+   * clicking "Tier 3" doesn't get stomped back to "current" on the next tick.
+   */
+  private viewedHouseTier: HouseTier | null = null;
+
   constructor(container: HTMLElement) {
     this.panel = document.createElement('div');
     this.panel.id = 'building-info-panel';
@@ -89,6 +100,7 @@ export class BuildingInfoPanel {
 
     gameEvents.on('building-selected', (building: PlacedBuilding | null) => {
       this.selected = building;
+      this.viewedHouseTier = building && building.type === BuildingType.House ? building.houseTier : null;
       this.render();
     });
     gameEvents.on('production-tick', () => this.render());
@@ -168,6 +180,7 @@ export class BuildingInfoPanel {
           : null;
     const animalConfig = definition.animal;
     const animalText = animalConfig ? `Animals: ${this.selected.animalCount}/${animalConfig.maxAnimals}` : null;
+    const enclosureStatusText = animalConfig ? this.formatEnclosureStatusText(this.selected, animalConfig) : null;
     const cowboyText = isBarracks ? `Cowboys: ${this.selected.cowboyCount}/${COWBOY_MAX_PER_BARRACKS}` : null;
     // Phase 58: Barracks now trains two more kinds alongside Cowboy.
     const brawlerText = isBarracks ? `Brawlers: ${this.selected.brawlerCount}/${BRAWLER_MAX_PER_BARRACKS}` : null;
@@ -272,6 +285,9 @@ export class BuildingInfoPanel {
     const houseTierText = isHouse ? this.formatHouseTierText(this.selected) : null;
     const houseNeedsText = isHouse ? this.formatHouseNeedsText(this.selected) : null;
     const houseProgressText = isHouse ? this.formatHouseProgressText(this.selected) : null;
+    // Phase 62: imminent-decay warning, shown near the current-tier view once
+    // the unmet streak is a meaningful fraction of the hysteresis threshold.
+    const houseDecayWarningText = isHouse ? this.formatHouseDecayWarning(this.selected) : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
@@ -289,11 +305,13 @@ export class BuildingInfoPanel {
       ${houseTierText ? `<div>${houseTierText}</div>` : ''}
       ${houseNeedsText ? `<div>${houseNeedsText}</div>` : ''}
       ${houseProgressText ? `<div>${houseProgressText}</div>` : ''}
+      ${houseDecayWarningText ? `<div class="house-tier-decay-warning">${houseDecayWarningText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${understaffedText ? `<div class="hp-disabled">${understaffedText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
+      ${enclosureStatusText ? `<div>${enclosureStatusText}</div>` : ''}
       ${cowboyText ? `<div>${cowboyText}</div>` : ''}
       ${brawlerText ? `<div>${brawlerText}</div>` : ''}
       ${dynamiterText ? `<div>${dynamiterText}</div>` : ''}
@@ -305,6 +323,9 @@ export class BuildingInfoPanel {
 
     if (isDamaged) {
       this.renderRepairButton(this.selected);
+    }
+    if (isHouse) {
+      this.renderHouseTierTabs(this.selected);
     }
     if (animalConfig) {
       this.renderBuyAnimalButton(this.selected, animalConfig);
@@ -381,6 +402,106 @@ export class BuildingInfoPanel {
       return `Downgrade risk: ${HOUSE_TIER_HYSTERESIS_TICKS - building.houseNeedsUnmetStreak} tick(s) left`;
     }
     return null;
+  }
+
+  /**
+   * Phase 62: a louder, harder-to-miss line once the unmet streak has eaten a
+   * significant chunk of the hysteresis budget - formatHouseProgressText
+   * already shows the exact countdown, but a plain "5 tick(s) left" line
+   * blends into the rest of the panel. Threshold is half the hysteresis
+   * window: simple, and still gives the player real time to react once it
+   * appears (at HOUSE_TIER_HYSTERESIS_TICKS=75, that's the last ~37 ticks,
+   * ~74s of an in-progress downgrade).
+   */
+  private formatHouseDecayWarning(building: PlacedBuilding): string | null {
+    if (building.houseTier <= 1 || building.houseNeedsUnmetStreak <= 0) {
+      return null;
+    }
+    const halfway = Math.ceil(HOUSE_TIER_HYSTERESIS_TICKS / 2);
+    if (building.houseNeedsUnmetStreak < halfway) {
+      return null;
+    }
+    return `Needs unmet for ${building.houseNeedsUnmetStreak}/${HOUSE_TIER_HYSTERESIS_TICKS} ticks - tier will drop soon`;
+  }
+
+  /**
+   * Phase 62: Tier 1/2/3 tab strip. The active tier's tab always mirrors
+   * building.houseTier (so switching tabs never looks like it changed the
+   * building's real tier), independent of which tab the player currently has
+   * open (this.viewedHouseTier) for reading. Clicking a tab just changes what
+   * this.renderHouseTierDetail below reads next render - it never mutates
+   * game state.
+   */
+  private renderHouseTierTabs(building: PlacedBuilding): void {
+    const viewed = this.viewedHouseTier ?? building.houseTier;
+
+    const tabs = document.createElement('div');
+    tabs.className = 'house-tier-tabs';
+    const label = document.createElement('span');
+    label.textContent = 'View: ';
+    tabs.appendChild(label);
+
+    for (const tier of [1, 2, 3] as HouseTier[]) {
+      const button = document.createElement('button');
+      button.className = `house-tier-tab${viewed === tier ? ' active' : ''}`;
+      button.textContent = `Tier ${tier}${tier === building.houseTier ? ' (current)' : ''}`;
+      button.addEventListener('click', () => {
+        this.viewedHouseTier = tier;
+        this.render();
+      });
+      tabs.appendChild(button);
+    }
+    this.panel.appendChild(tabs);
+
+    this.renderHouseTierDetail(building, viewed);
+  }
+
+  /**
+   * Phase 62: the selected tab's need list, population grant and tax. For the
+   * building's actual current tier, each need also gets a live OK/MISSING
+   * badge straight off houseNeedsStatus (the exact snapshot runHouseNeeds
+   * wrote last tick) - for any other tier, badges are omitted entirely rather
+   * than guessed, since the building isn't running that tier's consumption
+   * logic and a fake live check would misrepresent what's actually happening.
+   */
+  private renderHouseTierDetail(building: PlacedBuilding, tier: HouseTier): void {
+    const tierConfig = HOUSE_TIER_CONFIG[tier];
+    const isCurrentTier = tier === building.houseTier;
+
+    const detail = document.createElement('div');
+    detail.className = 'house-tier-detail';
+
+    const summary = document.createElement('div');
+    const taxPart = tierConfig.taxPerTick > 0 ? ` | Tax: +$${tierConfig.taxPerTick}/tick` : ' | Tax: none';
+    summary.textContent = `Population: +${tierConfig.population}${taxPart}`;
+    detail.appendChild(summary);
+
+    const liveStatusByLabel = isCurrentTier
+      ? new Map(building.houseNeedsStatus.map((need) => [need.label, need.met]))
+      : null;
+
+    for (const group of tierConfig.needs) {
+      const needLine = document.createElement('div');
+      const amounts = (Object.entries(group.options) as [ResourceKey, number][])
+        .map(([key, amount]) => `${RESOURCE_LABELS[key]} ${amount}/tick`)
+        .join(' or ');
+      const live = liveStatusByLabel?.get(group.label) ?? null;
+      const badge = live === null ? '' : live ? ' - OK' : ' - MISSING';
+      if (live !== null) {
+        needLine.className = live ? 'house-tier-need-met' : 'house-tier-need-missing';
+      }
+      needLine.textContent = `${group.label}: ${amounts}${badge}`;
+      detail.appendChild(needLine);
+    }
+
+    if (!isCurrentTier) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'Reference only - not this House\'s current tier';
+      detail.appendChild(hint);
+    }
+
+    this.panel.appendChild(detail);
   }
 
   /**
@@ -576,11 +697,38 @@ export class BuildingInfoPanel {
     this.panel.appendChild(button);
   }
 
+  /**
+   * Real Fence Enclosures: replaces the old single-tile "requires an adjacent
+   * Fence" reason with the specific enclosure problem, checked in the same
+   * priority order getEnclosureBuyStatus/buyAnimal actually gate on - cap
+   * first (no enclosure math is even relevant once full), then the
+   * enclosure's own validity (open / too small), then affordability last.
+   *
+   * Item 4 (2026-09-07): dropped the Gate-count branches ("no Gate" / "N
+   * Gates, need exactly one") now that isEnclosureValid no longer checks
+   * gateCount at all - a closed perimeter with insufficient area now falls
+   * straight through to the "too small" branch regardless of how many Gates
+   * (if any) it has.
+   */
   private renderBuyAnimalButton(building: PlacedBuilding, animalConfig: AnimalConfig): void {
-    const blockReason = !hasAdjacentFence(building)
-      ? 'requires an adjacent Fence'
-      : building.animalCount >= animalConfig.maxAnimals
-        ? 'at max animals'
+    const atCap = building.animalCount >= animalConfig.maxAnimals;
+    const buyStatus = getEnclosureBuyStatus(building);
+
+    const enclosureReason = (): string | null => {
+      if (!buyStatus.enclosure || !buyStatus.enclosure.closed) {
+        return 'enclosure not closed (build a complete Fence perimeter)';
+      }
+      if (buyStatus.enclosure.enclosedTileCount < buyStatus.requiredArea) {
+        const short = buyStatus.requiredArea - buyStatus.enclosure.enclosedTileCount;
+        return `enclosure too small (need ${short} more tile${short === 1 ? '' : 's'})`;
+      }
+      return null;
+    };
+
+    const blockReason = atCap
+      ? 'at max animals'
+      : !buyStatus.valid
+        ? enclosureReason()
         : getMoney() < animalConfig.costPerAnimal
           ? "can't afford"
           : null;
@@ -600,6 +748,25 @@ export class BuildingInfoPanel {
       hint.textContent = blockReason;
       this.panel.appendChild(hint);
     }
+  }
+
+  /**
+   * Real Fence Enclosures: shown alongside the Buy button for any farm -
+   * open/closed and enclosed area vs. what the NEXT purchase needs.
+   *
+   * Item 3 (2026-09-07): the open branch now also reports enclosedTileCount
+   * (always 0 while open - the flood-fill never resolves an area for a
+   * non-closed result - but stated explicitly rather than omitted, so the
+   * line's shape is consistent whether or not the pen is closed). Item 4
+   * (2026-09-07): dropped the Gate-count branch entirely - Gate no longer
+   * factors into validity, so there is nothing left to report about it here.
+   */
+  private formatEnclosureStatusText(building: PlacedBuilding, animalConfig: AnimalConfig): string {
+    const status = getEnclosureBuyStatus(building);
+    if (!status.enclosure || !status.enclosure.closed) {
+      return 'Enclosure: Open - not enclosed (0 tiles)';
+    }
+    return `Enclosure: Closed, ${status.enclosure.enclosedTileCount} tiles (need ${status.requiredArea} for next ${animalConfig.animalLabel})`;
   }
 
   private renderTrainCowboyButton(building: PlacedBuilding): void {

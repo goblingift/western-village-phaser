@@ -275,6 +275,49 @@
       #building-info-panel button.priority-button.active {
         background: #4caf50;
       }
+      /* Phase 62: House per-tier tab strip - same compact row look as
+         .priority-row/.priority-button, plus a dedicated block for the
+         selected tab's need list and a warning line for an imminent decay. */
+      #building-info-panel .house-tier-tabs {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+        font-size: 12px;
+      }
+      #building-info-panel button.house-tier-tab {
+        margin-top: 0;
+        background: #5b3a29;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      #building-info-panel button.house-tier-tab:hover:not(.active) {
+        background: #714a35;
+      }
+      #building-info-panel button.house-tier-tab.active {
+        background: #4caf50;
+      }
+      #building-info-panel .house-tier-detail {
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: #1d130c88;
+        border: 1px solid #5b3a29;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      #building-info-panel .house-tier-detail div {
+        margin-top: 2px;
+      }
+      #building-info-panel .house-tier-need-met {
+        color: #8bc34a;
+      }
+      #building-info-panel .house-tier-need-missing {
+        color: #ff5252;
+      }
+      #building-info-panel .house-tier-decay-warning {
+        color: #ffb74d;
+        font-weight: bold;
+      }
       /* Phase 51: Trading Post per-resource order rows - toggle + label +
          two small number inputs, one row per marketable resource. */
       #building-info-panel .trade-order-row {

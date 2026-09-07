@@ -84,6 +84,17 @@ export class NightOverlay {
     });
   }
 
+  /**
+   * Phase 63: the tint rect, for MainScene's zoom-locked UI camera. It is
+   * sized to the viewport rather than the map, so under the main camera a
+   * zoomed-out view would shrink it to a patch in the middle of the screen
+   * (and a zoomed-in one would overdraw far past the edges) instead of
+   * covering exactly the screen, which is the whole premise of the effect.
+   */
+  getUiObjects(): Phaser.GameObjects.GameObject[] {
+    return [this.rect];
+  }
+
   /** 0 at full daylight, 1 at full night; drives the per-building night accents in MainScene. */
   getNightFactor(): number {
     return this.rect.alpha / NIGHT_OVERLAY_ALPHA;

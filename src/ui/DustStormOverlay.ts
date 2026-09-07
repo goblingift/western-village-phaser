@@ -57,6 +57,11 @@ export class DustStormOverlay {
     gameEvents.on('game-reset', () => this.applyVisible(false, true));
   }
 
+  /** Phase 63: the tint rect, for MainScene's zoom-locked UI camera - same viewport-sized-rect reasoning as NightOverlay.getUiObjects. */
+  getUiObjects(): Phaser.GameObjects.GameObject[] {
+    return [this.rect];
+  }
+
   private applyVisible(visible: boolean, immediate: boolean): void {
     const target = visible ? DUST_STORM_OVERLAY_ALPHA : 0;
 

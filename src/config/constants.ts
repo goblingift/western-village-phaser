@@ -214,8 +214,17 @@ export const MAX_NOTIFICATION_LOG_ENTRIES = 50;
  * same way Phase 44's stall notification is (PRODUCTION_STALL_NOTIFY_TICKS)
  * so a House doesn't flip tiers on a single borderline tick where another
  * building happened to drain the pool a moment earlier.
+ *
+ * Phase 62: raised from 5 to 75 (a full DAY_PHASE_SECONDS / PRODUCTION_TICK_MS
+ * = 150000 / 2000 = 75 ticks) - the original 5-tick window meant a tier could
+ * flip after just 10 seconds of a missed need, which read as flickery and far
+ * too punishing/rewarding for a resource hiccup. The design intent is a full
+ * day-phase of sustained (un)met needs before a tier actually moves, in
+ * either direction - kept as one symmetric constant rather than splitting
+ * upgrade/downgrade thresholds, consistent with this file's existing
+ * single-constant convention and runHouseNeeds' shared usage of it.
  */
-export const HOUSE_TIER_HYSTERESIS_TICKS = 5;
+export const HOUSE_TIER_HYSTERESIS_TICKS = 75;
 
 /**
  * Phase 50: Stone/Iron -> Blacksmith Tools Chain. Quarry and Iron Mine both
@@ -318,7 +327,7 @@ export const GOLD_RUSH_DURATION_MIN_SECONDS = 30;
 export const GOLD_RUSH_DURATION_MAX_SECONDS = 60;
 export const GOLD_RUSH_SELL_PRICE_MULTIPLIER = 1.5;
 
-/** Cattle Disease: a flat temporary output penalty on every animal-owning building (CattleFarm/PigFarm/CowRanch/ChickenFarm) - simpler and less punishing than animal-death bookkeeping. */
+/** Cattle Disease: a flat temporary output penalty on every animal-owning building (OstrichFarm/PigFarm/CowRanch/ChickenFarm) - simpler and less punishing than animal-death bookkeeping. */
 export const CATTLE_DISEASE_DURATION_MIN_SECONDS = 60;
 export const CATTLE_DISEASE_DURATION_MAX_SECONDS = 90;
 export const CATTLE_DISEASE_OUTPUT_MULTIPLIER = 0.5;
@@ -421,3 +430,47 @@ export const DYNAMITER_SPLASH_RADIUS_TILES = 2;
  */
 export const RAIDER_WALL_DETOUR_OFFSETS_TILES: readonly number[] = [1, 2];
 export const DYNAMITER_WALK_SPEED_PX_PER_SEC = 40;
+
+/**
+ * Phase 63: Roads & Logistics' existing +10% PRODUCTION bonus for connected
+ * buildings (BFS road-network connectivity) is untouched - this is a
+ * separate, additive unit-MOVEMENT-speed effect. Checked once at
+ * move-order-issue time (MainScene.issueUnitMoveOrder samples a handful of
+ * points along the straight-line path, same half-tile-step technique
+ * sampleForBlockingFence already uses) rather than every frame/tick, per
+ * CLAUDE.md's performance rules - a single per-order approximation, not a
+ * live per-frame road-following recheck mid-tween.
+ */
+export const ROAD_UNIT_SPEED_MULTIPLIER = 1.6;
+/** Fraction of sampled points along a move order's straight-line path that must land on a Road tile for the whole order to get ROAD_UNIT_SPEED_MULTIPLIER. */
+export const ROAD_UNIT_SPEED_SAMPLE_THRESHOLD = 0.5;
+
+/**
+ * Real Fence Enclosures. Replaces hasAdjacentFence's single-tile-touching
+ * check with a real closed-perimeter-with-one-Gate requirement
+ * (state/enclosures.ts's computeEnclosure + gameState's cached per-building
+ * result). ENCLOSURE_MAX_FLOOD_FILL_TILES bounds the flood-fill itself (see
+ * enclosures.ts); ENCLOSURE_RECOMPUTE_RADIUS_TILES is how far from a
+ * placed/removed Fence or Gate tile gameState looks for farms whose cached
+ * enclosure might have just changed, rather than recomputing every farm on
+ * the map on every wall edit.
+ */
+export const ENCLOSURE_RECOMPUTE_RADIUS_TILES = 20;
+
+/**
+ * Per-animal-type minimum enclosed floor area, derived from each farm's own
+ * AnimalConfig.maxAnimals (buildingConfig.ts) at a per-animal tile scale
+ * chosen to feel roughly proportional to the animal's real-world footprint:
+ * Chicken 1x1 (a coop is cramped by design), Pig/Ostrich 2x2, Cow 3x3 (the
+ * biggest, roams the most). Required area for buying the Nth animal is
+ * `tilesPerAnimal * N` - re-checked on every purchase (gameState.buyAnimal)
+ * against the CACHED enclosure result, so buying the 6th Pig needs a bigger
+ * pen than buying the 1st, without ever re-running the flood-fill on a
+ * purchase click.
+ */
+export const ANIMAL_ENCLOSURE_TILES_PER_ANIMAL: Record<'Chicken' | 'Pig' | 'Cow' | 'Ostrich', number> = {
+  Chicken: 1,
+  Pig: 4,
+  Cow: 9,
+  Ostrich: 4,
+};

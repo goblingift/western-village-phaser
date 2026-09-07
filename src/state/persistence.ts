@@ -15,6 +15,7 @@ import {
   getPlacedBuildings,
   getResources,
   getTotalMeatProduced,
+  recomputeAllEnclosures,
   recomputeWorkforceNow,
   resetGame,
   restoreBuilding,
@@ -78,6 +79,52 @@ export const MANUAL_SAVE_SLOT = 'manual';
 export const AUTOSAVE_SLOT = 'autosave';
 
 const STORAGE_KEY_PREFIX = 'western-village-save-';
+
+/**
+ * Phase 62: CattleFarm was removed from BuildingType and replaced by
+ * OstrichFarm (see buildingConfig.ts's Phase 62 doc comment on
+ * BUILDING_DEFINITIONS). An existing localStorage save can still contain
+ * PlacedBuilding records with the old `type: 'CattleFarm'` string - once the
+ * enum member is gone, `BUILDING_DEFINITIONS[type]` would be `undefined` for
+ * those and throw inside restoreBuilding (which indexes it directly to size
+ * the building's occupancy footprint) or anywhere else a definition lookup
+ * assumes every PlacedBuilding.type is a live BuildingType. The old string is
+ * deliberately compared as a literal (not `BuildingType.CattleFarm`, which no
+ * longer exists) so this migration keeps compiling and working forever, even
+ * though nothing else in the codebase can produce that value anymore.
+ */
+const LEGACY_CATTLE_FARM_TYPE = 'CattleFarm';
+
+/** Remaps any legacy building type string to its current replacement before a save's buildings are restored. Identity for every other type. */
+function migrateLegacyBuildingType(type: string): BuildingType {
+  if (type === LEGACY_CATTLE_FARM_TYPE) {
+    return BuildingType.OstrichFarm;
+  }
+  return type as BuildingType;
+}
+
+/** Applies migrateLegacyBuildingType to every building in a loaded save, without mutating the caller's array. */
+function migrateSavedBuildings(buildings: PlacedBuilding[]): PlacedBuilding[] {
+  return buildings.map((building) => {
+    const migratedType = migrateLegacyBuildingType(building.type);
+    if (migratedType === building.type) {
+      return building;
+    }
+    return { ...building, type: migratedType };
+  });
+}
+
+/** Same migration, applied to a save's lifetime buildingsEverBuiltByType counts (keyed by type string) instead of a PlacedBuilding array - a legacy key's count is folded into its replacement's rather than silently dropped. */
+function migrateBuildingsEverBuiltByType(
+  counts: Partial<Record<BuildingType, number>>,
+): Partial<Record<BuildingType, number>> {
+  const migrated: Partial<Record<BuildingType, number>> = {};
+  for (const [type, count] of Object.entries(counts) as [BuildingType, number][]) {
+    const migratedType = migrateLegacyBuildingType(type);
+    migrated[migratedType] = (migrated[migratedType] ?? 0) + (count ?? 0);
+  }
+  return migrated;
+}
 
 export interface SaveGameV1 {
   version: 1;
@@ -197,7 +244,11 @@ export function deserializeGameState(save: SaveGameV1): void {
     if (save.raiderCamps) {
       restoreRaiderCamps(save.raiderCamps);
     }
-    for (const building of save.placedBuildings) {
+    // Phase 62: migrate any legacy building type (e.g. a pre-Phase-62 save's
+    // 'CattleFarm' records) to its current replacement before anything below
+    // looks up BUILDING_DEFINITIONS by type.
+    const migratedPlacedBuildings = migrateSavedBuildings(save.placedBuildings);
+    for (const building of migratedPlacedBuildings) {
       restoreBuilding(cloneBuilding(building));
     }
     // Bug 2 fix: undefined on a save made before this fix shipped - fall back
@@ -205,10 +256,10 @@ export function deserializeGameState(save: SaveGameV1): void {
     // rather than starting the lifetime tally at zero, since that's the best
     // approximation available for an old save.
     if (save.buildingsEverBuiltByType) {
-      restoreBuildingsEverBuiltByType(save.buildingsEverBuiltByType);
+      restoreBuildingsEverBuiltByType(migrateBuildingsEverBuiltByType(save.buildingsEverBuiltByType));
     } else {
       const fallbackCounts: Partial<Record<BuildingType, number>> = {};
-      for (const building of save.placedBuildings) {
+      for (const building of migratedPlacedBuildings) {
         fallbackCounts[building.type] = (fallbackCounts[building.type] ?? 0) + 1;
       }
       restoreBuildingsEverBuiltByType(fallbackCounts);
@@ -221,6 +272,11 @@ export function deserializeGameState(save: SaveGameV1): void {
     }
     recomputeWorkforceNow();
     silentlySyncUnlockNotifications();
+    // Real Fence Enclosures: never trust a stale cache across a load - it's
+    // cheap to re-derive fresh from the restored Fence/Gate/farm positions,
+    // and a per-building cache entry has no save-format representation to
+    // begin with (see gameState's enclosureCache doc comment).
+    recomputeAllEnclosures();
 
     gameEvents.emit('game-loaded');
     updateConnections();

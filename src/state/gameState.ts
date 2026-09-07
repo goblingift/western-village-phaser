@@ -1,4 +1,5 @@
 import {
+  ANIMAL_ENCLOSURE_TILES_PER_ANIMAL,
   BANK_INTEREST_RATE,
   BANK_TRANSACTION_AMOUNT,
   BASE_STORAGE_CAP,
@@ -20,6 +21,7 @@ import {
   DYNAMITER_MAX_PER_BARRACKS,
   DYNAMITER_TRAIN_COST,
   DYNAMITER_TRAIN_TICKS,
+  ENCLOSURE_RECOMPUTE_RADIUS_TILES,
   ENDLESS_THREAT_RAMP_CYCLES,
   GAME_DURATION_SECONDS,
   GRAVEL_MAX_DISTANCE_TILES,
@@ -53,6 +55,7 @@ import {
 } from '../config/constants';
 import { OBJECTIVE_DEFINITIONS, OBJECTIVE_DEFINITIONS_BY_ID, ObjectiveSnapshot, formatObjectiveReward } from '../config/objectives';
 import {
+  AnimalKind,
   BRAWLER_TRAIN_MATERIALS,
   BUILDING_DEFINITIONS,
   BuildingType,
@@ -85,10 +88,10 @@ import {
   findNearestVegetation,
   getVegetationAtTile,
   harvestVegetation,
-  isTileBlockedByVegetation,
   plantVegetation,
   removeVegetation,
   resetVegetation,
+  VegetationEntity,
 } from './vegetation';
 import { gameEvents } from './gameEvents';
 import { addNotification, clearNotifications } from './notifications';
@@ -102,6 +105,7 @@ import {
   runWorldEventsTick,
 } from './worldEvents';
 import { resetRaiderCamps } from './raiderCamps';
+import { EnclosureResult, EnclosureTileState, computeEnclosure, isEnclosureValid } from './enclosures';
 
 export interface Resources {
   rawMeat: number;
@@ -342,6 +346,122 @@ function clearNotificationDebounceState(): void {
   stalledInputNotified.clear();
   upkeepDisabledNotified.clear();
   resourcesWastingAtCap.clear();
+}
+
+/**
+ * Real Fence Enclosures: cached per-building flood-fill result (see
+ * state/enclosures.ts's computeEnclosure), keyed by farm buildingId - like
+ * productivityRecords above, this is recomputed on demand (never per-tick)
+ * and dropped in removeBuilding/resetGame. Only farm-type buildings (an
+ * `animal` config) ever get an entry; getEnclosureFor lazily computes and
+ * caches on first read so a building that's never had a nearby Fence/Gate
+ * change since placement still gets a correct (open) result the first time
+ * anything asks.
+ */
+const enclosureCache = new Map<string, EnclosureResult>();
+
+function isFarmBuilding(building: PlacedBuilding): boolean {
+  return BUILDING_DEFINITIONS[building.type].animal !== undefined;
+}
+
+/**
+ * The single tile-state predicate every enclosure computation feeds into
+ * state/enclosures.ts's computeEnclosure - Fence blocks, Gate is a
+ * counted-but-passable boundary tile, any other building blocks, everything
+ * else is open. `selfBuildingId` is the farm this computation is FOR, not a
+ * tile to exclude/pass through: a farm's own footprint must query as
+ * 'building' (matching this file's and enclosures.ts's own documented
+ * invariant "a farm's own footprint counts as occupied so the fill can't
+ * walk back through it") so the flood-fill can't shortcut across the farm's
+ * body. Bug fix: this used to early-return 'open' whenever
+ * `occupantId === excludeBuildingId`, i.e. treated the farm as passable
+ * ground through itself - a copy-paste of tileHasOtherBuilding's "exclude
+ * self" pattern (used there to find ADJACENT roads, where skipping your own
+ * tiles is correct) misapplied here, where the farm's own tiles must
+ * self-block instead. Confirmed by direct repro: for a single rectangular
+ * pen this rarely flips the closed/open verdict on its own (BFS can always
+ * route around a convex footprint through the seeded boundary band instead
+ * of through it), but it does inflate `enclosedTileCount` by the footprint's
+ * own area every time, and that inflation can tip an otherwise-legitimate,
+ * already-near-cap pen over MAX_FLOOD_FILL_TILES (see the raised cap below).
+ */
+function queryEnclosureTile(tileX: number, tileY: number, selfBuildingId: string): EnclosureTileState {
+  const occupantId = tileY >= 0 && tileY < MAP_HEIGHT_TILES && tileX >= 0 && tileX < MAP_WIDTH_TILES ? occupancy[tileY][tileX] : null;
+  if (!occupantId) {
+    return 'open';
+  }
+  if (occupantId === selfBuildingId) {
+    return 'building';
+  }
+  const occupant = buildingsById.get(occupantId);
+  if (!occupant) {
+    return 'open';
+  }
+  if (occupant.type === BuildingType.Fence) {
+    return 'fence';
+  }
+  if (occupant.type === BuildingType.Gate) {
+    return 'gate';
+  }
+  return 'building';
+}
+
+function recomputeEnclosureFor(building: PlacedBuilding): EnclosureResult {
+  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+  const result = computeEnclosure(building.tileX, building.tileY, width, height, (x, y) =>
+    queryEnclosureTile(x, y, building.id),
+  );
+  enclosureCache.set(building.id, result);
+  return result;
+}
+
+/** Cached read - never runs the flood-fill itself. Lazily computes once if this farm has no cached entry yet (e.g. just placed). */
+export function getEnclosureFor(buildingId: string): EnclosureResult | null {
+  const building = buildingsById.get(buildingId);
+  if (!building || !isFarmBuilding(building)) {
+    return null;
+  }
+  const cached = enclosureCache.get(buildingId);
+  if (cached) {
+    return cached;
+  }
+  return recomputeEnclosureFor(building);
+}
+
+/**
+ * Called whenever a Fence or Gate is placed/removed, and once for a
+ * freshly-placed farm. Only farms within ENCLOSURE_RECOMPUTE_RADIUS_TILES
+ * (Chebyshev, cheap) of the changed tile are recomputed - a wall edit on one
+ * side of a large map cannot have changed a farm's enclosure clear across it,
+ * so this avoids an O(all farms) flood-fill pass on every single Fence
+ * click.
+ */
+function recomputeEnclosuresNear(tileX: number, tileY: number): void {
+  for (const building of placedBuildings) {
+    if (!isFarmBuilding(building)) {
+      continue;
+    }
+    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
+    const dx = Math.max(building.tileX - tileX, 0, tileX - (building.tileX + width - 1));
+    const dy = Math.max(building.tileY - tileY, 0, tileY - (building.tileY + height - 1));
+    if (Math.max(dx, dy) <= ENCLOSURE_RECOMPUTE_RADIUS_TILES) {
+      recomputeEnclosureFor(building);
+    }
+  }
+}
+
+/** Manual/forced recompute hook (e.g. a debug-overlay toggle or the info panel) - recomputes every currently-placed farm's enclosure, ignoring the radius optimization. Still only ever runs on demand, never per-tick. */
+export function recomputeAllEnclosures(): void {
+  for (const building of placedBuildings) {
+    if (isFarmBuilding(building)) {
+      recomputeEnclosureFor(building);
+    }
+  }
+}
+
+/** Required enclosed tile area to own `animalCount` animals of the given kind - see ANIMAL_ENCLOSURE_TILES_PER_ANIMAL's doc comment for the per-kind scale rationale. */
+export function getRequiredEnclosureArea(animalLabel: AnimalKind, animalCount: number): number {
+  return ANIMAL_ENCLOSURE_TILES_PER_ANIMAL[animalLabel] * animalCount;
 }
 
 function createEmptyOccupancy(): (string | null)[][] {
@@ -786,8 +906,15 @@ export function canAfford(type: BuildingType): boolean {
 
 /**
  * Phase 30: terrain is finally consulted. Every tile of the footprint must be
- * in-bounds, dry land (water is impassable) and clear of vegetation - a tree
- * or cactus has to be harvested away before its tile can be built on.
+ * in-bounds and dry land (water is impassable).
+ *
+ * Item 1 (2026-09-07): vegetation is deliberately NOT checked here anymore.
+ * A tree/cactus on the footprint used to be a hard block ("Blocked by
+ * vegetation"), forcing a separate manual bulldozer-clear step before the
+ * tile could be built on at all. It's now auto-cleared as part of the
+ * placement transaction itself (see getVegetationClearCost/placeBuilding) -
+ * water remains the one genuine terrain hard-block, since there is no
+ * "auto-clear water" equivalent.
  */
 export function isTerrainBuildable(tileX: number, tileY: number, type: BuildingType): boolean {
   return getTerrainRejection(tileX, tileY, type) === null;
@@ -800,12 +927,53 @@ function getTerrainRejection(tileX: number, tileY: number, type: BuildingType): 
       if (!isBuildableTerrain(x, y)) {
         return 'Cannot build on water';
       }
-      if (isTileBlockedByVegetation(x, y)) {
-        return 'Blocked by vegetation';
-      }
     }
   }
   return null;
+}
+
+/**
+ * Item 1 (2026-09-07): Auto-clear vegetation on building placement. Placing
+ * ANY building on a vegetated tile now clears the tree(s)/cactus/cacti in its
+ * footprint automatically as part of the placement transaction, rather than
+ * blocking placement until the player manually bulldozes each tile first
+ * (VEGETATION_CLEAR_COST's original manual-clear path, clearVegetationAt,
+ * still exists unchanged for clearing a tile with no building going on it -
+ * e.g. to free up a tile for a harvester elsewhere, or just tidy an area).
+ *
+ * Design decision (cost): charges the SAME per-tile VEGETATION_CLEAR_COST/
+ * refund the manual bulldozer path already uses, folded additively into the
+ * placement's money cost, rather than making auto-clear free. A free
+ * auto-clear would undercut the existing vegetation-clearing economy outright
+ * (nobody would ever use the manual bulldozer-clear button again, and
+ * "build a cheap 1x1 Road/Fence on top of an expensive tree, refund excluded"
+ * would become a degenerate way to clear vegetation for less than its real
+ * cost). Charging the same rate keeps clearing-via-building and
+ * clearing-via-bulldozer equivalent in cost - placement is simply a
+ * convenience that folds the two actions (clear + build) into one click and
+ * one transaction, not a discount.
+ *
+ * Returns the vegetation entities the footprint currently covers plus the
+ * total money cost/refund of auto-clearing all of them - shared by
+ * getPlacementRejection (afford check + rejection text), getPlacementWarning
+ * (soft advisory) and placeBuilding (the actual atomic clear-then-place).
+ */
+function getVegetationClearPlan(
+  tileX: number,
+  tileY: number,
+  type: BuildingType,
+): { entities: VegetationEntity[]; totalCost: number } {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  const entities: VegetationEntity[] = [];
+  for (let y = tileY; y < tileY + height; y++) {
+    for (let x = tileX; x < tileX + width; x++) {
+      const entity = getVegetationAtTile(x, y);
+      if (entity) {
+        entities.push(entity);
+      }
+    }
+  }
+  return { entities, totalCost: entities.length * VEGETATION_CLEAR_COST };
 }
 
 /**
@@ -959,8 +1127,18 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
   ) {
     return `${BUILDING_DEFINITIONS[type].label} must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`;
   }
-  if (money < BUILDING_DEFINITIONS[type].cost) {
-    return `Not enough money ($${BUILDING_DEFINITIONS[type].cost})`;
+  // Item 1: the affordability check accounts for the total auto-clear cost
+  // (vegetation tiles in the footprint x VEGETATION_CLEAR_COST) ALONGSIDE the
+  // building's own money cost, in one combined threshold - not two separate
+  // checks - so a player who can afford the building but not the clearing
+  // (or vice versa) gets one accurate "not enough money" figure rather than
+  // two contradictory-looking messages on subsequent reads.
+  const clearPlan = getVegetationClearPlan(tileX, tileY, type);
+  const totalMoneyNeeded = BUILDING_DEFINITIONS[type].cost + clearPlan.totalCost;
+  if (money < totalMoneyNeeded) {
+    return clearPlan.totalCost > 0
+      ? `Not enough money ($${totalMoneyNeeded}, includes $${clearPlan.totalCost} to clear ${clearPlan.entities.length} vegetation)`
+      : `Not enough money ($${totalMoneyNeeded})`;
   }
   if (!hasEnoughMaterials(type)) {
     return `Not enough materials: need ${describeMissingMaterials(type)}`;
@@ -1024,6 +1202,15 @@ export function getPlacementWarning(tileX: number, tileY: number, type: Building
     }
   }
 
+  // Item 1 (2026-09-07): a vegetated footprint is legal to build on (it gets
+  // auto-cleared as part of placement, see getVegetationClearPlan/
+  // placeBuilding) but the player should still see the cost coming before
+  // they commit to the click - this is advisory only, the tint stays green.
+  const clearPlan = getVegetationClearPlan(tileX, tileY, type);
+  if (clearPlan.entities.length > 0) {
+    return `Will clear ${clearPlan.entities.length} vegetation for $${clearPlan.totalCost}`;
+  }
+
   return null;
 }
 
@@ -1034,6 +1221,33 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
 
   const definition = BUILDING_DEFINITIONS[type];
   const { width, height } = definition.size;
+
+  // Item 1 (2026-09-07): re-derive the clear plan rather than trusting a
+  // caller-passed value - canPlaceBuilding above already re-validated total
+  // affordability (building cost + clear cost) against the CURRENT money
+  // balance at the top of this call, so this recomputation can't disagree
+  // with what was just approved. Vegetation is cleared and money/resources
+  // deducted for it BEFORE the building's own cost/materials deduction below,
+  // atomically within this one function call - nothing async, nothing that
+  // could observe a half-applied state.
+  const clearPlan = getVegetationClearPlan(tileX, tileY, type);
+  if (clearPlan.entities.length > 0) {
+    money = Math.round((money - clearPlan.totalCost) * 100) / 100;
+    const storageCap = getStorageCap();
+    for (const entity of clearPlan.entities) {
+      if (entity.kind === 'Tree') {
+        resources.logs = Math.min(storageCap, resources.logs + VEGETATION_CLEAR_TREE_LOGS);
+      } else {
+        resources.agaveJuice = Math.min(storageCap, resources.agaveJuice + VEGETATION_CLEAR_CACTUS_JUICE);
+      }
+      // removeVegetation emits 'vegetation-removed' itself - the same event
+      // the manual bulldozer-clear path (clearVegetationAt) already relies on
+      // for MainScene to destroy the tile's sprite/update the minimap, so
+      // this auto-clear path stays visually in sync for free.
+      removeVegetation(entity);
+    }
+    gameEvents.emit('resources-changed', { ...resources });
+  }
 
   const building: PlacedBuilding = {
     id: `${type}-${tileX}-${tileY}-${Date.now()}`,
@@ -1080,6 +1294,34 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
   placedBuildings.push(building);
   buildingsById.set(building.id, building);
   buildingsEverBuiltByType[type] = (buildingsEverBuiltByType[type] ?? 0) + 1;
+
+  // Bug fix (2026-09-07): this recompute used to run AFTER the
+  // 'building-placed' emit below, and was narrowly gated on the placed
+  // building being a Fence/Gate itself. Both were wrong. (1) Ordering: emit()
+  // on gameEvents (a plain synchronous Phaser.Events.EventEmitter) runs every
+  // listener - including MainScene's enclosure-exit-hint redraw - INSIDE this
+  // call, before the cache below was refreshed, so a listener reacting to the
+  // very fence tile that closes a pen would see the stale pre-closure result.
+  // (2) Trigger scope: queryEnclosureTile (above) treats ANY other building's
+  // footprint as a blocker, not just Fence/Gate - exactly per this system's
+  // documented "a building's own footprint counts as occupied" invariant -
+  // but the old trigger only ever recomputed nearby farms for a Fence/Gate
+  // placement, so a plain building (House, Well, another farm, ...) placed to
+  // plug the last gap in an existing farm's perimeter never invalidated that
+  // farm's cache at all: getEnclosureFor kept returning the last-cached
+  // (often "open") result indefinitely, until some unrelated later Fence/Gate
+  // edit nearby happened to force a fresh flood-fill. Confirmed via a
+  // real-code-path repro (placeBuilding -> recomputeEnclosuresNear ->
+  // enclosureCache -> getEnclosureFor, no reimplementation) that a
+  // fence-and-building-mixed pen read closed=false from the cache while a
+  // forced recomputeAllEnclosures() on the exact same state read closed=true.
+  // Fix: recompute BEFORE emitting 'building-placed', and do it for every
+  // placement, not just Fence/Gate - any building can be the piece that
+  // closes (or breaches) a neighboring farm's perimeter.
+  if (isFarmBuilding(building)) {
+    recomputeEnclosureFor(building);
+  }
+  recomputeEnclosuresNear(tileX, tileY);
 
   gameEvents.emit('money-changed', money);
   if (definition.materials) {
@@ -1219,6 +1461,19 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
   // Phase 49: same reasoning - a destroyed-then-rebuilt building starts its
   // productivity window fresh under its new id rather than inheriting one.
   productivityRecords.delete(building.id);
+  // Real Fence Enclosures: drop the removed building's own cached enclosure
+  // (only meaningful if it was itself a farm) and recompute every nearby
+  // farm's enclosure - occupancy for this tile is already cleared above, so
+  // the recompute sees the gap immediately. Bug fix (2026-09-07): this used
+  // to only fire for a removed Fence/Gate, mirroring placeBuilding's old
+  // narrow trigger - but queryEnclosureTile treats ANY building's footprint
+  // as a blocker, so removing/bulldozing a plain building that had been
+  // plugging a gap in a neighboring farm's perimeter (e.g. a demolished
+  // House that used to close one side of the pen) must invalidate that
+  // farm's cache too, not just a removed wall segment. See placeBuilding's
+  // matching fix for the full root-cause writeup.
+  enclosureCache.delete(building.id);
+  recomputeEnclosuresNear(building.tileX, building.tileY);
 
   if (reason === 'destroyed') {
     addNotification(
@@ -1413,35 +1668,39 @@ function collectAdjacentRoadIds(building: PlacedBuilding): Set<string> {
   return roadIds;
 }
 
-export function hasAdjacentFence(building: PlacedBuilding): boolean {
-  const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-
-  const isFence = (nx: number, ny: number): boolean => {
-    if (!tileHasOtherBuilding(nx, ny, building.id)) {
-      return false;
-    }
-    const neighbor = buildingsById.get(occupancy[ny][nx]!);
-    return neighbor?.type === BuildingType.Fence;
-  };
-
-  for (let x = building.tileX; x < building.tileX + width; x++) {
-    if (isFence(x, building.tileY - 1) || isFence(x, building.tileY + height)) {
-      return true;
-    }
+/**
+ * Real Fence Enclosures: whether `building` (a farm) currently qualifies to
+ * buy its NEXT animal - reads the cached enclosure (getEnclosureFor, never
+ * re-runs the flood-fill here) and checks it's closed and has enough
+ * enclosed floor area for animalCount + 1 of this farm's animal kind. Exported
+ * so BuildingInfoPanel can build its disabled-reason text from the same two
+ * sub-checks buyAnimal itself gates on.
+ *
+ * Item 4 (2026-09-07): Gate presence/count was dropped from this check
+ * (isEnclosureValid no longer looks at gateCount) - see enclosures.ts's
+ * isEnclosureValid doc comment for the rationale.
+ */
+export function getEnclosureBuyStatus(building: PlacedBuilding): {
+  enclosure: EnclosureResult | null;
+  valid: boolean;
+  requiredArea: number;
+} {
+  const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
+  const enclosure = getEnclosureFor(building.id);
+  if (!animalConfig || !enclosure) {
+    return { enclosure, valid: false, requiredArea: 0 };
   }
-  for (let y = building.tileY; y < building.tileY + height; y++) {
-    if (isFence(building.tileX - 1, y) || isFence(building.tileX + width, y)) {
-      return true;
-    }
-  }
-
-  return false;
+  const requiredArea = getRequiredEnclosureArea(animalConfig.animalLabel, building.animalCount + 1);
+  const valid = isEnclosureValid(enclosure) && enclosure.enclosedTileCount >= requiredArea;
+  return { enclosure, valid, requiredArea };
 }
 
 /**
  * Buying an animal is a hard buy-gate, not a soft output multiplier: it
- * fails outright (no partial/half-output fallback) without an adjacent
- * Fence, at the per-building animal cap, or without enough money.
+ * fails outright (no partial/half-output fallback) without a closed Fence
+ * perimeter big enough to hold animalCount + 1 animals, at the per-building
+ * animal cap, or without enough money. (Gate count is no longer part of this
+ * gate as of Item 4, 2026-09-07 - see isEnclosureValid.)
  */
 export function buyAnimal(buildingId: string): boolean {
   const building = buildingsById.get(buildingId);
@@ -1456,7 +1715,7 @@ export function buyAnimal(buildingId: string): boolean {
   if (building.animalCount >= animalConfig.maxAnimals) {
     return false;
   }
-  if (!hasAdjacentFence(building)) {
+  if (!getEnclosureBuyStatus(building).valid) {
     return false;
   }
   if (money < animalConfig.costPerAnimal) {
@@ -2804,6 +3063,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   tickResourceProduced = {};
   tickResourceConsumed = {};
   productivityRecords.clear();
+  enclosureCache.clear();
   totalMeatProduced = 0;
   elapsedSeconds = 0;
   gameOver = false;

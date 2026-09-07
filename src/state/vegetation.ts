@@ -82,10 +82,17 @@ export function getVegetationAtTile(tileX: number, tileY: number): VegetationEnt
   return vegetationByTile.get(tileKey(tileX, tileY)) ?? null;
 }
 
-/** Placement gate: any tile carrying a tree/cactus is unbuildable until it's cleared by harvesting. */
-export function isTileBlockedByVegetation(tileX: number, tileY: number): boolean {
-  return vegetationByTile.has(tileKey(tileX, tileY));
-}
+/**
+ * Item 1 (2026-09-07): this module used to also export
+ * `isTileBlockedByVegetation`, a hard placement gate gameState's
+ * getTerrainRejection called to outright block building on a vegetated tile.
+ * That gate is gone - placing a building on vegetation now auto-clears it
+ * (charged at VEGETATION_CLEAR_COST per tile, same as the manual bulldozer
+ * path) as part of the placement transaction instead of blocking it, via
+ * gameState's getVegetationClearPlan/placeBuilding, which call
+ * getVegetationAtTile directly rather than a boolean gate. Removed the
+ * now-fully-unused export outright rather than leaving dead API surface.
+ */
 
 export function countVegetationInRadius(
   kind: VegetationKind,
