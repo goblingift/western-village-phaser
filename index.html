@@ -199,6 +199,12 @@
         margin-left: 8px;
         align-items: center;
       }
+      /* Phase 69: same margin-left override reasoning as .audio-group above -
+         gate-controls follows the audio group in the row, so it must not
+         re-claim speed-group's margin-left:auto either. */
+      #building-bar .gate-controls {
+        margin-left: 8px;
+      }
       #building-bar .volume {
         width: 72px;
         accent-color: #c9a063;
@@ -911,6 +917,72 @@
         padding: 6px 14px;
         cursor: pointer;
       }
+      /* Phase 65: Save/Load modal. Same fixed-backdrop pattern as
+         #help-overlay / #game-over-overlay / #difficulty-select-overlay. */
+      #save-load-overlay {
+        position: fixed;
+        inset: 0;
+        background: #000000b3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+      }
+      #save-load-overlay[hidden] {
+        display: none;
+      }
+      #save-load-panel {
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 8px;
+        padding: 20px 26px;
+        width: 620px;
+        max-width: 92vw;
+        max-height: 90vh;
+        overflow-y: auto;
+        font-family: sans-serif;
+        font-size: 12px;
+      }
+      #save-load-panel h2 {
+        margin-top: 0;
+      }
+      #save-load-panel .save-load-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      #save-load-panel .save-load-row td {
+        padding: 10px 6px;
+        vertical-align: top;
+        border-bottom: 1px solid #ffffff14;
+        line-height: 1.5;
+      }
+      #save-load-panel .save-load-empty {
+        color: #8d7f6e;
+      }
+      #save-load-panel .save-load-actions-cell {
+        white-space: nowrap;
+        text-align: right;
+      }
+      #save-load-panel .save-load-actions {
+        margin-top: 14px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      #save-load-panel button {
+        background: #4a3524;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 6px 14px;
+        margin-left: 6px;
+        cursor: pointer;
+      }
+      #save-load-panel button.save-load-delete {
+        background: #6b2b2b;
+        border-color: #a33;
+      }
       #difficulty-select-panel {
         background: #2b1d12;
         color: #f2e6d8;
@@ -1170,7 +1242,8 @@
            bumped the most since it started smallest. --- */
         #difficulty-select-panel button,
         #game-over-panel button,
-        #help-panel button {
+        #help-panel button,
+        #save-load-panel button {
           min-height: 44px;
           min-width: 44px;
           padding: 12px 16px;
@@ -1181,6 +1254,15 @@
         }
         #help-panel .help-actions {
           gap: 10px;
+        }
+        /* Phase 65: Save/Load rows put Save-over/Load/Delete side by side in a
+           narrow table cell - keep them stacked block targets on touch so
+           each still gets its full 44px tall tap area instead of three
+           squeezed-together inline buttons. */
+        #save-load-panel .save-load-actions-cell button {
+          display: block;
+          width: 100%;
+          margin: 6px 0 0;
         }
         #tutorial-panel button {
           min-height: 44px;

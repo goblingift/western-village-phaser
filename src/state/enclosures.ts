@@ -19,17 +19,19 @@ import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from '../config/constants';
  *
  * The fill is bounded twice, both meaning "not enclosed": reaching outside
  * the map's tile bounds, or exceeding MAX_FLOOD_FILL_TILES - a huge open
- * field with no wall anywhere would otherwise flood-fill most of the 40x30
+ * field with no wall anywhere would otherwise flood-fill most of the 60x45
  * map before giving up, which is wasted work for an already-obvious "open"
  * verdict. Raised 400 -> 900 after a QA-confirmed bug report: a genuinely,
  * fully closed player-built pen (e.g. a generously-sized ~20x20 interior =
- * 400 open tiles, well within reach on a 40x30 map) was being reported as
+ * 400 open tiles, well within reach on the map) was being reported as
  * "not enclosed" purely because its real, legitimate area met or exceeded
- * the old cap - 900 comfortably covers a very large pen (a 29x29 interior)
- * while still bailing out well before the full ~1200-tile map for a genuinely
- * open field.
+ * the old cap - 900 comfortably covers a very large pen (a 29x29 interior).
+ * Phase 66: raised again 900 -> 2000 alongside the 40x30 -> 60x45 map size
+ * increase, keeping the same safety margin relative to the full map (now
+ * ~2700 tiles) while still bailing out well before it for a genuinely open
+ * field.
  */
-const MAX_FLOOD_FILL_TILES = 900;
+const MAX_FLOOD_FILL_TILES = 2000;
 
 export type EnclosureTileQuery = (tileX: number, tileY: number) => EnclosureTileState;
 
@@ -69,7 +71,7 @@ function tileKey(x: number, y: number): string {
  * Computes whether the given footprint (a farm's tile rectangle) sits inside
  * a closed Fence/Gate perimeter, and if so, how big that pen is and how many
  * Gates sit on its boundary. Iterative BFS (never recursive - the map is only
- * 40x30 but an unbounded recursive flood-fill is still the wrong shape for a
+ * 60x45 but an unbounded recursive flood-fill is still the wrong shape for a
  * grid this size to risk a stack limit on).
  */
 export function computeEnclosure(

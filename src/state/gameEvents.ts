@@ -135,6 +135,23 @@ export interface GameEventMap {
    */
   'world-event-started': (payload: { type: DurationWorldEventType; expiresAtElapsedSeconds: number }) => void;
   'world-event-ended': (payload: { type: WorldEventType }) => void;
+  /**
+   * Phase 65: opens/closes the Save/Load overlay (three manual slots + the
+   * read-only autosave slot). Emitted by BuildingBar's "Saves" button;
+   * SaveLoadOverlay owns its own shown/hidden state and is the only listener,
+   * exactly like 'toggle-statistics-panel'/'toggle-help-overlay'.
+   */
+  'toggle-save-load-overlay': () => void;
+  /**
+   * Phase 69: fired by gameState's setGateOpen/setAllGates AFTER the affected
+   * WoodenGate's nearby enclosures have already been recomputed (see those
+   * functions' own doc comment - this ordering is the mandatory fix for the
+   * exact cache-invalidation bug class the 2026-09-07 "Enclosure Cache
+   * Invalidation Fix" entry describes). MainScene swaps the gate's sprite
+   * frame (open/closed) and redraws the enclosure-exit-hint; BuildingInfoPanel
+   * re-renders if that gate is currently selected.
+   */
+  'gate-state-changed': (building: PlacedBuilding) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

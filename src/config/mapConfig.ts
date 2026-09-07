@@ -12,6 +12,9 @@ export enum TileType {
   Gravel = 1,
   Sand = 2,
   Water = 3,
+  // Phase 67: appended, not inserted - enum values double as tilemap frame
+  // indices (BootScene.TILE_SPRITES), so Rock must come after Water.
+  Rock = 4,
 }
 
 // Base colors matching the pixel-art tile sprites generated in BootScene, used
@@ -21,6 +24,7 @@ export const TILE_COLORS: Record<TileType, number> = {
   [TileType.Gravel]: 0x8a8172,
   [TileType.Sand]: 0xd2b48c,
   [TileType.Water]: 0x2f7fbf,
+  [TileType.Rock]: 0x5a5654,
 };
 
 /** Everything that isn't Water; a building may only occupy these. */
@@ -40,7 +44,9 @@ const PATCH_TYPE_WEIGHTS: readonly TileType[] = [...GROUND_TYPES, TileType.Sand]
  * per-tile (pre-Phase-30 behaviour), so gravel and sand read as patches of
  * terrain instead of uniform noise.
  */
-const PATCH_COUNT = 30;
+// Phase 66: scaled 2.25x alongside the 40x30 -> 60x45 map size increase
+// (2700 / 1200 tiles = 2.25) so patch density per tile stays the same.
+const PATCH_COUNT = 68;
 const PATCH_RADIUS_MIN = 2;
 const PATCH_RADIUS_MAX = 5;
 
@@ -48,9 +54,13 @@ const PATCH_RADIUS_MAX = 5;
  * Water target is ~3-5% of the map, split between a handful of grown lake
  * blobs and one meandering river. Both are grown/walked rather than sampled
  * per-tile so the result is connected water a Well can actually sit beside.
+ *
+ * Phase 66: lake count scaled ~2.25x alongside the map size increase (see
+ * PATCH_COUNT above); carveRiver is called twice (see generateTileMap) since
+ * a river has no count constant to scale.
  */
-const LAKE_COUNT_MIN = 2;
-const LAKE_COUNT_MAX = 4;
+const LAKE_COUNT_MIN = 4;
+const LAKE_COUNT_MAX = 7;
 const LAKE_SIZE_MIN = 6;
 const LAKE_SIZE_MAX = 14;
 const RIVER_FORWARD_BIAS = 0.7;
@@ -66,6 +76,44 @@ function randomInt(min: number, max: number): number {
 
 function pick<T>(values: readonly T[]): T {
   return values[randomInt(0, values.length - 1)];
+}
+
+/**
+ * Phase 67: Rock is deliberately NOT part of PATCH_TYPE_WEIGHTS - that table
+ * drives the common, spread-everywhere ground variants, while Rock should
+ * read as a scarce, deliberately-sited resource (like the Gravel gate before
+ * it, but rarer still). A small dedicated pass reusing paintGround's own
+ * ragged-circle stamp technique, sized for ~2% of the map across a handful of
+ * tight patches, keeps the "find rock, then build near it" decision real
+ * rather than making Rock as common as Sand/Gravel.
+ */
+const ROCK_PATCH_COUNT = 5;
+const ROCK_PATCH_RADIUS_MIN = 1;
+const ROCK_PATCH_RADIUS_MAX = 3;
+
+function paintRockPatches(grid: TileType[][]): void {
+  for (let patch = 0; patch < ROCK_PATCH_COUNT; patch++) {
+    const centerX = randomInt(0, MAP_WIDTH_TILES - 1);
+    const centerY = randomInt(0, MAP_HEIGHT_TILES - 1);
+    const radius = randomInt(ROCK_PATCH_RADIUS_MIN, ROCK_PATCH_RADIUS_MAX);
+
+    for (let y = centerY - radius; y <= centerY + radius; y++) {
+      for (let x = centerX - radius; x <= centerX + radius; x++) {
+        if (!inBounds(x, y)) {
+          continue;
+        }
+        const dx = x - centerX;
+        const dy = y - centerY;
+        if (dx * dx + dy * dy > radius * radius || (dx * dx + dy * dy > (radius - 1) ** 2 && Math.random() < 0.5)) {
+          continue;
+        }
+        if (grid[y][x] === TileType.Water) {
+          continue;
+        }
+        grid[y][x] = TileType.Rock;
+      }
+    }
+  }
 }
 
 /** Dirt base with overlapping circular gravel/sand patches stamped on top. */
@@ -178,7 +226,15 @@ export function generateTileMap(): TileType[][] {
     );
   }
 
+  // Phase 66: called twice on the bigger 60x45 map so the water-to-land ratio
+  // stays reasonable - rivers have no count constant to scale like patches/lakes.
   carveRiver(grid);
+  carveRiver(grid);
+
+  // Phase 67: painted last, after water, so Rock patches never get carved
+  // through by a lake/river and never overwrite one either (paintRockPatches
+  // itself skips any tile that's already Water).
+  paintRockPatches(grid);
 
   return grid;
 }

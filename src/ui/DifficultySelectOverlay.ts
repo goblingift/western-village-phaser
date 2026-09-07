@@ -16,15 +16,19 @@ const DIFFICULTY_DESCRIPTIONS: Record<Difficulty, string> = {
   hard: 'Less starting cash, pricier upkeep, faster and harder raids.',
 };
 
+/** Phase 65: Endless is the recommended primary mode; Fixed is demoted to a secondary short option, but stays fully intact and selectable. */
 const MODE_LABELS: Record<RunMode, string> = {
-  fixed: '3 Days',
-  endless: 'Endless',
+  endless: 'Endless (Recommended)',
+  fixed: '3 Days (Short)',
 };
 
 const MODE_DESCRIPTIONS: Record<RunMode, string> = {
-  fixed: 'The run ends at the buzzer after 3 full day/night cycles.',
-  endless: 'The day/night cycle repeats forever - only losing every building ends the run.',
+  endless: 'The day/night cycle repeats forever - only losing every building ends the run. Recommended.',
+  fixed: 'A short run: the buzzer ends it after 3 full day/night cycles.',
 };
+
+/** Display/selection order for the mode buttons - Endless listed first now that it's the default. */
+const MODE_ORDER: RunMode[] = ['endless', 'fixed'];
 
 /**
  * Phase 39: shown before MainScene's world starts advancing (see
@@ -39,7 +43,7 @@ export class DifficultySelectOverlay {
   private overlay: HTMLDivElement;
   private content: HTMLDivElement;
   private selectedDifficulty: Difficulty = 'normal';
-  private selectedMode: RunMode = 'fixed';
+  private selectedMode: RunMode = 'endless';
 
   constructor(container: HTMLElement) {
     this.overlay = document.createElement('div');
@@ -70,7 +74,7 @@ export class DifficultySelectOverlay {
       })
       .join('');
 
-    const modeButtons = (['fixed', 'endless'] as RunMode[])
+    const modeButtons = MODE_ORDER
       .map((mode) => {
         const active = mode === this.selectedMode ? ' active' : '';
         return `<button type="button" class="option-button mode-option${active}" data-mode="${mode}">${MODE_LABELS[mode]}</button>`;

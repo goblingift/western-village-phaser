@@ -8,6 +8,7 @@ import { GameOverOverlay } from './ui/GameOverOverlay';
 import { HelpOverlay } from './ui/HelpOverlay';
 import { NotificationLogPanel } from './ui/NotificationLogPanel';
 import { ObjectivesPanel } from './ui/ObjectivesPanel';
+import { SaveLoadOverlay } from './ui/SaveLoadOverlay';
 import { StatisticsPanel } from './ui/StatisticsPanel';
 import { TutorialOverlay } from './ui/TutorialOverlay';
 
@@ -29,6 +30,7 @@ if (appContainer && stageContainer) {
   // modal like the game-over/difficulty screens, so it belongs on #app.
   new TutorialOverlay(stageContainer);
   new HelpOverlay(appContainer);
+  new SaveLoadOverlay(appContainer);
   new GameOverOverlay(appContainer);
   // Phase 39: shown last so it's on top for the very first run; MainScene
   // itself starts paused (see MainScene.pauseForPreGameSelection) until this

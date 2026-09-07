@@ -7,6 +7,18 @@ import {
   BRAWLER_MAX_PER_BARRACKS,
   BRAWLER_TRAIN_COST,
   BRAWLER_TRAIN_TICKS,
+  BROTHEL_HOUSES_PER_LADY,
+  BROTHEL_INCOME_PER_LADY_PER_HOUSE,
+  BROTHEL_LADY_COST,
+  BROTHEL_MAX_LADIES,
+  BROTHEL_SERVICE_RADIUS_TILES,
+  CHURCH_BASE_RADIUS_TILES,
+  CHURCH_MAX_CLERGY,
+  CHURCH_NUN_COST,
+  CHURCH_PRIEST_COST,
+  CHURCH_PRIEST_TAX_BONUS,
+  CHURCH_RADIUS_PER_CLERGY,
+  COAL_MAX_DISTANCE_TILES,
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
@@ -123,6 +135,7 @@ export interface Resources {
   stone: number;
   iron: number;
   tools: number;
+  coal: number;
 }
 
 /**
@@ -220,6 +233,7 @@ function emptyResources(): Resources {
     stone: 0,
     iron: 0,
     tools: 0,
+    coal: 0,
   };
 }
 
@@ -407,11 +421,21 @@ function queryEnclosureTile(tileX: number, tileY: number, selfBuildingId: string
   if (!occupant) {
     return 'open';
   }
-  if (occupant.type === BuildingType.Fence) {
+  if (occupant.type === BuildingType.Fence || occupant.type === BuildingType.WoodenWall) {
+    // Phase 68: WoodenWall is a boundary tile for the enclosure BFS exactly
+    // like Fence - both are solid, non-passable perimeter segments (Gate
+    // remains the only counted-but-passable one).
     return 'fence';
   }
   if (occupant.type === BuildingType.Gate) {
     return 'gate';
+  }
+  if (occupant.type === BuildingType.WoodenGate) {
+    // Phase 69: a WoodenGate's classification tracks its live gateOpen state
+    // - open behaves exactly like the legacy Gate (counted-but-passable
+    // boundary), closed behaves exactly like a Fence/WoodenWall (solid
+    // boundary the fill cannot walk through).
+    return occupant.gateOpen === false ? 'fence' : 'gate';
   }
   return 'building';
 }
@@ -1018,6 +1042,17 @@ export function getGravelDistance(tileX: number, tileY: number, type: BuildingTy
 }
 
 /**
+ * Phase 67: Coal Mine's placement gate, cloning getGravelDistance's shape
+ * exactly but against TileType.Rock and the tighter COAL_MAX_DISTANCE_TILES -
+ * Rock is a scarcer, more tightly-clustered terrain than Gravel, so Coal is
+ * meant to be the harder-to-site of the two raw-extraction gates.
+ */
+export function getRockDistance(tileX: number, tileY: number, type: BuildingType): number | null {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  return distanceToNearestTileType(TileType.Rock, tileX, tileY, width, height, COAL_MAX_DISTANCE_TILES);
+}
+
+/**
  * Phase 54: Chebyshev tile distance from a footprint's center to the nearest
  * staffed, enabled Water Tower within WATER_TOWER_IRRIGATION_RADIUS_TILES, or
  * null when none is in range. Only an actually-running tower counts (hp>0,
@@ -1053,6 +1088,112 @@ export function getNearestStaffedWaterTowerDistance(
     }
   }
   return best;
+}
+
+/**
+ * Phase 70: a Church's service radius grows with hired clergy, capped once
+ * both slots are full. Nuns and Priests contribute the same per-head radius
+ * bonus (CHURCH_RADIUS_PER_CLERGY) - the differentiator between the two
+ * hires is Priest's extra tax bonus, applied in runHouseNeeds, not a
+ * different radius contribution here.
+ */
+export function getChurchRadius(church: PlacedBuilding): number {
+  const clergyCount = Math.min((church.nunCount ?? 0) + (church.priestCount ?? 0), CHURCH_MAX_CLERGY);
+  return CHURCH_BASE_RADIUS_TILES + clergyCount * CHURCH_RADIUS_PER_CLERGY;
+}
+
+/**
+ * Phase 70: whether `house` currently sits within a qualifying Church's
+ * service radius - clones getNearestStaffedWaterTowerDistance's shape
+ * exactly (only a live, staffed, enabled Church counts, so a raided or
+ * upkeep-disabled Church stops serving the instant it goes down, same tick).
+ * Returns a boolean rather than a distance since runHouseNeeds only ever
+ * needs the pass/fail answer; the info panel's own distance readout is a
+ * separate, informational-only query (see BuildingInfoPanel's Church status
+ * line) built the same way.
+ */
+export function isServedByChurch(house: PlacedBuilding): boolean {
+  const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Church) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled || !building.staffed) {
+      continue;
+    }
+    const churchCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const distance = Math.max(
+      Math.abs(houseCenter.tileX - churchCenter.tileX),
+      Math.abs(houseCenter.tileY - churchCenter.tileY),
+    );
+    if (distance <= getChurchRadius(building)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Phase 70: the nearest qualifying Church's distance (or null if unserved) -
+ * purely informational, backing the House info panel's "Church N tiles away"
+ * status line. Mirrors isServedByChurch's own staffed/enabled/hp gate.
+ */
+export function getNearestChurchDistance(house: PlacedBuilding): number | null {
+  const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
+  let best: number | null = null;
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Church) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled || !building.staffed) {
+      continue;
+    }
+    const churchCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const distance = Math.max(
+      Math.abs(houseCenter.tileX - churchCenter.tileX),
+      Math.abs(houseCenter.tileY - churchCenter.tileY),
+    );
+    if (distance > getChurchRadius(building)) {
+      continue;
+    }
+    if (best === null || distance < best) {
+      best = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * Phase 70: how many Priests, across every qualifying Church currently
+ * covering `house`, contribute to its tax bonus - a House inside the overlap
+ * of two staffed Churches with Priests gets credit from both, matching
+ * isServedByChurch's own any-qualifying-Church-counts logic rather than only
+ * ever crediting the single nearest one.
+ */
+function countServingPriests(house: PlacedBuilding): number {
+  const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
+  let total = 0;
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Church) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled || !building.staffed) {
+      continue;
+    }
+    const priestCount = building.priestCount ?? 0;
+    if (priestCount <= 0) {
+      continue;
+    }
+    const churchCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const distance = Math.max(
+      Math.abs(houseCenter.tileX - churchCenter.tileX),
+      Math.abs(houseCenter.tileY - churchCenter.tileY),
+    );
+    if (distance <= getChurchRadius(building)) {
+      total += priestCount;
+    }
+  }
+  return total;
 }
 
 /**
@@ -1136,6 +1277,9 @@ export function getPlacementRejection(tileX: number, tileY: number, type: Buildi
     getGravelDistance(tileX, tileY, type) === null
   ) {
     return `${BUILDING_DEFINITIONS[type].label} must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`;
+  }
+  if (type === BuildingType.CoalMine && getRockDistance(tileX, tileY, type) === null) {
+    return `Coal Mine must be built on or within ${COAL_MAX_DISTANCE_TILES} tiles of Rock`;
   }
   // Item 1: the affordability check accounts for the total auto-clear cost
   // (vegetation tiles in the footprint x VEGETATION_CLEAR_COST) ALONGSIDE the
@@ -1287,6 +1431,8 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     houseNeedsStatus: [],
     tradeOrders: {},
     trainingQueue: [],
+    gateOpen: type === BuildingType.WoodenGate ? true : undefined,
+    ladyCount: type === BuildingType.Brothel ? 0 : undefined,
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -1801,6 +1947,88 @@ export function trainMountedCowboy(buildingId: string): boolean {
   return true;
 }
 
+/**
+ * Phase 70: hiring clergy is instant - unlike trainCowboy/trainMountedCowboy,
+ * a Nun/Priest has no HP/garrison slot and isn't a combat unit, so there is
+ * no training queue job to enqueue; the hire takes effect the moment it's
+ * paid for, immediately widening the Church's service radius (and, for a
+ * Priest, its tax bonus) on the very next runHouseNeeds pass.
+ */
+export function hireNun(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Church) {
+    return false;
+  }
+  if (building.hp <= 0 || building.disabled) {
+    return false;
+  }
+  if ((building.nunCount ?? 0) + (building.priestCount ?? 0) >= CHURCH_MAX_CLERGY) {
+    return false;
+  }
+  if (money < CHURCH_NUN_COST) {
+    return false;
+  }
+
+  money = Math.round((money - CHURCH_NUN_COST) * 100) / 100;
+  building.nunCount = (building.nunCount ?? 0) + 1;
+
+  gameEvents.emit('money-changed', money);
+
+  return true;
+}
+
+/** Mirrors hireNun exactly, gated on CHURCH_PRIEST_COST/priestCount instead - see PlacedBuilding.priestCount's doc comment for the Nun-vs-Priest tradeoff. */
+export function hirePriest(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Church) {
+    return false;
+  }
+  if (building.hp <= 0 || building.disabled) {
+    return false;
+  }
+  if ((building.nunCount ?? 0) + (building.priestCount ?? 0) >= CHURCH_MAX_CLERGY) {
+    return false;
+  }
+  if (money < CHURCH_PRIEST_COST) {
+    return false;
+  }
+
+  money = Math.round((money - CHURCH_PRIEST_COST) * 100) / 100;
+  building.priestCount = (building.priestCount ?? 0) + 1;
+
+  gameEvents.emit('money-changed', money);
+
+  return true;
+}
+
+/**
+ * Phase 72: hiring a lady is instant, exactly like hireNun/hirePriest above -
+ * no HP, no training queue, no garrison sprite of her own. Effect takes hold
+ * on the very next runBrothelIncome pass.
+ */
+export function hireLady(buildingId: string): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.Brothel) {
+    return false;
+  }
+  if (building.hp <= 0 || building.disabled) {
+    return false;
+  }
+  if ((building.ladyCount ?? 0) >= BROTHEL_MAX_LADIES) {
+    return false;
+  }
+  if (money < BROTHEL_LADY_COST) {
+    return false;
+  }
+
+  money = Math.round((money - BROTHEL_LADY_COST) * 100) / 100;
+  building.ladyCount = (building.ladyCount ?? 0) + 1;
+
+  gameEvents.emit('money-changed', money);
+
+  return true;
+}
+
 /** Returns false (without deducting anything) the moment any single required material falls short - all-or-nothing, matching placeBuilding's own materials gate. */
 function hasEnoughResourcesFor(materials: Partial<Record<ResourceKey, number>>): boolean {
   return (Object.entries(materials) as [ResourceKey, number][]).every(([key, amount]) => resources[key] >= amount);
@@ -1960,6 +2188,51 @@ export function clearRallyPoint(buildingId: string): boolean {
 }
 
 /**
+ * Phase 69: Wooden Gates. A gate's open/closed state is a THIRD way a tile's
+ * wall/gate status can change at runtime (alongside placing/removing a
+ * Fence/Gate/WoodenWall, which placeBuilding/removeBuilding already handle -
+ * see their own doc comments on the 2026-09-07 "Enclosure Cache Invalidation
+ * Fix"), so this follows the exact same discipline those two fixes
+ * established: recompute nearby farms' cached enclosure BEFORE emitting the
+ * change event, not after. gameEvents.emit is a synchronous
+ * Phaser.Events.EventEmitter - every listener (MainScene's sprite-texture
+ * swap, the enclosure-exit-hint redraw, BuildingInfoPanel's re-render) runs
+ * INLINE, before this function returns, so a listener reacting to the exact
+ * tile that just opened/closed a pen must see the freshly-recomputed result,
+ * not a one-recompute-stale cache entry.
+ */
+export function setGateOpen(buildingId: string, open: boolean): boolean {
+  const building = buildingsById.get(buildingId);
+  if (!building || building.type !== BuildingType.WoodenGate) {
+    return false;
+  }
+  building.gateOpen = open;
+  recomputeEnclosuresNear(building.tileX, building.tileY);
+  gameEvents.emit('gate-state-changed', building);
+  return true;
+}
+
+/**
+ * Batch version of setGateOpen for the "close/open all gates" control - one
+ * call per WoodenGate rather than skipping the recompute to save time.
+ * recomputeEnclosuresNear is already bounded to ENCLOSURE_RECOMPUTE_RADIUS_TILES
+ * around a single changed tile (not a full-map rescan), so this stays cheap
+ * even with several gates toggled in one call; correctness (never serving a
+ * stale enclosure cache after a batch toggle) matters far more here than the
+ * small, bounded extra cost of not deduplicating overlapping recompute radii.
+ */
+export function setAllGates(open: boolean): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.WoodenGate) {
+      continue;
+    }
+    building.gateOpen = open;
+    recomputeEnclosuresNear(building.tileX, building.tileY);
+    gameEvents.emit('gate-state-changed', building);
+  }
+}
+
+/**
  * Deposit/withdraw are a bidirectional pair of the same hard buy-gate shape
  * as buyAnimal/trainCowboy: fixed $50 increment, blocked on wrong building
  * type, a disabled (0 HP) Bank, or insufficient funds on the source side of
@@ -2019,11 +2292,28 @@ export interface FenceLink {
  * deliberate opening, not a missing piece of wall, so the line should still
  * read as one continuous fence with a gate in it rather than breaking in two.
  * Deliberately NOT used by MainScene's raider-blocking sample
- * (sampleForBlockingFence/findBlockingFence) - those stay Fence-only, since a
- * Gate must never block a raider's path.
+ * (sampleForBlockingWall/findBlockingWall) - those go through the separate
+ * blocksRaiderMovement predicate (buildingConfig.ts), since a Gate must never
+ * block a raider's path while Fence/WoodenWall must.
+ *
+ * Phase 68: widened to include WoodenWall - a Wall segment placed adjacent to
+ * a Fence/Gate line should render as one continuous connected wall, and the
+ * enclosure BFS (queryEnclosureTile below) treats it as a boundary tile the
+ * same way it treats Fence.
+ *
+ * Phase 69: widened to include WoodenGate, regardless of its open/closed
+ * state - the connected wall-line visual is purely cosmetic/connectivity
+ * (same reasoning as the legacy Gate above: a deliberate opening still reads
+ * as one continuous fence with a gate in it), so a WoodenGate should draw
+ * into the line whether it's currently passable or not.
  */
 function isWallSegment(building: PlacedBuilding): boolean {
-  return building.type === BuildingType.Fence || building.type === BuildingType.Gate;
+  return (
+    building.type === BuildingType.Fence ||
+    building.type === BuildingType.Gate ||
+    building.type === BuildingType.WoodenWall ||
+    building.type === BuildingType.WoodenGate
+  );
 }
 
 /** Right/down-only adjacency so each wall-segment pair (Fence/Gate) is reported once, for drawing connected wall-line segments. */
@@ -2439,20 +2729,31 @@ function runHouseNeeds(): void {
     const nextTier: HouseTier | null = building.houseTier < 3 ? ((building.houseTier + 1) as HouseTier) : null;
     const nextTierConfig = nextTier !== null ? HOUSE_TIER_CONFIG[nextTier] : null;
 
+    // Phase 70: Church, Clergy & the Tier-2 Service Gate. Computed once per
+    // House per tick (isServedByChurch scans every placed Church, so this is
+    // not free) and reused for both the growth check below and the
+    // current-tier decay check further down - a House either has coverage
+    // this tick or it doesn't, there's no reason to ask twice.
+    const churchServed = isServedByChurch(building);
+
     // Growth eligibility is evaluated against the NEXT tier's needs (not the
     // current tier's - that was Bug 1: checking the current tier's trivial
     // needs let a house "grow" and then immediately fail the real needs of
     // the tier it just entered). Checked against resource levels *before*
     // this tick's own current-tier consumption below, so a tier's own draw
     // doesn't double up against a differently-sized need for the same
-    // resource in the next tier's config.
+    // resource in the next tier's config. Church coverage is an ADDITIONAL,
+    // non-resource gate on top of the resource needs - a House whose next
+    // tier requires a Church cannot grow into it without one, regardless of
+    // how well-stocked its resource needs are.
     const nextTierMet =
       nextTierConfig !== null &&
       nextTierConfig.needs.every((group) =>
         (Object.entries(group.options) as [ResourceKey, number][]).some(
           ([key, amount]) => resources[key] >= amount,
         ),
-      );
+      ) &&
+      (!nextTierConfig.requiresChurch || churchServed);
 
     const status: { label: string; met: boolean }[] = [];
     const picks: [ResourceKey, number][] = [];
@@ -2474,6 +2775,17 @@ function runHouseNeeds(): void {
       }
     }
 
+    // Phase 70 (design decision, confirmed): Church coverage loss decays a
+    // House's CURRENT tier exactly like an unmet resource need - it feeds
+    // the very same houseNeedsUnmetStreak/HOUSE_TIER_HYSTERESIS_TICKS
+    // countdown below, not a separate counter. A Tier 2/3 House that loses
+    // its Church (destroyed/unstaffed/upkeep-disabled) therefore now counts
+    // as failing this tick's needs check even if every resource need is
+    // still met.
+    if (tierConfig.requiresChurch && !churchServed) {
+      allMet = false;
+    }
+
     building.houseNeedsStatus = status;
 
     if (allMet) {
@@ -2482,7 +2794,14 @@ function runHouseNeeds(): void {
         addConsumedThisTick(key, amount);
       }
       if (tierConfig.taxPerTick > 0) {
-        money = Math.round((money + tierConfig.taxPerTick) * 100) / 100;
+        // Phase 70: a Priest (not a Nun) adds CHURCH_PRIEST_TAX_BONUS extra
+        // $/tick tax for every served Tier-2/3 House - one bonus per Priest
+        // actually serving this House, since it's meant to reward fielding
+        // Priests across real coverage, not a flat town-wide perk. Only
+        // applies once the House itself already owes tax (Tier 1 never does).
+        const servingPriestCount = tierConfig.requiresChurch ? countServingPriests(building) : 0;
+        const churchTaxBonus = servingPriestCount * CHURCH_PRIEST_TAX_BONUS;
+        money = Math.round((money + tierConfig.taxPerTick + churchTaxBonus) * 100) / 100;
       }
       building.houseNeedsUnmetStreak = 0;
 
@@ -2522,6 +2841,70 @@ function runHouseNeeds(): void {
         );
       }
     }
+  }
+}
+
+/**
+ * Phase 72: Brothel & Patronage Income. Called right after runHouseNeeds so
+ * it reads that same tick's fresh house tiers (a House that just grew/fell
+ * back this tick is reflected immediately, not one tick stale). Per staffed,
+ * live, enabled Brothel with at least one hired lady: find every placed
+ * House within BROTHEL_SERVICE_RADIUS_TILES (Chebyshev, from each building's
+ * harvest-style center tile), cap the counted Houses at
+ * `ladyCount * BROTHEL_HOUSES_PER_LADY` (first-found, no "best" selection -
+ * intentionally simple per the design brief), and sum each counted House's
+ * tier income multiplier (Tier 1 = 1.0x, 2 = 1.5x, 3 = 2.0x) rather than
+ * multiplying the whole total by one representative tier. Income is
+ * `ladyCount * BROTHEL_INCOME_PER_LADY_PER_HOUSE * (summed tier multipliers)`,
+ * added directly to money like runHouseNeeds' tax collection. A Brothel with
+ * zero ladies or zero Houses in range earns exactly $0/tick with no crash -
+ * the multiplier sum and Math.min cap both degrade to 0 cleanly on an empty
+ * Houses-in-range list.
+ */
+const BROTHEL_TIER_INCOME_MULTIPLIER: Record<HouseTier, number> = { 1: 1.0, 2: 1.5, 3: 2.0 };
+
+function runBrothelIncome(): void {
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.Brothel) {
+      continue;
+    }
+    if (building.hp <= 0 || building.disabled || !building.staffed) {
+      building.lastBrothelIncome = { housesServed: 0, income: 0 };
+      continue;
+    }
+    const ladyCount = building.ladyCount ?? 0;
+    if (ladyCount <= 0) {
+      building.lastBrothelIncome = { housesServed: 0, income: 0 };
+      continue;
+    }
+
+    const center = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+    const maxHouses = ladyCount * BROTHEL_HOUSES_PER_LADY;
+    let tierMultiplierSum = 0;
+    let housesServed = 0;
+
+    for (const house of placedBuildings) {
+      if (housesServed >= maxHouses) {
+        break;
+      }
+      if (house.type !== BuildingType.House) {
+        continue;
+      }
+      const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
+      const distance = Math.max(Math.abs(houseCenter.tileX - center.tileX), Math.abs(houseCenter.tileY - center.tileY));
+      if (distance > BROTHEL_SERVICE_RADIUS_TILES) {
+        continue;
+      }
+      tierMultiplierSum += BROTHEL_TIER_INCOME_MULTIPLIER[house.houseTier];
+      housesServed += 1;
+    }
+
+    const income = Math.round(ladyCount * BROTHEL_INCOME_PER_LADY_PER_HOUSE * tierMultiplierSum * 100) / 100;
+    if (income > 0) {
+      money = Math.round((money + income) * 100) / 100;
+      gameEvents.emit('money-changed', money);
+    }
+    building.lastBrothelIncome = { housesServed, income };
   }
 }
 
@@ -2833,6 +3216,7 @@ export function runProductionTick(): void {
   runSaloonSales();
   runTradingPostSales();
   runHouseNeeds();
+  runBrothelIncome();
 
   // Recovery pass for the storage-waste notification: once a resource drops
   // back below the cap (a sale, a Warehouse coming online, etc.), clear its
@@ -3078,7 +3462,10 @@ function endGame(reason: GameOverReason): void {
  * player's picked mode/difficulty.
  */
 export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty }): void {
-  currentRunMode = options?.mode ?? 'fixed';
+  // Phase 65: Endless is now the default/primary mode - Fixed stays fully
+  // intact and selectable, just no longer the implicit choice for a caller
+  // that omits `mode`.
+  currentRunMode = options?.mode ?? 'endless';
   currentDifficulty = options?.difficulty ?? 'normal';
   money = Math.round(STARTING_MONEY * DIFFICULTY_SETTINGS[currentDifficulty].startingMoneyMultiplier * 100) / 100;
   Object.assign(resources, emptyResources());

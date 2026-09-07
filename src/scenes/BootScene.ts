@@ -49,6 +49,12 @@ import {
   VegetationKind,
   vegetationTextureKey,
 } from '../config/vegetationConfig';
+import {
+  WILDLIFE_ATLAS_KEY,
+  WILDLIFE_SPRITE_SIZE,
+  WildlifeKind,
+  wildlifeTextureKey,
+} from '../config/wildlifeConfig';
 import { setBuildingIcons } from '../ui/buildingIcons';
 
 export const TILESET_KEY = 'tiles-atlas';
@@ -158,10 +164,31 @@ const SAND_SPRITE: PixelSprite = {
   ],
 };
 
+/**
+ * Phase 67: bare rock/stone ground - the terrain Quarry/Iron/Coal all key
+ * off. Greyish and mottled like Gravel but darker and blockier (B are large
+ * flat stone-face blocks, C the mortar-like cracks between them) so it reads
+ * as solid outcrop rather than Gravel's loose pebble scatter.
+ */
+const ROCK_SPRITE: PixelSprite = {
+  palette: { R: 0x6b6560, B: 0x827c76, C: 0x4a4542 },
+  pattern: [
+    'RRRBBRRR',
+    'RBBBBBCR',
+    'CBBRRBBR',
+    'RBCRRCBR',
+    'RRBBBBRR',
+    'RCRRRRCR',
+    'RBBCCBBR',
+    'RRRBBRRR',
+  ],
+};
+
 // Order must match the TileType enum values (Dirt=0, Gravel=1, Sand=2,
-// Water=3), since tile indices in the generated tilemap are used directly as
-// frame indices.
-const TILE_SPRITES: PixelSprite[] = [DIRT_SPRITE, GRAVEL_SPRITE, SAND_SPRITE, WATER_SPRITE];
+// Water=3, Rock=4), since tile indices in the generated tilemap are used
+// directly as frame indices. Rock is appended at the end (Phase 67), never
+// inserted, to keep every earlier index stable.
+const TILE_SPRITES: PixelSprite[] = [DIRT_SPRITE, GRAVEL_SPRITE, SAND_SPRITE, WATER_SPRITE, ROCK_SPRITE];
 
 /**
  * Phase 30 vegetation: drawn tile-sized (the full 8x8 PIXEL_GRID) rather than
@@ -322,6 +349,67 @@ const GRANARY_SPRITE: PixelSprite = {
     'SBBBBBBS',
     'SGGDDGGS',
     'SSSDDSSS',
+  ],
+};
+
+/**
+ * Phase 70: a whitewashed chapel - a tall pointed steeple with a dark cross
+ * silhouette (C), a rose/arched window (W) centered on the false-front wall,
+ * and heavy double doors (D). Deliberately distinct from every other
+ * building's silhouette: no other structure has a peaked steeple + cross
+ * motif, so it reads unambiguously as a Church even at a glance.
+ */
+const CHURCH_SPRITE: PixelSprite = {
+  palette: { R: 0x8d3b2f, S: 0xefebe9, W: 0x90caf9, D: 0x5d4037, C: 0x3e2723 },
+  pattern: [
+    '...C....',
+    '...C....',
+    '..RRR...',
+    'SSRRRSSS',
+    'SSSWSSSS',
+    'SSSWSSSS',
+    'SSDDDSSS',
+    'SSDDDSSS',
+  ],
+};
+
+/**
+ * Phase 72: Brothel. Deliberately distinct from both Saloon (stepped
+ * parapet + hanging sign band + batwing doors) and Bank (cool stone
+ * colonnade): a dusky-rose two-storey false front with a straight top rail
+ * (not stepped), a red hanging lantern (H) over the entry, an upstairs
+ * window row (W) with a projecting balcony rail (G/D ticks) running the
+ * full width, and plain dark double doors (no batwing gap) on the ground
+ * floor - reads as a lived-in upstairs, not a bar.
+ */
+const BROTHEL_SPRITE: PixelSprite = {
+  palette: {
+    S: 0x4e342e,
+    R: 0x8d3b5a,
+    H: 0xd32f2f,
+    B: 0xefcbd8,
+    P: 0xc98aa3,
+    W: 0xfff3b0,
+    G: 0x8d6748,
+    D: 0x3e2723,
+  },
+  pattern: [
+    'SSSSSSSSSSSSSSSS',
+    'SRRRRRRRRRRRRRRS',
+    'SRRRRRRRRHRRRRRS',
+    'SBPBWWBPPBWWBPBS',
+    'SBPBWWBPPBWWBPBS',
+    'SGDGDGDGDGDGDGDS',
+    'SSSSSSSSSSSSSSSS',
+    'SBPBPBPBPBPBPBPS',
+    'SBPBPBDDBPBPBPBS',
+    'SBPBPBDDBPBPBPBS',
+    'SBPBPBDDBPBPBPBS',
+    'SSSSSSSSSSSSSSSS',
+    'G..............G',
+    'G..............G',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
   ],
 };
 
@@ -558,6 +646,74 @@ const GATE_SPRITE: PixelSprite = {
     'FH....HF',
     'DD....DD',
     '........',
+  ],
+};
+
+/**
+ * Phase 68: reads as solid, unlike FENCE_SPRITE's visible-gap rail-fence
+ * silhouette - vertical planks (P) packed edge-to-edge with no gaps between
+ * them, plus a solid cap rail (D) across the top and bottom, signaling "this
+ * cannot be walked through" at a glance (raiders never detour around a
+ * WoodenWall - see MainScene's resolveWallInteraction).
+ */
+const WOODEN_WALL_SPRITE: PixelSprite = {
+  palette: { P: 0x8d6748, D: 0x4e342e, H: 0x6d4c41 },
+  pattern: [
+    'DDDDDDDD',
+    'PHPHPHPH',
+    'PHPHPHPH',
+    'PHPHPHPH',
+    'PHPHPHPH',
+    'PHPHPHPH',
+    'PHPHPHPH',
+    'DDDDDDDD',
+  ],
+};
+
+/**
+ * Phase 69: Wooden Gate, open state. Reads as WOODEN_WALL_SPRITE's heavier
+ * end-posts-plus-lane idiom rather than GATE_SPRITE's lighter rail-fence
+ * frame, since a Wooden Gate is the toggleable cousin of a Wooden Wall (same
+ * solid post material) rather than the legacy Fence-line Gate - but keeps the
+ * same "visible open lane down the middle" signal GATE_SPRITE established, so
+ * it reads as passable at a glance. This is BUILDING_SPRITES' base frame for
+ * WoodenGate (buildingTextureKey resolves here whenever gateOpen isn't
+ * explicitly false).
+ */
+const WOODEN_GATE_OPEN_SPRITE: PixelSprite = {
+  palette: { P: 0x8d6748, D: 0x4e342e, H: 0x6d4c41 },
+  pattern: [
+    'DD....DD',
+    'PH....HP',
+    'PH....HP',
+    'DD....DD',
+    'PH....HP',
+    'PH....HP',
+    'DD....DD',
+    '........',
+  ],
+};
+
+/**
+ * Phase 69: Wooden Gate, closed state - the exact same open-lane silhouette
+ * as WOODEN_GATE_OPEN_SPRITE above, but with the lane visibly filled/barred
+ * (two crossed diagonal braces, same palette), reading as "sealed" the moment
+ * it's toggled - the player should be able to tell open from closed at a
+ * glance without opening the info panel. A separate atlas frame
+ * (buildingTextureKey resolves here only when gateOpen === false), swapped
+ * via setTexture on the 'gate-state-changed' event, never destroy/recreate.
+ */
+const WOODEN_GATE_CLOSED_SPRITE: PixelSprite = {
+  palette: { P: 0x8d6748, D: 0x4e342e, H: 0x6d4c41 },
+  pattern: [
+    'DDDDDDDD',
+    'PHH....P',
+    'PH.H...P',
+    'DD..D..D',
+    'D..D..DD',
+    'P...H.HP',
+    'P....HHP',
+    'DDDDDDDD',
   ],
 };
 
@@ -903,6 +1059,33 @@ const IRON_MINE_SPRITE: PixelSprite = {
   ],
 };
 
+const COAL_MINE_SPRITE: PixelSprite = {
+  // Phase 67: open-air pit like Quarry, not a walled shaft like Iron Mine -
+  // a dark, jagged coal seam (K near-black chunks, D deeper shadow cracks)
+  // exposed in the pit's back wall over a heaped coal pile (glinting flecks
+  // via H) in the yard, distinguishing it from Quarry's grey stone-face and
+  // Iron Mine's walled ore-cart rail yard.
+  palette: { K: 0x212121, D: 0x0d0d0d, S: 0x8a8172, H: 0x424242, P: 0x1a1a1a },
+  pattern: [
+    '..K.....K....K..',
+    '..K.....K....K..',
+    '.KKD...KKD..KKD.',
+    '.DDK...DDK..DDK.',
+    '.KKD...KKD..KKD.',
+    'KKKKD.KKKKKKKKKK',
+    'DDDDK.DDDDDDDDDD',
+    'KKKKD.KKKKKKKKKK',
+    '................',
+    '................',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSPPHPPPPHPPPPSS',
+    'SPPPPHPPPPHPPPPS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+  ],
+};
+
 const BLACKSMITH_SPRITE: PixelSprite = {
   // Butcher-shaped (same wall/roof skeleton): a slate-grey roof instead of
   // Butcher's red one, an anvil (A/N) in place of the cleaver, and a glowing
@@ -967,6 +1150,8 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.CowRanch]: COW_RANCH_SPRITE,
   [BuildingType.Fence]: FENCE_SPRITE,
   [BuildingType.Gate]: GATE_SPRITE,
+  [BuildingType.WoodenWall]: WOODEN_WALL_SPRITE,
+  [BuildingType.WoodenGate]: WOODEN_GATE_OPEN_SPRITE,
   [BuildingType.Warehouse]: WAREHOUSE_SPRITE,
   [BuildingType.Granary]: GRANARY_SPRITE,
   [BuildingType.Supermarket]: SUPERMARKET_SPRITE,
@@ -983,9 +1168,12 @@ const BUILDING_SPRITES: Record<BuildingType, PixelSprite> = {
   [BuildingType.Watchtower]: WATCHTOWER_SPRITE,
   [BuildingType.Quarry]: QUARRY_SPRITE,
   [BuildingType.IronMine]: IRON_MINE_SPRITE,
+  [BuildingType.CoalMine]: COAL_MINE_SPRITE,
   [BuildingType.Blacksmith]: BLACKSMITH_SPRITE,
   [BuildingType.TradingPost]: TRADING_POST_SPRITE,
   [BuildingType.WaterTower]: WATER_TOWER_SPRITE,
+  [BuildingType.Church]: CHURCH_SPRITE,
+  [BuildingType.Brothel]: BROTHEL_SPRITE,
 };
 
 /**
@@ -1052,6 +1240,11 @@ const RESOURCE_ICON_SPRITES: Record<ResourceKey, PixelSprite> = {
     // A small hammer silhouette: grey head (H) over a brown handle (W).
     palette: { H: 0x616161, W: 0x8d6e4a },
     pattern: ['..HH..', '..HH..', '.HHHH.', '..WW..', '..WW..', '..WW..'],
+  },
+  // Phase 67: black/dark-grey coal-chunk icon, mirroring stone/iron's shape.
+  coal: {
+    palette: { K: 0x212121, H: 0x424242 },
+    pattern: ['.KKKK.', 'KKHKKK', 'KKKKHK', 'KHKKKK', 'KKKHKK', '.KKKK.'],
   },
 };
 
@@ -1253,6 +1446,30 @@ const RAIDER_SPRITES: Record<RaiderFaction, PixelSprite> = {
 };
 
 /**
+ * Phase 71: Hostile Wildlife. Three small silhouettes on the same
+ * ANIMAL_PIXEL_GRID/ANIMAL_PIXEL_SIZE the raiders/animals/villagers already
+ * share, so all small units read consistently at the same camera zoom. Snake
+ * is a wide/short low-profile silhouette (distinct from Coyote's four-legged
+ * canine shape reused almost verbatim in spirit, but a separate sprite),
+ * Mountain Lion is a bulkier tan cat silhouette with a longer tail.
+ */
+const SNAKE_SPRITE: PixelSprite = {
+  palette: { S: 0x556b2f, E: 0xd4c840 },
+  pattern: ['......', '......', '.SSSS.', 'SSSSSS', '......', '......'],
+};
+
+const MOUNTAIN_LION_SPRITE: PixelSprite = {
+  palette: { B: 0xc9a86a, D: 0x8a6d3f, T: 0xc9a86a },
+  pattern: ['......', 'BBBBBT', 'BBBBBT', 'BBBBB.', 'D.DD.D', '......'],
+};
+
+const WILDLIFE_SPRITES: Record<WildlifeKind, PixelSprite> = {
+  Snake: SNAKE_SPRITE,
+  Coyote: COYOTE_SPRITE,
+  MountainLion: MOUNTAIN_LION_SPRITE,
+};
+
+/**
  * Phase 57 Raider Camp: a two-peaked tent silhouette over a small campfire
  * (flame/ember/log palette shared across all three factions - fire looks
  * like fire regardless of who lit it), with only the tent canvas color (C)
@@ -1329,6 +1546,7 @@ export class BootScene extends Phaser.Scene {
     this.generateCartAtlas();
     this.generateRaiderAtlas();
     this.generateRaiderCampAtlas();
+    this.generateWildlifeAtlas();
     this.generateVegetationAtlas();
     this.generateResourceIconAtlas();
   }
@@ -1396,8 +1614,12 @@ export class BootScene extends Phaser.Scene {
 
     // Phase 46: House is the only type with extra tier frames - appended
     // after the one-frame-per-type layout above so every other building's
-    // frame position is completely untouched by this addition.
+    // frame position is completely untouched by this addition. Phase 69
+    // reuses the same "extra appended frame" list for WoodenGate's closed
+    // variant, for the same reason - one generic append point rather than a
+    // second parallel atlas-layout block.
     const houseSize = BUILDING_DEFINITIONS[BuildingType.House].size;
+    const woodenGateSize = BUILDING_DEFINITIONS[BuildingType.WoodenGate].size;
     const tierFrames: { key: string; sprite: PixelSprite; width: number; height: number }[] = [
       {
         key: buildingTextureKey(BuildingType.House, 2),
@@ -1410,6 +1632,12 @@ export class BootScene extends Phaser.Scene {
         sprite: HOUSE_TIER3_SPRITE,
         width: houseSize.width * TILE_SIZE,
         height: houseSize.height * TILE_SIZE,
+      },
+      {
+        key: buildingTextureKey(BuildingType.WoodenGate, undefined, false),
+        sprite: WOODEN_GATE_CLOSED_SPRITE,
+        width: woodenGateSize.width * TILE_SIZE,
+        height: woodenGateSize.height * TILE_SIZE,
       },
     ];
 
@@ -1639,6 +1867,24 @@ export class BootScene extends Phaser.Scene {
     const texture = this.textures.get(RAIDERS_ATLAS_KEY);
     factions.forEach((faction, index) => {
       texture.add(raiderTextureKey(faction), 0, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
+    });
+  }
+
+  /** Phase 71: three-frame atlas (one per WildlifeKind), same uniform-grid layout technique as generateRaiderAtlas but on WILDLIFE_SPRITE_SIZE's own frame. */
+  private generateWildlifeAtlas(): void {
+    const kinds = Object.keys(WILDLIFE_SPRITES) as WildlifeKind[];
+
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+    kinds.forEach((kind, index) => {
+      drawPixelSprite(graphics, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITES[kind], ANIMAL_PIXEL_SIZE);
+    });
+
+    graphics.generateTexture(WILDLIFE_ATLAS_KEY, kinds.length * WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE);
+    graphics.destroy();
+
+    const texture = this.textures.get(WILDLIFE_ATLAS_KEY);
+    kinds.forEach((kind, index) => {
+      texture.add(wildlifeTextureKey(kind), 0, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE);
     });
   }
 

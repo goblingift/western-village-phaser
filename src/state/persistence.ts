@@ -1,5 +1,5 @@
 import { CYCLE_SECONDS, Difficulty, RunMode } from '../config/constants';
-import { BuildingType, PlacedBuilding } from '../config/buildingConfig';
+import { BUILDING_DEFINITIONS, BuildingType, PlacedBuilding, RESOURCE_VALUES, ResourceKey } from '../config/buildingConfig';
 import { gameEvents } from './gameEvents';
 import {
   ObjectiveSaveState,
@@ -75,7 +75,18 @@ import { RaiderCampSaveState, getRaiderCamps, restoreRaiderCamps } from './raide
  */
 export const SAVE_FORMAT_VERSION = 1 as const;
 
-export const MANUAL_SAVE_SLOT = 'manual';
+/**
+ * Phase 65: replaces the old single `MANUAL_SAVE_SLOT` ('manual') with three
+ * named manual slots, so a player can keep multiple runs (e.g. different
+ * difficulties, or "before this raid" checkpoints) side by side instead of
+ * always overwriting the one save. An old save that was written under the
+ * former 'manual' key is simply orphaned/unreachable now - no migration code,
+ * per the project's own pre-release convention (see the CattleFarm->
+ * OstrichFarm migration comment above for the shape that convention DOES use
+ * when a migration is actually warranted).
+ */
+export const MANUAL_SAVE_SLOTS = ['slot1', 'slot2', 'slot3'] as const;
+export type ManualSaveSlotName = (typeof MANUAL_SAVE_SLOTS)[number];
 export const AUTOSAVE_SLOT = 'autosave';
 
 const STORAGE_KEY_PREFIX = 'western-village-save-';
@@ -152,6 +163,8 @@ export interface SaveGameV1 {
    * than starting the lifetime tally at zero.
    */
   buildingsEverBuiltByType?: Partial<Record<BuildingType, number>>;
+  /** Phase 65: optional player-chosen label for a manual save slot, set via SaveLoadOverlay's inline prompt. Optional for the same backward-compatibility reason as objectives/raiderCamps/buildingsEverBuiltByType above - undefined just falls back to a generic "Slot N" display name. */
+  label?: string;
 }
 
 export interface SaveSlotInfo {
@@ -159,7 +172,15 @@ export interface SaveSlotInfo {
   savedAtIso: string;
   /** Cosmetic estimate for a slot picker/"Continue" tooltip - derived straight from the save's elapsedSeconds, ignoring Fixed mode's DAY_COUNT cap. */
   dayNumber: number;
+  /** Phase 65: raw elapsedSeconds from the save, for SaveLoadOverlay's "elapsed time" display via records.ts's formatDuration. */
+  elapsedSeconds: number;
   buildingCount: number;
+  /** Phase 65: player-chosen label, if any was set when saving. */
+  label?: string;
+  /** Phase 65: rough net worth estimate (cash + banked + priced resource stock + standing building cost), computed straight from the parsed save payload - mirrors gameState's computeNetWorth() formula without needing a live game to run it against. */
+  netWorth: number;
+  difficulty: Difficulty;
+  runMode: RunMode;
 }
 
 /** Deep-enough clone of one PlacedBuilding for a save payload - the plain scalar/array/record fields all round-trip through JSON fine, but the arrays/records need their own copies so a save doesn't alias the live building. */
@@ -296,8 +317,25 @@ function slotKey(name: string): string {
   return `${STORAGE_KEY_PREFIX}${name}`;
 }
 
-export function saveToSlot(name: string): void {
+/** Mirrors gameState's computeNetWorth() formula (cash + banked + priced resource stock + standing building cost), but reads it straight off a parsed save payload instead of the live game, so listSaveSlots can show a meaningful number without loading the save first. */
+function estimateNetWorth(save: SaveGameV1): number {
+  const banked = save.placedBuildings.reduce((sum, building) => sum + (building.bankBalance ?? 0), 0);
+  let resourceValue = 0;
+  for (const [key, amount] of Object.entries(save.resources) as [ResourceKey, number][]) {
+    resourceValue += amount * (RESOURCE_VALUES[key] ?? 0);
+  }
+  const buildingValue = save.placedBuildings.reduce(
+    (sum, building) => sum + (BUILDING_DEFINITIONS[building.type]?.cost ?? 0),
+    0,
+  );
+  return Math.round((save.money + banked + resourceValue + buildingValue) * 100) / 100;
+}
+
+export function saveToSlot(name: string, label?: string): void {
   const save = serializeGameState();
+  if (label) {
+    save.label = label;
+  }
   try {
     localStorage.setItem(slotKey(name), JSON.stringify(save));
   } catch (error) {
@@ -351,7 +389,12 @@ export function listSaveSlots(): SaveSlotInfo[] {
         name: key.slice(STORAGE_KEY_PREFIX.length),
         savedAtIso: parsed.savedAtIso,
         dayNumber: Math.floor(parsed.elapsedSeconds / CYCLE_SECONDS) + 1,
+        elapsedSeconds: parsed.elapsedSeconds,
         buildingCount: parsed.placedBuildings?.length ?? 0,
+        label: parsed.label,
+        netWorth: estimateNetWorth(parsed),
+        difficulty: parsed.difficulty,
+        runMode: parsed.runMode,
       });
     } catch {
       // Corrupt/foreign localStorage entry under our prefix - ignore it.
@@ -359,6 +402,12 @@ export function listSaveSlots(): SaveSlotInfo[] {
   }
 
   return infos;
+}
+
+/** The three named manual slots (see MANUAL_SAVE_SLOTS), fixed-length in slot order - null for any slot that's currently empty. For SaveLoadOverlay's per-slot rows, which need to render an "Empty Slot N" row rather than omit it. */
+export function getManualSaveSlots(): (SaveSlotInfo | null)[] {
+  const slots = listSaveSlots();
+  return MANUAL_SAVE_SLOTS.map((name) => slots.find((slot) => slot.name === name) ?? null);
 }
 
 /** Whichever of the slots present was saved most recently, for the pre-game "Continue" button - null if none exist. */

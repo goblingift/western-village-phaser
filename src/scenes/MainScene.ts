@@ -11,6 +11,7 @@ import {
   CAMERA_ZOOM_STEP,
   CATTLE_DISEASE_DURATION_MAX_SECONDS,
   CATTLE_DISEASE_DURATION_MIN_SECONDS,
+  CHURCH_BASE_RADIUS_TILES,
   COWBOY_DAMAGE,
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
@@ -69,6 +70,11 @@ import {
   VIEWPORT_WIDTH,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
+  WILDLIFE_FLEE_HP_FRACTION,
+  WILDLIFE_MAX_INTERVAL_MS,
+  WILDLIFE_MIN_INTERVAL_MS,
+  WILDLIFE_VILLAGER_HP,
+  MAX_CONCURRENT_WILDLIFE,
   WORLD_EVENT_BANNER_DURATION_MS,
   WORLD_EVENT_MAX_INTERVAL_MS,
   WORLD_EVENT_MIN_INTERVAL_MS,
@@ -86,6 +92,13 @@ import {
   getVegetation,
   getVegetationAtTile,
 } from '../state/vegetation';
+import {
+  WILDLIFE_ATLAS_KEY,
+  WILDLIFE_DEFINITIONS,
+  WildlifeKind,
+  pickRandomWildlifeKind,
+  wildlifeTextureKey,
+} from '../config/wildlifeConfig';
 import { NightOverlay } from '../ui/NightOverlay';
 import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
@@ -107,6 +120,8 @@ import {
   COWBOY_TEXTURE_KEY,
   DYNAMITERS_ATLAS_KEY,
   DYNAMITER_TEXTURE_KEY,
+  HOUSE_TIER_CONFIG,
+  HouseTier,
   MARKETABLE_RESOURCE_KEYS,
   MOUNTED_COWBOYS_ATLAS_KEY,
   MOUNTED_COWBOY_SPRITE_HEIGHT,
@@ -126,6 +141,7 @@ import {
   VILLAGER_TEXTURE_KEY,
   accentTextureKey,
   animalTextureKey,
+  blocksRaiderMovement,
   buildingTextureKey,
   formatResourceMap,
   getFactionUnitDamageMultiplier,
@@ -177,6 +193,7 @@ import {
   getDayNumber,
   getDayPhase,
   getElapsedSeconds,
+  getChurchRadius,
   getEnclosureFor,
   getFenceLinks,
   getHarvestCenterTile,
@@ -187,8 +204,10 @@ import {
   getThreatLevel,
   grantRaiderCampLoot,
   isGameOver,
+  isServedByChurch,
   placeBuilding,
   runProductionTick,
+  setAllGates,
   setRallyPoint,
   tickTimer,
 } from '../state/gameState';
@@ -276,6 +295,9 @@ const MINIMAP_UNIT_DOT_SIZE = 3;
 const MINIMAP_UNIT_COLOR = 0x2979ff;
 const MINIMAP_RAIDER_DOT_SIZE = 3;
 const MINIMAP_RAIDER_COLOR = 0xff1744;
+/** Phase 71: Hostile Wildlife gets its own distinct minimap dot color - orange, distinct from the raider red/unit blue/camp purple - drawn on the same throttled minimapCombatGraphics layer raiders/units share, since a creature roams continuously. */
+const MINIMAP_WILDLIFE_DOT_SIZE = 3;
+const MINIMAP_WILDLIFE_COLOR = 0xff9100;
 /**
  * Phase 57: Raider Camps get their own distinct minimap marker color/size -
  * bigger than a unit dot and drawn on the always-on minimapGraphics (not the
@@ -374,8 +396,8 @@ const UNIT_HP_BAR_HEIGHT = 3;
 const UNIT_HP_BAR_MARGIN_ABOVE_PX = 2;
 /** Half-height of every small-unit sprite class (animals/villagers/Cowboys/mounted Cowboys/raiders all sit in the 12px-tall band, see ANIMAL_SPRITE_SIZE), used to lift the bar clear of the sprite regardless of unit kind. */
 const UNIT_SPRITE_HALF_HEIGHT_PX = 6;
-/** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. */
-const VILLAGER_CAP = 30;
+/** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. Raised 30 -> 40 (Phase 66) for the bigger, more populated 60x45 map. */
+const VILLAGER_CAP = 40;
 const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
 const VILLAGER_PAUSE_MIN_MS = 500;
 const VILLAGER_PAUSE_MAX_MS = 2000;
@@ -417,6 +439,20 @@ const RAIDER_CAMP_SPRITE_HALF_HEIGHT_PX = RAIDER_CAMP_SPRITE_SIZE / 2;
 const COWBOY_SHOT_DEPTH = 13.5;
 const COWBOY_SHOT_COLOR = 0xffee58;
 const COWBOY_SHOT_FADE_MS = 200;
+
+/**
+ * Phase 71: Hostile Wildlife shares the raider/villager/animal small-unit
+ * depth band. Hit-test radius mirrors RAIDER_ATTACK_HIT_RADIUS_PX so a
+ * right-click-on-a-creature reads with the same forgiving tolerance as
+ * right-click-on-a-raider does.
+ */
+const WILDLIFE_SPRITE_DEPTH = 12;
+const WILDLIFE_ATTACK_HIT_RADIUS_PX = 10;
+/** Roam-leg pacing, matching startVillagerWander's own pause band - wildlife idles between roam legs the same way a decorative villager does. */
+const WILDLIFE_ROAM_PAUSE_MIN_MS = 500;
+const WILDLIFE_ROAM_PAUSE_MAX_MS = 2000;
+/** How far (world px) a fleeing creature's one-shot tween travels toward the nearest map edge before it despawns. */
+const WILDLIFE_FLEE_SPEED_PX_PER_SEC = 90;
 
 /** Phase 24: Cowboys are player-directed units, so their selection/movement constants live near the combat ones above. */
 const COWBOY_WALK_SPEED_PX_PER_SEC = 60;
@@ -623,6 +659,42 @@ interface Raider {
 }
 
 /**
+ * Phase 71: promoted from a bare Phaser.GameObjects.Image[] (Phase 20) now
+ * that a decorative villager can be killed by wildlife - it needs a stable
+ * id (for wildlife.targetRef to survive across ticks the same way
+ * Raider.id/CombatUnit.id already do) and its own hp. Deliberately still
+ * NOT tied into gameState/totalPopulation in any way: this stays the exact
+ * "capped cosmetic flourish decoupled from the real population figure" the
+ * Phase 20 changelog documents - killing one only ever removes a sprite.
+ */
+interface Villager {
+  id: string;
+  image: Phaser.GameObjects.Image;
+  hp: number;
+}
+
+/**
+ * Phase 71: Hostile Wildlife. Roams like a decorative villager (chained
+ * random-point tweens) rather than committing to one target the way a raider
+ * does, and only ever targets living units/villagers - never a building, see
+ * runWildlifeTick. Tracked at scene level (mirroring Raider[]/CombatUnit[]
+ * above) since it's ephemeral/tween-heavy, transient combat state, exactly
+ * the category the codebase's own Raider precedent describes - not a
+ * standalone state/ module like state/raiderCamps.ts, which is deliberately
+ * a *persisted*, slowly-changing map objective that wildlife is not.
+ */
+interface Wildlife {
+  id: string;
+  kind: WildlifeKind;
+  image: Phaser.GameObjects.Image;
+  hp: number;
+  maxHp: number;
+  state: 'roaming' | 'hunting' | 'attacking' | 'fleeing';
+  targetRef: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } | null;
+  moveTween: Phaser.Tweens.Tween | null;
+}
+
+/**
  * Phase 24: a Cowboy is now an independently-positioned, player-directed unit
  * rather than a position purely derived from its Barracks + slot index (Phase
  * 22). It still remembers which Barracks trained it and which cowboyHp slot
@@ -758,9 +830,13 @@ interface OffscreenThreat {
  * either a Raider or a RaiderCamp by id - both are looked up fresh every tick
  * (through getAttackTargetPosition) rather than holding a live object
  * reference, exactly like the raider-only version did.
+ *
+ * Phase 71: widened to also name a Wildlife creature by id - a player can
+ * right-click a Snake/Coyote/Mountain Lion just like a raider/camp, resolved
+ * through the same getAttackTargetPosition/resolveUnitFireTarget union.
  */
 interface AttackTargetRef {
-  kind: 'raider' | 'camp';
+  kind: 'raider' | 'camp' | 'wildlife';
   id: string;
 }
 
@@ -886,12 +962,25 @@ export class MainScene extends Phaser.Scene {
    */
   private touchPointersSuppressedForTap = new Set<number>();
   private buildingVisuals = new Map<string, BuildingVisual>();
-  private villagers: Phaser.GameObjects.Image[] = [];
+  /** Phase 71: promoted from Phaser.GameObjects.Image[] to Villager[] - a decorative villager now has hp and can be killed by wildlife (see the Villager interface doc comment). */
+  private villagers: Villager[] = [];
+  /** Phase 71: monotonically increasing so every Villager.id is unique for the life of the scene, mirroring raiderIdCounter/unitIdCounter. */
+  private villagerIdCounter = 0;
   /** Phase 60: Goods Carts on Roads - short-lived travel sprites, tracked only so game-reset can kill their tweens and destroy them; MAX_VISIBLE_CARTS is enforced against this array's length. */
   private activeCarts: Phaser.GameObjects.Image[] = [];
   private raiders: Raider[] = [];
   /** Phase 40: monotonically increasing so every Raider.id is unique for the life of the scene, even across waves/resets - a stray stale AttackTargetRef can then never accidentally match a later, unrelated raider. */
   private raiderIdCounter = 0;
+  /**
+   * Phase 71: Hostile Wildlife. An ambient hazard, not a wave/raid concept -
+   * spawns continuously from minute one via its own self-rescheduling timer
+   * (scheduleNextWildlifeCheck), independent of raidActive/night gating.
+   */
+  private wildlife: Wildlife[] = [];
+  private wildlifeIdCounter = 0;
+  private wildlifeCheckTimer: Phaser.Time.TimerEvent | null = null;
+  /** Fire-once-per-session debounce for the Mountain Lion spawn notification, so a run with several lions doesn't spam the log. */
+  private mountainLionNotified = false;
   /** Phase 57: Raider Camps' sprites, keyed by RaiderCamp.id - the camps themselves (position/hp/faction) live in state/raiderCamps.ts, mirroring how building.hp lives in gameState while buildingVisuals only holds the Image. */
   private campVisuals = new Map<string, Phaser.GameObjects.Image>();
   /** Phase 57: true once this run has rolled its initial 1-3 Raider Camps (on the first dawn at/after RAIDER_CAMP_SPAWN_DAY, or restored from a loaded save) - guards spawnInitialRaiderCamps against firing more than once per run. */
@@ -1007,6 +1096,7 @@ export class MainScene extends Phaser.Scene {
     this.setupChainView();
     this.setupAnimalVisuals();
     this.setupHouseTierVisuals();
+    this.setupGateVisuals();
     this.setupCowboyVisuals();
     this.setupUnitControl();
     this.setupRallyPoints();
@@ -1022,6 +1112,7 @@ export class MainScene extends Phaser.Scene {
     this.setupRaiderCamps();
     this.setupMerchantSystem();
     this.setupWorldEventSystem();
+    this.setupWildlifeSystem();
     this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
@@ -2026,6 +2117,18 @@ export class MainScene extends Phaser.Scene {
       );
     }
 
+    this.minimapCombatGraphics.fillStyle(MINIMAP_WILDLIFE_COLOR, 1);
+    for (const creature of this.wildlife) {
+      const tileX = creature.image.x / TILE_SIZE;
+      const tileY = creature.image.y / TILE_SIZE;
+      this.minimapCombatGraphics.fillRect(
+        this.minimapX + tileX * tileWidth - MINIMAP_WILDLIFE_DOT_SIZE / 2,
+        this.minimapY + tileY * tileHeight - MINIMAP_WILDLIFE_DOT_SIZE / 2,
+        MINIMAP_WILDLIFE_DOT_SIZE,
+        MINIMAP_WILDLIFE_DOT_SIZE,
+      );
+    }
+
     this.redrawOffscreenThreatPings(now);
   }
 
@@ -2718,8 +2821,8 @@ export class MainScene extends Phaser.Scene {
       if (!villager) {
         break;
       }
-      this.tweens.killTweensOf(villager);
-      villager.destroy();
+      this.tweens.killTweensOf(villager.image);
+      villager.image.destroy();
     }
   }
 
@@ -2782,7 +2885,7 @@ export class MainScene extends Phaser.Scene {
         building.tileX * TILE_SIZE,
         building.tileY * TILE_SIZE,
         BUILDING_ATLAS_KEY,
-        buildingTextureKey(building.type, building.houseTier),
+        buildingTextureKey(building.type, building.houseTier, building.gateOpen),
       )
       .setOrigin(0, 0)
       .setDepth(10);
@@ -2795,7 +2898,12 @@ export class MainScene extends Phaser.Scene {
       nightAccents: [],
     };
     this.buildingVisuals.set(building.id, visual);
-    if (building.type === BuildingType.Fence || building.type === BuildingType.Gate) {
+    if (
+      building.type === BuildingType.Fence ||
+      building.type === BuildingType.Gate ||
+      building.type === BuildingType.WoodenWall ||
+      building.type === BuildingType.WoodenGate
+    ) {
       // connections-updated already fired before this building's visual existed; redraw now that it does.
       this.redrawFenceLines();
     }
@@ -3307,6 +3415,12 @@ export class MainScene extends Phaser.Scene {
    * square (Chebyshev) radius test, so a circle would be a picture of a rule
    * the game does not implement - the corners would look out of range and
    * still be harvested.
+   *
+   * Phase 70: reused verbatim for Church's service radius (also a square/
+   * Chebyshev distance test - isServedByChurch/getChurchRadius in gameState.ts)
+   * rather than a second Graphics object and event-wiring block, since the
+   * two rings are drawn in the exact same two contexts (placement preview,
+   * currently-selected building) and never need to be visible simultaneously.
    */
   private setupHarvestRadiusRing(): void {
     this.harvestRingGraphics = this.add.graphics().setDepth(HARVEST_RING_DEPTH);
@@ -3316,6 +3430,11 @@ export class MainScene extends Phaser.Scene {
     // Vegetation appearing/disappearing inside the ring flips its colour.
     gameEvents.on('vegetation-added', () => this.redrawHarvestRing());
     gameEvents.on('vegetation-removed', () => this.redrawHarvestRing());
+    // Phase 70: hiring clergy changes a live Church's radius/coverage; a
+    // production tick can flip a House's served/unserved status even with no
+    // radius change (a Church going unstaffed/disabled/destroyed).
+    gameEvents.on('money-changed', () => this.redrawHarvestRing());
+    gameEvents.on('production-tick', () => this.redrawHarvestRing());
     gameEvents.on('game-reset', () => this.harvestRingGraphics.clear());
   }
 
@@ -3332,17 +3451,78 @@ export class MainScene extends Phaser.Scene {
       if (harvest && previewTileX !== undefined && previewTileY !== undefined) {
         const center = getHarvestCenterTile(previewTileX, previewTileY, this.selectedType);
         this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+      } else if (
+        this.selectedType === BuildingType.Church &&
+        previewTileX !== undefined &&
+        previewTileY !== undefined
+      ) {
+        // A freshly-placed Church starts with 0 clergy, so the preview shows
+        // just its base radius (CHURCH_BASE_RADIUS_TILES) - no live building
+        // exists yet to read nunCount/priestCount off of.
+        const center = getHarvestCenterTile(previewTileX, previewTileY, this.selectedType);
+        this.drawServiceRing(center.tileX, center.tileY, CHURCH_BASE_RADIUS_TILES, true);
       }
       return;
     }
 
     const selected = this.selectedBuildingId ? getBuildingById(this.selectedBuildingId) : null;
-    const harvest = selected ? BUILDING_DEFINITIONS[selected.type].harvest : null;
-    if (!selected || !harvest) {
+    if (!selected) {
       return;
     }
-    const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
-    this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+    const harvest = BUILDING_DEFINITIONS[selected.type].harvest;
+    if (harvest) {
+      const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
+      this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+      return;
+    }
+    if (selected.type === BuildingType.Church) {
+      const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
+      // A Church's own ring is always "served" green - it's the source of
+      // coverage, not a consumer of it; empty/red is reserved for a House
+      // with nothing covering it (see the House branch below).
+      this.drawServiceRing(center.tileX, center.tileY, getChurchRadius(selected), true);
+      return;
+    }
+    if (selected.type === BuildingType.House) {
+      const tierConfig = HOUSE_TIER_CONFIG[selected.houseTier];
+      const nextTier = selected.houseTier < 3 ? ((selected.houseTier + 1) as HouseTier) : null;
+      const nextTierConfig = nextTier !== null ? HOUSE_TIER_CONFIG[nextTier] : null;
+      if (tierConfig.requiresChurch || nextTierConfig?.requiresChurch) {
+        // A House has no radius of its own to draw - instead, ring the
+        // nearest Church's actual coverage area (if any) so the player can
+        // see at a glance whether this House sits inside it. No Church at
+        // all anywhere on the map simply draws nothing (there's no radius to
+        // show), matching the harvest ring's own "nothing to draw" behavior
+        // when a harvester has no vegetation kind configured.
+        this.drawNearestChurchRingFor(selected);
+      }
+    }
+  }
+
+  /** Finds and rings whichever Church is actually serving (or nearly serving) `house` - the nearest one, regardless of whether it currently qualifies, so the player can see how close they are. */
+  private drawNearestChurchRingFor(house: PlacedBuilding): void {
+    const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
+    let nearest: PlacedBuilding | null = null;
+    let nearestDistance = Infinity;
+    for (const building of getPlacedBuildings()) {
+      if (building.type !== BuildingType.Church) {
+        continue;
+      }
+      const churchCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
+      const distance = Math.max(
+        Math.abs(houseCenter.tileX - churchCenter.tileX),
+        Math.abs(houseCenter.tileY - churchCenter.tileY),
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = building;
+      }
+    }
+    if (!nearest) {
+      return;
+    }
+    const center = getHarvestCenterTile(nearest.tileX, nearest.tileY, nearest.type);
+    this.drawServiceRing(center.tileX, center.tileY, getChurchRadius(nearest), isServedByChurch(house));
   }
 
   private drawHarvestRing(
@@ -3352,7 +3532,12 @@ export class MainScene extends Phaser.Scene {
     kind: VegetationEntity['kind'],
   ): void {
     const hasVegetation = countVegetationInRadius(kind, centerTileX, centerTileY, radiusTiles) > 0;
-    const color = hasVegetation ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR;
+    this.drawServiceRing(centerTileX, centerTileY, radiusTiles, hasVegetation);
+  }
+
+  /** The shared square-ring (Chebyshev) primitive both the harvest radius and Church's service radius draw through - green when `ok`, red otherwise. */
+  private drawServiceRing(centerTileX: number, centerTileY: number, radiusTiles: number, ok: boolean): void {
+    const color = ok ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR;
 
     const px = (centerTileX - radiusTiles) * TILE_SIZE;
     const py = (centerTileY - radiusTiles) * TILE_SIZE;
@@ -3449,6 +3634,10 @@ export class MainScene extends Phaser.Scene {
     gameEvents.on('game-loaded', redraw);
     gameEvents.on('building-selected', redraw);
     gameEvents.on('cancel-placement', redraw);
+    // Phase 69: a WoodenGate toggling open/closed can flip a nearby farm's
+    // enclosure validity the same tick (setGateOpen/setAllGates already
+    // recomputed the cache before firing this event).
+    gameEvents.on('gate-state-changed', redraw);
     gameEvents.on('game-reset', () => this.enclosureExitHintGraphics.clear());
   }
 
@@ -3619,6 +3808,13 @@ export class MainScene extends Phaser.Scene {
       this.fadeNightAccents(phase);
       this.timerText.setText(this.formatTimerText());
       this.showPhaseNotice(dayNumber, phase);
+      // Phase 71: top decorative villager sprites back up toward VILLAGER_CAP
+      // every dawn, reusing this existing hook rather than a new timer - see
+      // topUpVillagersOnDawn's own doc comment for why this never touches
+      // real population.
+      if (phase === 'day') {
+        this.topUpVillagersOnDawn();
+      }
     });
   }
 
@@ -3884,6 +4080,51 @@ export class MainScene extends Phaser.Scene {
         this.time.delayedCall(300, () => visual.image.clearTint());
       }
     });
+  }
+
+  /**
+   * Phase 69: swaps a WoodenGate's sprite frame the moment gameState's
+   * setGateOpen/setAllGates actually flips gateOpen - same setTexture-not-
+   * destroy/recreate technique as setupHouseTierVisuals above, just without
+   * the upgrade/downgrade tween cue (a gate toggle is a deliberate player
+   * action, not an emergent event worth a feedback flourish). The enclosure-
+   * exit-hint redraw this state change can also require is wired centrally in
+   * setupEnclosureExitHint (also listening for 'gate-state-changed'), not
+   * here, matching how that method already centralizes every other
+   * enclosure-affecting event rather than each building-visual setup method
+   * redrawing it individually.
+   */
+  private setupGateVisuals(): void {
+    gameEvents.on('gate-state-changed', (building: PlacedBuilding) => {
+      const visual = this.buildingVisuals.get(building.id);
+      if (!visual) {
+        return;
+      }
+      visual.image.setTexture(
+        BUILDING_ATLAS_KEY,
+        buildingTextureKey(building.type, building.houseTier, building.gateOpen),
+      );
+    });
+  }
+
+  /**
+   * Phase 69: the 'G' hotkey and the building bar's "Close/Open All Gates"
+   * button both call this - majority-state-derived rather than a separately
+   * tracked local toggle flag, so it stays correct after a load/reset or
+   * after any single gate was already toggled individually via the info
+   * panel (a local "last commanded state" flag could silently disagree with
+   * what's actually on the map). If any WoodenGate is currently open, this
+   * closes every gate (the more defensive default when the player's intent
+   * is ambiguous); only when every gate is already closed does it open them
+   * all.
+   */
+  private toggleAllGates(): void {
+    const gates = getPlacedBuildings().filter((building) => building.type === BuildingType.WoodenGate);
+    if (gates.length === 0) {
+      return;
+    }
+    const anyOpen = gates.some((gate) => gate.gateOpen !== false);
+    setAllGates(!anyOpen);
   }
 
   /** Only called on placement and 'animal-bought' (i.e. when animalCount actually changes), never per production tick. */
@@ -4235,8 +4476,9 @@ export class MainScene extends Phaser.Scene {
     // attack order on that specific raider instead of a plain move order;
     // Phase 57 extends the same hit-test to a live Raider Camp (checked
     // second - a raider standing in front of its own camp still wins);
-    // right-clicking anything else (empty ground, a building, etc.) keeps
-    // the original move-order behavior unchanged.
+    // Phase 71 extends it a third time to wildlife (checked last); right-
+    // clicking anything else (empty ground, a building, etc.) keeps the
+    // original move-order behavior unchanged.
     const raider = this.findRaiderAt(world.x, world.y);
     if (raider) {
       this.issueUnitAttackOrder({ kind: 'raider', id: raider.id }, { x: raider.image.x, y: raider.image.y });
@@ -4245,6 +4487,14 @@ export class MainScene extends Phaser.Scene {
     const camp = this.findCampAt(world.x, world.y);
     if (camp) {
       this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
+      return;
+    }
+    const creature = this.findWildlifeAt(world.x, world.y);
+    if (creature) {
+      this.issueUnitAttackOrder(
+        { kind: 'wildlife', id: creature.id },
+        { x: creature.image.x, y: creature.image.y },
+      );
     } else {
       this.issueUnitMoveOrders(pointer);
     }
@@ -4460,6 +4710,10 @@ export class MainScene extends Phaser.Scene {
       const raider = this.raiders.find((candidate) => candidate.id === target.id && candidate.hp > 0);
       return raider ? { x: raider.image.x, y: raider.image.y } : null;
     }
+    if (target.kind === 'wildlife') {
+      const creature = this.wildlife.find((candidate) => candidate.id === target.id && candidate.hp > 0);
+      return creature ? { x: creature.image.x, y: creature.image.y } : null;
+    }
     const camp = getRaiderCampById(target.id);
     return camp && camp.hp > 0 ? { x: camp.x, y: camp.y } : null;
   }
@@ -4492,7 +4746,7 @@ export class MainScene extends Phaser.Scene {
    * MOVEMENT speed. Deliberately cheap and one-shot (per CLAUDE.md's
    * performance rules against heavy per-frame/update-loop work): samples a
    * handful of points along the straight-line path at move-order-issue time
-   * only, same half-tile-step technique sampleForBlockingFence already uses
+   * only, same half-tile-step technique sampleForBlockingWall already uses
    * for raider wall detection, and never rechecked again while the tween
    * runs - a unit doesn't "enter"/"exit" road speed mid-tween, the whole leg
    * is either road-sped or not.
@@ -4636,6 +4890,17 @@ export class MainScene extends Phaser.Scene {
         gameEvents.emit('toggle-help-overlay');
         event.preventDefault();
       }
+
+      // Phase 69: 'G' ("gates") toggles every placed WoodenGate open/closed
+      // in one press - see toggleAllGates's own doc comment for the
+      // majority-state logic. Confirmed unbound before adding: grepped
+      // setupHotkeys for every existing event.code branch (WASD/arrows via
+      // the separate cameraKeys record, Shift, digit 1-9, Space, Delete/
+      // Backspace, C, V, E, H/Slash) - none use KeyG.
+      if (event.code === 'KeyG') {
+        this.toggleAllGates();
+        event.preventDefault();
+      }
     });
   }
 
@@ -4757,11 +5022,42 @@ export class MainScene extends Phaser.Scene {
     const origin = this.tileCenter(building);
 
     for (let index = 0; index < spawnCount; index++) {
-      const villager = this.add
-        .image(origin.x, origin.y, VILLAGERS_ATLAS_KEY, VILLAGER_TEXTURE_KEY)
-        .setDepth(VILLAGER_SPRITE_DEPTH);
-      this.villagers.push(villager);
-      this.startVillagerWander(villager);
+      this.spawnOneVillagerAt(origin.x, origin.y);
+    }
+  }
+
+  /**
+   * Phase 71: extracted out of spawnVillagerForHouse's own loop body so
+   * topUpVillagersOnDawn (which has no single origin building) can spawn a
+   * replacement villager the same way - at a random placed building's tile
+   * center, mirroring pickVillagerTarget's own fallback for an empty town.
+   */
+  private spawnOneVillagerAt(x: number, y: number): void {
+    const image = this.add
+      .image(x, y, VILLAGERS_ATLAS_KEY, VILLAGER_TEXTURE_KEY)
+      .setDepth(VILLAGER_SPRITE_DEPTH);
+    const villager: Villager = { id: `villager-${this.villagerIdCounter++}`, image, hp: WILDLIFE_VILLAGER_HP };
+    this.villagers.push(villager);
+    this.startVillagerWander(image);
+  }
+
+  /**
+   * Phase 71: villager count is a capped cosmetic flourish (Phase 20),
+   * decoupled from gameState's real totalPopulation - this only tops rendered
+   * sprites back up toward VILLAGER_CAP after wildlife kills have thinned
+   * them, it never touches population/workforce. Reuses the existing dawn
+   * hook (day-phase-changed, phase === 'day') rather than inventing a new
+   * schedule, and spawns each replacement at a random placed building the
+   * same way pickVillagerTarget already picks a wander destination.
+   */
+  private topUpVillagersOnDawn(): void {
+    const missing = VILLAGER_CAP - this.villagers.length;
+    if (missing <= 0) {
+      return;
+    }
+    for (let index = 0; index < missing; index++) {
+      const point = this.pickVillagerTarget();
+      this.spawnOneVillagerAt(point.x, point.y);
     }
   }
 
@@ -4964,8 +5260,8 @@ export class MainScene extends Phaser.Scene {
       setAudioGameSpeed(this.gameSpeed);
 
       for (const villager of this.villagers) {
-        this.tweens.killTweensOf(villager);
-        villager.destroy();
+        this.tweens.killTweensOf(villager.image);
+        villager.image.destroy();
       }
       this.villagers = [];
 
@@ -4999,6 +5295,7 @@ export class MainScene extends Phaser.Scene {
       this.resetRaidState();
       this.resetMerchantState();
       this.resetWorldEventState();
+      this.resetWildlifeState();
       this.lastAutosaveDayNumber = -1;
     });
   }
@@ -5322,6 +5619,363 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Phase 71: Hostile Wildlife. Self-rescheduling timer following
+   * scheduleNextMerchantCheck's exact shape (roll a random delay, fire,
+   * immediately roll the next one) - deliberately NO night-only/elapsed-time
+   * gating the way raids have (canRaidSpawnNow/RAID_EARLIEST_ELAPSED_MS):
+   * wildlife is an ambient world hazard from minute one, not a scheduled
+   * threat window.
+   */
+  private setupWildlifeSystem(): void {
+    this.scheduleNextWildlifeCheck();
+  }
+
+  private scheduleNextWildlifeCheck(): void {
+    const delay = Phaser.Math.Between(WILDLIFE_MIN_INTERVAL_MS, WILDLIFE_MAX_INTERVAL_MS);
+    this.wildlifeCheckTimer = this.time.delayedCall(delay, () => {
+      this.spawnWildlifeCreature();
+      this.scheduleNextWildlifeCheck();
+    });
+  }
+
+  /** Skips spawning (but still reschedules) once MAX_CONCURRENT_WILDLIFE is reached - a cap, not a hard stop of the timer. */
+  private spawnWildlifeCreature(): void {
+    if (this.wildlife.length >= MAX_CONCURRENT_WILDLIFE) {
+      return;
+    }
+
+    const kind = pickRandomWildlifeKind();
+    const definition = WILDLIFE_DEFINITIONS[kind];
+    const spawn = this.pickRaidSpawnPoint();
+
+    const image = this.add
+      .image(spawn.x, spawn.y, WILDLIFE_ATLAS_KEY, wildlifeTextureKey(kind))
+      .setDepth(WILDLIFE_SPRITE_DEPTH);
+
+    const creature: Wildlife = {
+      id: `wildlife-${this.wildlifeIdCounter++}`,
+      kind,
+      image,
+      hp: definition.maxHp,
+      maxHp: definition.maxHp,
+      state: 'roaming',
+      targetRef: null,
+      moveTween: null,
+    };
+    this.wildlife.push(creature);
+    this.startWildlifeRoam(creature);
+
+    if (kind === 'MountainLion' && !this.mountainLionNotified) {
+      this.mountainLionNotified = true;
+      addNotification('A Mountain Lion is prowling near your town.', 'warning', getElapsedSeconds());
+    }
+  }
+
+  /**
+   * Point-to-point wander, one leg at a time, closely mirroring
+   * startVillagerWander's own chained-tween technique (a close copy adapted
+   * for Wildlife's own record/state rather than a shared helper, matching
+   * the codebase's existing precedent of villager-wander and raider-tween
+   * being separate, purpose-specific implementations). Only ever called
+   * while state === 'roaming'; runWildlifeTick switches a creature straight
+   * into 'hunting' (its own fresh tween) the moment prey is found, so this
+   * loop's onComplete re-checks state before continuing itself.
+   */
+  private startWildlifeRoam(creature: Wildlife): void {
+    if (!creature.image.active || creature.state !== 'roaming') {
+      return;
+    }
+
+    const target = this.pickVillagerTarget();
+    const definition = WILDLIFE_DEFINITIONS[creature.kind];
+    const distance = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, target.x, target.y);
+    const duration = (distance / definition.speedPxPerSec) * 1000;
+
+    creature.image.setFlipX(target.x < creature.image.x);
+
+    creature.moveTween = this.tweens.add({
+      targets: creature.image,
+      x: target.x,
+      y: target.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        creature.moveTween = null;
+        if (creature.state !== 'roaming') {
+          return;
+        }
+        const pause = Phaser.Math.Between(WILDLIFE_ROAM_PAUSE_MIN_MS, WILDLIFE_ROAM_PAUSE_MAX_MS);
+        this.time.delayedCall(pause, () => this.startWildlifeRoam(creature));
+      },
+    });
+  }
+
+  /**
+   * Runs on the same ~2s combat-tick cadence as raid combat (called from
+   * runRaidCombatTick), not per-frame - wildlife re-paths every tick while
+   * hunting (unlike a raider, which commits to one target and walks there
+   * once) since its prey (a unit/villager) keeps moving.
+   */
+  private runWildlifeTick(): void {
+    for (const creature of this.wildlife) {
+      this.updateWildlifeCreature(creature);
+    }
+    this.removeDeadWildlife();
+  }
+
+  private updateWildlifeCreature(creature: Wildlife): void {
+    if (creature.state === 'fleeing') {
+      // Handled entirely by the one-shot flee tween's onComplete (see
+      // startWildlifeFlee) - despawns the creature once it reaches the edge.
+      return;
+    }
+
+    const definition = WILDLIFE_DEFINITIONS[creature.kind];
+    if (creature.hp / creature.maxHp < WILDLIFE_FLEE_HP_FRACTION) {
+      this.startWildlifeFlee(creature);
+      return;
+    }
+
+    const detectionRangePx = definition.detectionRadiusTiles * TILE_SIZE;
+    const prey = this.findNearestPrey(creature.image.x, creature.image.y, detectionRangePx);
+
+    if (!prey) {
+      if (creature.state !== 'roaming') {
+        creature.state = 'roaming';
+        creature.targetRef = null;
+        this.tweens.killTweensOf(creature.image);
+        creature.moveTween = null;
+        this.startWildlifeRoam(creature);
+      }
+      return;
+    }
+
+    const attackRangePx = definition.attackRangeTiles * TILE_SIZE;
+    const distanceToPrey = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, prey.x, prey.y);
+
+    if (distanceToPrey <= attackRangePx) {
+      creature.state = 'attacking';
+      creature.targetRef = prey.ref;
+      this.tweens.killTweensOf(creature.image);
+      creature.moveTween = null;
+      this.applyWildlifeDamage(prey.ref, definition.damage);
+      return;
+    }
+
+    // Blocked by a Wall/Gate: wildlife does NOT get a raider-style detour or
+    // attack-the-wall fallback - keeping wildlife pathing simple (per the
+    // design intent) means a blocked hunt is simply abandoned this tick, and
+    // re-evaluated fresh next tick rather than committing to a path around
+    // the obstacle.
+    if (this.sampleForBlockingWall(creature.image.x, creature.image.y, prey.x, prey.y)) {
+      if (creature.state !== 'roaming') {
+        creature.state = 'roaming';
+        creature.targetRef = null;
+        this.tweens.killTweensOf(creature.image);
+        creature.moveTween = null;
+        this.startWildlifeRoam(creature);
+      }
+      return;
+    }
+
+    creature.state = 'hunting';
+    creature.targetRef = prey.ref;
+    this.tweens.killTweensOf(creature.image);
+    const distance = distanceToPrey;
+    const duration = (distance / definition.speedPxPerSec) * 1000;
+    creature.image.setFlipX(prey.x < creature.image.x);
+    creature.moveTween = this.tweens.add({
+      targets: creature.image,
+      x: prey.x,
+      y: prey.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        creature.moveTween = null;
+      },
+    });
+  }
+
+  /**
+   * Nearest live unit OR villager within maxDistance - wildlife never
+   * targets a building (grepped for and confirmed absent from every branch
+   * above: only findNearestUnit/this.villagers are consulted here).
+   */
+  private findNearestPrey(
+    x: number,
+    y: number,
+    maxDistance: number,
+  ): { x: number; y: number; ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } } | null {
+    let bestDistance = maxDistance;
+    let best: { x: number; y: number; ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } } | null = null;
+
+    for (const unit of this.cowboyUnits) {
+      if (!this.isCowboyUnitAlive(unit)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(x, y, unit.image.x, unit.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = { x: unit.image.x, y: unit.image.y, ref: { kind: 'unit', unitId: unit.id } };
+      }
+    }
+
+    for (const villager of this.villagers) {
+      if (villager.hp <= 0) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(x, y, villager.image.x, villager.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = { x: villager.image.x, y: villager.image.y, ref: { kind: 'villager', villagerId: villager.id } };
+      }
+    }
+
+    return best;
+  }
+
+  /** Applies a hunting/attacking wildlife creature's per-tick bite to whichever prey kind it locked onto. */
+  private applyWildlifeDamage(
+    ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string },
+    damage: number,
+  ): void {
+    if (ref.kind === 'unit') {
+      const unit = this.cowboyUnits.find((candidate) => candidate.id === ref.unitId);
+      if (!unit || !this.isCowboyUnitAlive(unit)) {
+        return;
+      }
+      const remaining = damageUnit(unit.barracksId, unit.kind, unit.index, damage);
+      if (remaining <= 0) {
+        this.killUnit(unit);
+      }
+      return;
+    }
+
+    const villager = this.villagers.find((candidate) => candidate.id === ref.villagerId);
+    if (!villager || villager.hp <= 0) {
+      return;
+    }
+    villager.hp = Math.max(0, villager.hp - damage);
+    if (villager.hp <= 0) {
+      this.killVillager(villager);
+    }
+  }
+
+  /** Mirrors killUnit's cleanup shape: kill tweens, dust puff, sound, destroy, drop from tracking. Never touches gameState/totalPopulation - see the Villager interface doc comment. */
+  private killVillager(villager: Villager): void {
+    this.tweens.killTweensOf(villager.image);
+    this.spawnDeathPuff(villager.image.x, villager.image.y);
+    playWorldSound('unitDeath', villager.image.x, villager.image.y);
+    villager.image.destroy();
+    this.villagers = this.villagers.filter((candidate) => candidate !== villager);
+  }
+
+  /** One-shot tween toward the nearest map edge point; despawns the creature on arrival rather than looping. */
+  private startWildlifeFlee(creature: Wildlife): void {
+    if (creature.state === 'fleeing') {
+      return;
+    }
+    creature.state = 'fleeing';
+    creature.targetRef = null;
+    this.tweens.killTweensOf(creature.image);
+
+    const edgePoint = this.nearestMapEdgePoint(creature.image.x, creature.image.y);
+    const distance = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, edgePoint.x, edgePoint.y);
+    const duration = (distance / WILDLIFE_FLEE_SPEED_PX_PER_SEC) * 1000;
+    creature.image.setFlipX(edgePoint.x < creature.image.x);
+
+    creature.moveTween = this.tweens.add({
+      targets: creature.image,
+      x: edgePoint.x,
+      y: edgePoint.y,
+      duration: Math.max(duration, 1),
+      ease: 'Linear',
+      onComplete: () => {
+        creature.hp = 0;
+      },
+    });
+  }
+
+  /** Closest of the 4 map edges from a world point, clamped to bounds - the flee destination. */
+  private nearestMapEdgePoint(x: number, y: number): { x: number; y: number } {
+    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
+    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
+    const distances = [
+      { x, y: 0, distance: y },
+      { x, y: mapHeightPx, distance: mapHeightPx - y },
+      { x: 0, y, distance: x },
+      { x: mapWidthPx, y, distance: mapWidthPx - x },
+    ];
+    distances.sort((a, b) => a.distance - b.distance);
+    return { x: distances[0].x, y: distances[0].y };
+  }
+
+  private removeDeadWildlife(): void {
+    const survivors: Wildlife[] = [];
+    for (const creature of this.wildlife) {
+      if (creature.hp > 0) {
+        survivors.push(creature);
+        continue;
+      }
+      this.tweens.killTweensOf(creature.image);
+      creature.image.destroy();
+    }
+    this.wildlife = survivors;
+  }
+
+  /** Nearest live wildlife creature to a world point within WILDLIFE_ATTACK_HIT_RADIUS_PX, or null - mirrors findRaiderAt/findCampAt for the right-click attack-order hit-test chain. */
+  private findWildlifeAt(worldX: number, worldY: number): Wildlife | null {
+    let best: Wildlife | null = null;
+    let bestDistance = WILDLIFE_ATTACK_HIT_RADIUS_PX;
+
+    for (const creature of this.wildlife) {
+      if (creature.hp <= 0) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(worldX, worldY, creature.image.x, creature.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = creature;
+      }
+    }
+
+    return best;
+  }
+
+  private findNearestWildlife(x: number, y: number, maxDistance: number): Wildlife | null {
+    let best: Wildlife | null = null;
+    let bestDistance = maxDistance;
+
+    for (const creature of this.wildlife) {
+      if (creature.hp <= 0) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(x, y, creature.image.x, creature.image.y);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = creature;
+      }
+    }
+
+    return best;
+  }
+
+  /** Cancels the pending spawn timer and clears every live creature, mirroring resetRaidState/resetMerchantState's exact reset-and-reschedule shape. */
+  private resetWildlifeState(): void {
+    this.wildlifeCheckTimer?.remove();
+    this.wildlifeCheckTimer = null;
+
+    for (const creature of this.wildlife) {
+      this.tweens.killTweensOf(creature.image);
+      creature.image.destroy();
+    }
+    this.wildlife = [];
+    this.mountainLionNotified = false;
+
+    this.scheduleNextWildlifeCheck();
+  }
+
+  /**
    * Below OUTLAW_BIAS_THREAT: the original even pick across
    * Object.values(RaiderFaction). Above it a wealthy/late-game town draws
    * outsized Outlaw attention (60/20/20), generalizing Phase 29's
@@ -5514,7 +6168,22 @@ export class MainScene extends Phaser.Scene {
    * the line, findWallDetourPoint gets one bounded shot at finding a nearby
    * gap (a Gate, or simply a spot where the wall doesn't reach) before
    * falling back to Phase 38's original behavior of attacking the blocking
-   * Fence outright.
+   * Fence outright. This Fence branch/fallback is completely unchanged by
+   * Phase 68 - verified by re-reading it after the WoodenWall branch below
+   * was added.
+   *
+   * Phase 68: a WoodenWall blocker skips the detour attempt entirely and goes
+   * straight to attacking it - a raider must destroy a Wall to get through,
+   * it never tries to walk around one the way it does a Fence.
+   *
+   * Phase 69: a CLOSED WoodenGate is treated identically to a WoodenWall
+   * blocker here - same attack-only, no-detour branch. An OPEN WoodenGate
+   * never reaches this branch at all: blocksRaiderMovement (buildingConfig.ts)
+   * only returns true for a WoodenGate when gateOpen === false, so
+   * findBlockingWall/sampleForBlockingWall (which both gate on that same
+   * predicate) simply never report an open WoodenGate as a blocker in the
+   * first place - no special-case "is it open" check is needed here, it falls
+   * out of the shared predicate for free.
    */
   private resolveWallInteraction(
     x: number,
@@ -5525,9 +6194,13 @@ export class MainScene extends Phaser.Scene {
       return { attackTarget: target, detourPoint: null };
     }
 
-    const blocking = this.findBlockingFence(x, y, target);
+    const blocking = this.findBlockingWall(x, y, target);
     if (!blocking) {
       return { attackTarget: target, detourPoint: null };
+    }
+
+    if (blocking.type === BuildingType.WoodenWall || blocking.type === BuildingType.WoodenGate) {
+      return { attackTarget: blocking, detourPoint: null };
     }
 
     const detourPoint = this.findWallDetourPoint(x, y, target);
@@ -5563,14 +6236,15 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * Phase 38, refactored in Phase 61 into a thin wrapper around
-   * sampleForBlockingFence (see that method's doc comment for the actual
+   * sampleForBlockingWall (see that method's doc comment for the actual
    * sampling logic) - kept as its own method since it's the one call site
    * that always samples all the way out to a target building's tile-center
-   * and excludes that target's own id.
+   * and excludes that target's own id. Renamed from findBlockingFence in
+   * Phase 68 since it now also finds a blocking WoodenWall.
    */
-  private findBlockingFence(x: number, y: number, target: PlacedBuilding): PlacedBuilding | null {
+  private findBlockingWall(x: number, y: number, target: PlacedBuilding): PlacedBuilding | null {
     const center = this.tileCenter(target);
-    return this.sampleForBlockingFence(x, y, center.x, center.y, target.id);
+    return this.sampleForBlockingWall(x, y, center.x, center.y, target.id);
   }
 
   /**
@@ -5579,12 +6253,17 @@ export class MainScene extends Phaser.Scene {
    * center - findWallDetourPoint below needs to sample short raider-to-
    * candidate and candidate-to-target legs, not just raider-to-target. Still
    * no grid pathfinding: half-tile steps along one straight segment,
-   * returning the first live Fence tile crossed (the segment nearest the
-   * start point, since sampling walks outward from it). Gate is
+   * returning the first live blocking-type tile crossed (the segment nearest
+   * the start point, since sampling walks outward from it). Gate is
    * deliberately not checked here - see buildingConfig.ts's Gate doc comment
    * - so a Gate tile never blocks this sample.
+   *
+   * Phase 68: renamed from sampleForBlockingFence and the hardcoded
+   * `type === BuildingType.Fence` check replaced with the shared
+   * blocksRaiderMovement predicate (buildingConfig.ts), so this now also
+   * stops at a live WoodenWall, not just a Fence.
    */
-  private sampleForBlockingFence(
+  private sampleForBlockingWall(
     x1: number,
     y1: number,
     x2: number,
@@ -5606,12 +6285,7 @@ export class MainScene extends Phaser.Scene {
       seen.add(key);
 
       const building = getBuildingAtTile(sampleTileX, sampleTileY);
-      if (
-        building &&
-        building.id !== excludeBuildingId &&
-        building.type === BuildingType.Fence &&
-        building.hp > 0
-      ) {
+      if (building && building.id !== excludeBuildingId && blocksRaiderMovement(building)) {
         return building;
       }
     }
@@ -5622,14 +6296,14 @@ export class MainScene extends Phaser.Scene {
   /**
    * Phase 61: bounded local search for a way around a wall segment blocking
    * the raider's straight line to `target` - deliberately NOT pathfinding,
-   * same scoping call Phase 38 made for findBlockingFence itself. Tries
+   * same scoping call Phase 38 made for findBlockingWall itself. Tries
    * RAIDER_WALL_DETOUR_OFFSETS_TILES (1 and 2 tiles) to both sides,
    * perpendicular to the raider->target line, for 4 point samples total:
-   * - skips a candidate that lands inside a live Fence tile (nowhere to
+   * - skips a candidate that lands inside a live blocking tile (nowhere to
    *   stand),
    * - checks the short raider->candidate leg is itself clear,
    * - checks the longer candidate->target leg is clear (a Gate anywhere
-   *   along either leg is fine, since sampleForBlockingFence never treats
+   *   along either leg is fine, since sampleForBlockingWall never treats
    *   Gate as blocking).
    * The first fully-clear candidate is returned as a one-leg waypoint; the
    * raider walks there, then updateRaiderTargeting re-resolves fresh from
@@ -5638,6 +6312,15 @@ export class MainScene extends Phaser.Scene {
    * search - if nothing clears within that radius the wall is treated as
    * solid there and the raider falls back to attacking it (Phase 38
    * behavior, unchanged).
+   *
+   * Phase 68: this method is only ever reached for a Fence blocker -
+   * resolveWallInteraction skips straight to attacking a WoodenWall blocker
+   * without calling findWallDetourPoint at all - but its own candidate-
+   * occupancy check was still hardcoded to Fence, so it's widened to the
+   * shared blocksRaiderMovement predicate too for consistency (a WoodenWall
+   * candidate tile must never be treated as "nowhere to stand" open ground
+   * here either, on the off chance this is ever called for another blocker
+   * type in the future).
    */
   private findWallDetourPoint(x: number, y: number, target: PlacedBuilding): { x: number; y: number } | null {
     const center = this.tileCenter(target);
@@ -5662,14 +6345,14 @@ export class MainScene extends Phaser.Scene {
         const candidateTileX = Math.floor(candidateX / TILE_SIZE);
         const candidateTileY = Math.floor(candidateY / TILE_SIZE);
         const occupant = getBuildingAtTile(candidateTileX, candidateTileY);
-        if (occupant && occupant.type === BuildingType.Fence && occupant.hp > 0) {
+        if (occupant && blocksRaiderMovement(occupant)) {
           continue;
         }
 
-        if (this.sampleForBlockingFence(x, y, candidateX, candidateY, target.id)) {
+        if (this.sampleForBlockingWall(x, y, candidateX, candidateY, target.id)) {
           continue;
         }
-        if (this.sampleForBlockingFence(candidateX, candidateY, center.x, center.y, target.id)) {
+        if (this.sampleForBlockingWall(candidateX, candidateY, center.x, center.y, target.id)) {
           continue;
         }
 
@@ -5728,16 +6411,23 @@ export class MainScene extends Phaser.Scene {
    * The guard now also stays open while any unit has a live camp attack
    * order; every other branch below already no-ops cheaply against an empty
    * raiders array.
+   *
+   * Phase 71: widened a third time - wildlife runs on this same combat-tick
+   * cadence but is never gated by a raid wave/attack order at all (it's an
+   * ambient hazard, not a raid concept), so the guard now also stays open
+   * whenever any wildlife is alive or has a standing attack order against it.
    */
   private runRaidCombatTick(): void {
     const hasCampAttackOrder = this.cowboyUnits.some((unit) => unit.attackTarget?.kind === 'camp');
-    if (this.raiders.length === 0 && !hasCampAttackOrder) {
+    const hasWildlifeAttackOrder = this.cowboyUnits.some((unit) => unit.attackTarget?.kind === 'wildlife');
+    if (this.raiders.length === 0 && this.wildlife.length === 0 && !hasCampAttackOrder && !hasWildlifeAttackOrder) {
       return;
     }
 
     for (const raider of this.raiders) {
       this.updateRaiderTargeting(raider);
     }
+    this.runWildlifeTick();
     this.resolveUnitAttackOrders();
     this.resolveRaiderAttacks();
     this.resolveCowboyFire();
@@ -5924,16 +6614,31 @@ export class MainScene extends Phaser.Scene {
    * target's faction counter-multiplier (getFactionUnitDamageMultiplier),
    * applies it to the primary hit exactly like the old bare `-= COWBOY_DAMAGE`
    * did, and - only for a Dynamiter - also lobs reduced splash damage at
-   * every other live raider/camp within DYNAMITER_SPLASH_RADIUS_TILES of the
-   * primary target's position (applyDynamiterSplash), each scaled by ITS OWN
-   * faction's multiplier rather than the primary target's.
+   * every other live raider/camp/wildlife within DYNAMITER_SPLASH_RADIUS_TILES
+   * of the primary target's position (applyDynamiterSplash), each scaled by
+   * ITS OWN faction's multiplier rather than the primary target's.
+   *
+   * Phase 71: widened with a 'wildlife' branch. Wildlife deliberately gets NO
+   * faction counter-multiplier row (getFactionUnitDamageMultiplier only
+   * indexes RaiderFaction, which wildlife has none of) - flat damage from
+   * every unit kind, keeping the balance surface simple per the phase brief.
    */
   private applyUnitDamage(
     unit: CombatUnit,
-    target: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp },
+    target: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp } | { kind: 'wildlife'; wildlife: Wildlife },
     shooterPosition: { x: number; y: number },
   ): void {
     const config = UNIT_KIND_CONFIG[unit.kind];
+
+    if (target.kind === 'wildlife') {
+      target.wildlife.hp -= config.damage;
+      this.spawnCowboyShotVisual(shooterPosition, target.wildlife.image);
+      if (unit.kind === 'dynamiter' && config.splashRadiusTiles && config.splashDamage) {
+        this.applyDynamiterSplash(target.wildlife.image.x, target.wildlife.image.y, target, config.splashRadiusTiles, config.splashDamage);
+      }
+      return;
+    }
+
     const primaryFaction = target.kind === 'raider' ? target.raider.faction : target.camp.faction;
     const primaryDamage = config.damage * getFactionUnitDamageMultiplier(primaryFaction, unit.kind);
 
@@ -5958,11 +6663,14 @@ export class MainScene extends Phaser.Scene {
    * scaled by ITS OWN faction's getFactionUnitDamageMultiplier (a splash
    * landing among a mixed group should counter each target individually, not
    * uniformly apply the primary target's multiplier to everyone caught in it).
+   *
+   * Phase 71: also splashes other live wildlife within radius - at flat
+   * baseSplashDamage, no faction multiplier (wildlife has no faction).
    */
   private applyDynamiterSplash(
     centerX: number,
     centerY: number,
-    primary: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp },
+    primary: { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp } | { kind: 'wildlife'; wildlife: Wildlife },
     radiusTiles: number,
     baseSplashDamage: number,
   ): void {
@@ -5992,6 +6700,17 @@ export class MainScene extends Phaser.Scene {
         y: centerY,
       });
     }
+
+    for (const creature of this.wildlife) {
+      if (creature.hp <= 0 || (primary.kind === 'wildlife' && creature.id === primary.wildlife.id)) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(centerX, centerY, creature.image.x, creature.image.y);
+      if (distance > radiusPx) {
+        continue;
+      }
+      creature.hp -= baseSplashDamage;
+    }
   }
 
   /**
@@ -6006,12 +6725,18 @@ export class MainScene extends Phaser.Scene {
    * a Raider or (only ever via an explicit order - never the default
    * nearest-in-range fallback below, since a camp is a static objective, not
    * a threat a defender should reflexively engage) a RaiderCamp.
+   *
+   * Phase 71: widened with a 'wildlife' branch, reachable both via an
+   * explicit order (right-click on a Snake/Coyote/Mountain Lion) AND the
+   * default nearest-in-range fallback - unlike a camp, wildlife is a genuine
+   * roaming threat a defender should reflexively engage, so it's folded into
+   * the same "nearest hostile" search as raiders.
    */
   private resolveUnitFireTarget(
     unit: CombatUnit,
     position: { x: number; y: number },
     rangePx: number,
-  ): { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp } | null {
+  ): { kind: 'raider'; raider: Raider } | { kind: 'camp'; camp: RaiderCamp } | { kind: 'wildlife'; wildlife: Wildlife } | null {
     if (unit.attackTarget) {
       if (unit.attackTarget.kind === 'raider') {
         const raider = this.raiders.find(
@@ -6020,6 +6745,14 @@ export class MainScene extends Phaser.Scene {
         if (raider) {
           const distance = Phaser.Math.Distance.Between(position.x, position.y, raider.image.x, raider.image.y);
           return distance <= rangePx ? { kind: 'raider', raider } : null;
+        }
+      } else if (unit.attackTarget.kind === 'wildlife') {
+        const creature = this.wildlife.find(
+          (candidate) => candidate.id === unit.attackTarget!.id && candidate.hp > 0,
+        );
+        if (creature) {
+          const distance = Phaser.Math.Distance.Between(position.x, position.y, creature.image.x, creature.image.y);
+          return distance <= rangePx ? { kind: 'wildlife', wildlife: creature } : null;
         }
       } else {
         const camp = getRaiderCampById(unit.attackTarget.id);
@@ -6030,7 +6763,11 @@ export class MainScene extends Phaser.Scene {
       }
     }
     const raider = this.findNearestRaider(position.x, position.y, rangePx);
-    return raider ? { kind: 'raider', raider } : null;
+    if (raider) {
+      return { kind: 'raider', raider };
+    }
+    const creature = this.findNearestWildlife(position.x, position.y, rangePx);
+    return creature ? { kind: 'wildlife', wildlife: creature } : null;
   }
 
   /**
@@ -6040,6 +6777,10 @@ export class MainScene extends Phaser.Scene {
    * staffed Watchtower buildings instead of CombatUnits, reusing
    * findNearestRaider/spawnCowboyShotVisual/playCombatVolley as-is rather
    * than duplicating any of that logic for a second shooter type.
+   *
+   * Phase 71: a Watchtower's nearest-hostile search now also considers
+   * wildlife - it auto-defends against a prowling Coyote/Mountain Lion the
+   * same way it does a raider, preferring whichever is actually nearer.
    */
   private resolveWatchtowerFire(): void {
     const rangePx = WATCHTOWER_RANGE_TILES * TILE_SIZE;
@@ -6054,7 +6795,24 @@ export class MainScene extends Phaser.Scene {
         continue;
       }
       const position = this.tileCenter(building);
-      const target = this.findNearestRaider(position.x, position.y, rangePx);
+      const raiderTarget = this.findNearestRaider(position.x, position.y, rangePx);
+      const wildlifeTarget = this.findNearestWildlife(position.x, position.y, rangePx);
+
+      let target: { hp: number; image: Phaser.GameObjects.Image } | null = raiderTarget;
+      if (wildlifeTarget) {
+        const raiderDistance = raiderTarget
+          ? Phaser.Math.Distance.Between(position.x, position.y, raiderTarget.image.x, raiderTarget.image.y)
+          : Infinity;
+        const wildlifeDistance = Phaser.Math.Distance.Between(
+          position.x,
+          position.y,
+          wildlifeTarget.image.x,
+          wildlifeTarget.image.y,
+        );
+        if (wildlifeDistance < raiderDistance) {
+          target = wildlifeTarget;
+        }
+      }
       if (!target) {
         continue;
       }

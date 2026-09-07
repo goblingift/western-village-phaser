@@ -1,6 +1,9 @@
 export const TILE_SIZE = 32;
-export const MAP_WIDTH_TILES = 40;
-export const MAP_HEIGHT_TILES = 30;
+// Phase 66: raised from 40x30 (1200 tiles) to 60x45 (2700 tiles, 2.25x) -
+// same 4:3 aspect ratio, just a bigger world for later phases (Coal/terrain,
+// Wildlife edge-spawning) to build on.
+export const MAP_WIDTH_TILES = 60;
+export const MAP_HEIGHT_TILES = 45;
 export const VIEWPORT_WIDTH = 960;
 export const VIEWPORT_HEIGHT = 640;
 export const PRODUCTION_TICK_MS = 2000;
@@ -38,9 +41,9 @@ export const WAREHOUSE_STORAGE_BONUS = 150;
  * under one Warehouse, so the upgrade path keeps its point.
  */
 export const GRANARY_STORAGE_BONUS = 40;
-// Minimap dims match the 40x30 tile map's 4:3 aspect ratio (5px per tile).
-export const MINIMAP_WIDTH = 200;
-export const MINIMAP_HEIGHT = 150;
+// Phase 66: minimap dims match the 60x45 tile map's 4:3 aspect ratio (4px per tile).
+export const MINIMAP_WIDTH = 240;
+export const MINIMAP_HEIGHT = 180;
 export const MINIMAP_MARGIN = 8;
 // Phase 22: Barracks & Cowboy Units. Cowboys are bought like Phase 16's
 // animals (cost + per-Barracks cap) but aren't an AnimalConfig, since only
@@ -200,8 +203,14 @@ export type RunMode = 'fixed' | 'endless';
  * the difficulty's raidEscalationMultiplier) and keeps creeping toward 1
  * forever after, rather than hitting the old GAME_DURATION_SECONDS ceiling
  * once and going flat for the remainder of a potentially unbounded run.
+ *
+ * Phase 65: raised from DAY_COUNT (3) to 6. Endless is now the default/
+ * primary mode rather than a secondary option, so the expected playtime is
+ * much longer than the old 3-day Fixed run - threat should ramp more
+ * gradually to match, crossing 0.5 around cycle 6 (~30 minutes) instead of
+ * cycle 3 (~15 minutes).
  */
-export const ENDLESS_THREAT_RAMP_CYCLES = DAY_COUNT;
+export const ENDLESS_THREAT_RAMP_CYCLES = 6;
 
 /**
  * Phase 44: how many consecutive ticks a staffed, enabled, input-driven
@@ -243,6 +252,15 @@ export const HOUSE_TIER_HYSTERESIS_TICKS = 75;
  * equivalent here.
  */
 export const GRAVEL_MAX_DISTANCE_TILES = 2;
+
+/**
+ * Phase 67: Coal Mine's placement gate, mirroring GRAVEL_MAX_DISTANCE_TILES's
+ * shape exactly (same distanceToNearestTileType search in mapConfig.ts, just
+ * against TileType.Rock) but tighter - Rock is painted as a handful of small,
+ * scattered patches (~2% of the map) rather than Gravel's wider patch mix, so
+ * Coal is meant to be the scarcer, more deliberately-sited of the two gates.
+ */
+export const COAL_MAX_DISTANCE_TILES = 1;
 
 /**
  * Phase 51: Trading Post & Fluctuating Prices. Every marketable resource
@@ -482,3 +500,51 @@ export const ANIMAL_ENCLOSURE_TILES_PER_ANIMAL: Record<'Chicken' | 'Pig' | 'Cow'
   Cow: 9,
   Ostrich: 4,
 };
+
+/**
+ * Phase 70: Church, Clergy & the Tier-2 Service Gate. A Church's service
+ * radius starts at CHURCH_BASE_RADIUS_TILES and grows by
+ * CHURCH_RADIUS_PER_CLERGY per hired Nun/Priest, capped at
+ * CHURCH_MAX_CLERGY combined (gameState's getChurchRadius). Nuns are the
+ * cheap, radius-only hire; Priests cost more but also add
+ * CHURCH_PRIEST_TAX_BONUS extra $/tick tax per served Tier-2/3 House, so
+ * neither strictly dominates the other - Nuns are the efficient way to widen
+ * coverage, Priests are the efficient way to monetize an already-covered
+ * neighborhood.
+ */
+export const CHURCH_BASE_RADIUS_TILES = 4;
+export const CHURCH_RADIUS_PER_CLERGY = 2;
+export const CHURCH_MAX_CLERGY = 3;
+export const CHURCH_NUN_COST = 60;
+export const CHURCH_PRIEST_COST = 90;
+export const CHURCH_PRIEST_TAX_BONUS = 1;
+
+/**
+ * Phase 71: Hostile Wildlife (Snakes, Coyotes, Mountain Lions). Self-
+ * rescheduling spawn timer mirroring scheduleNextMerchantCheck's shape
+ * (roll a random delay, fire, immediately roll the next one) with none of
+ * the raid system's night-only/elapsed-time gating - wildlife is an ambient
+ * world hazard from minute one.
+ */
+export const WILDLIFE_MIN_INTERVAL_MS = 60000;
+export const WILDLIFE_MAX_INTERVAL_MS = 120000;
+export const MAX_CONCURRENT_WILDLIFE = 6;
+/** Starting/max HP of a decorative villager sprite, now that wildlife can kill one - deliberately low, a villager is not a combat unit. */
+export const WILDLIFE_VILLAGER_HP = 10;
+/** Below this fraction of maxHp, a wildlife creature flees toward the nearest map edge instead of continuing to fight. */
+export const WILDLIFE_FLEE_HP_FRACTION = 0.3;
+
+/**
+ * Phase 72: Brothel & Patronage Income. Income is patronage-based, not a flat
+ * per-lady faucet - a staffed Brothel earns money per tick proportional to how
+ * many nearby Houses it actually serves (each lady can serve up to
+ * BROTHEL_HOUSES_PER_LADY Houses, capping counted Houses regardless of how
+ * many more are in range), scaled by each served House's tier. This rewards
+ * town layout: a Brothel built in a dense district earns real money, one
+ * built in an empty corner earns little. See gameState.runBrothelIncome.
+ */
+export const BROTHEL_LADY_COST = 80;
+export const BROTHEL_MAX_LADIES = 4;
+export const BROTHEL_SERVICE_RADIUS_TILES = 6;
+export const BROTHEL_INCOME_PER_LADY_PER_HOUSE = 0.4;
+export const BROTHEL_HOUSES_PER_LADY = 3;

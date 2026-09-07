@@ -8,7 +8,7 @@ import {
 } from '../config/buildingConfig';
 import { GAME_SPEEDS } from '../config/constants';
 import { gameEvents } from '../state/gameEvents';
-import { canAfford, describeUnlockRequirement, getMoney, isBuildingUnlocked } from '../state/gameState';
+import { canAfford, describeUnlockRequirement, getMoney, isBuildingUnlocked, setAllGates } from '../state/gameState';
 import {
   getAudioVolume,
   getMusicVolume,
@@ -18,7 +18,6 @@ import {
   setMusicVolume,
 } from '../audio/sound';
 import { getBuildingIcon, onBuildingIconsReady } from './buildingIcons';
-import { MANUAL_SAVE_SLOT, hasSaveSlot, loadFromSlot, saveToSlot } from '../state/persistence';
 
 /**
  * Phase 33: the bar used to be a single wrapping row of 20+ text buttons -
@@ -45,7 +44,6 @@ export class BuildingBar {
   private muteButton!: HTMLButtonElement;
   private volumeSlider!: HTMLInputElement;
   private musicVolumeSlider!: HTMLInputElement;
-  private loadButton!: HTMLButtonElement;
   private activeCategory: BuildingCategory = BuildingCategory.Infrastructure;
   private demolishMode = false;
 
@@ -78,9 +76,10 @@ export class BuildingBar {
 
     topRow.appendChild(this.createSpeedControls());
     topRow.appendChild(this.createAudioControls());
+    topRow.appendChild(this.createGateControls());
     topRow.appendChild(this.createStatsButton());
     topRow.appendChild(this.createHelpButton());
-    topRow.appendChild(this.createSaveLoadControls());
+    topRow.appendChild(this.createSaveLoadButton());
     bar.appendChild(topRow);
 
     for (const category of Object.values(BuildingCategory)) {
@@ -270,6 +269,38 @@ export class BuildingBar {
     return button;
   }
 
+  /**
+   * Phase 69: two small always-shown buttons rather than one label-flipping
+   * toggle - a single button would need to track (or query) the town's
+   * majority gate state just to pick its own label, which duplicates
+   * MainScene.toggleAllGates' own majority-state logic for the 'G' hotkey;
+   * two explicit buttons instead let "close everything"/"open everything"
+   * stay simple, unconditional calls straight into setAllGates, matching the
+   * plain speed/mute button style already used in this row.
+   */
+  private createGateControls(): HTMLDivElement {
+    const wrapper = document.createElement('div');
+    // Same flex/gap base as speed-group/audio-group, its own margin override
+    // (gate-controls) so it doesn't re-claim speed-group's margin-left:auto.
+    wrapper.className = 'speed-group gate-controls';
+
+    const openButton = document.createElement('button');
+    openButton.className = 'speed';
+    openButton.textContent = 'Open Gates';
+    openButton.title = 'Open every placed Wooden Gate (G toggles by majority state)';
+    openButton.addEventListener('click', () => setAllGates(true));
+    wrapper.appendChild(openButton);
+
+    const closeButton = document.createElement('button');
+    closeButton.className = 'speed';
+    closeButton.textContent = 'Close Gates';
+    closeButton.title = 'Close every placed Wooden Gate (G toggles by majority state)';
+    closeButton.addEventListener('click', () => setAllGates(false));
+    wrapper.appendChild(closeButton);
+
+    return wrapper;
+  }
+
   private createStatsButton(): HTMLButtonElement {
     const button = document.createElement('button');
     button.className = 'speed';
@@ -280,49 +311,18 @@ export class BuildingBar {
   }
 
   /**
-   * Phase 52: manual Save/Load, operating on the 'manual' slot only -
-   * autosave (the 'autosave' slot) is a silent, MainScene-driven day-boundary
-   * timer, wholly separate from these buttons. Load starts disabled/grey
-   * exactly like an unaffordable building button (Phase 33's convention)
-   * rather than being hidden, so "there's nothing to load yet" is visible
-   * rather than the button just not existing.
+   * Phase 65: replaces the old inline Save/Load button pair (which only ever
+   * operated on a single 'manual' slot) with one button opening the new
+   * SaveLoadOverlay modal, which itself lists all three named manual slots
+   * plus the read-only autosave slot.
    */
-  private createSaveLoadControls(): HTMLDivElement {
-    const group = document.createElement('div');
-    group.className = 'speed-group';
-
-    const saveButton = document.createElement('button');
-    saveButton.className = 'speed';
-    saveButton.textContent = 'Save';
-    saveButton.title = 'Save the current game to the manual slot';
-    saveButton.addEventListener('click', () => {
-      saveToSlot(MANUAL_SAVE_SLOT);
-      this.refreshLoadButton();
-    });
-    group.appendChild(saveButton);
-
-    this.loadButton = document.createElement('button');
-    this.loadButton.className = 'speed';
-    this.loadButton.textContent = 'Load';
-    this.loadButton.title = 'Load the manually saved game';
-    this.loadButton.addEventListener('click', () => {
-      if (!hasSaveSlot(MANUAL_SAVE_SLOT)) {
-        return;
-      }
-      loadFromSlot(MANUAL_SAVE_SLOT);
-    });
-    group.appendChild(this.loadButton);
-
-    this.refreshLoadButton();
-    return group;
-  }
-
-  private refreshLoadButton(): void {
-    const available = hasSaveSlot(MANUAL_SAVE_SLOT);
-    this.loadButton.disabled = !available;
-    this.loadButton.title = available
-      ? 'Load the manually saved game'
-      : 'No manual save yet - click Save first';
+  private createSaveLoadButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'speed';
+    button.textContent = 'Saves';
+    button.title = 'Open the Save/Load menu';
+    button.addEventListener('click', () => gameEvents.emit('toggle-save-load-overlay'));
+    return button;
   }
 
   private setSpeed(speed: number, button: HTMLButtonElement): void {

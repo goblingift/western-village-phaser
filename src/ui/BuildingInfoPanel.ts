@@ -24,6 +24,14 @@ import {
   BANK_TRANSACTION_AMOUNT,
   BRAWLER_MAX_PER_BARRACKS,
   BRAWLER_TRAIN_COST,
+  BROTHEL_LADY_COST,
+  BROTHEL_MAX_LADIES,
+  BROTHEL_SERVICE_RADIUS_TILES,
+  CHURCH_MAX_CLERGY,
+  CHURCH_NUN_COST,
+  CHURCH_PRIEST_COST,
+  CHURCH_PRIEST_TAX_BONUS,
+  COAL_MAX_DISTANCE_TILES,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
   DYNAMITER_MAX_PER_BARRACKS,
@@ -46,6 +54,7 @@ import {
   clearRallyPoint,
   demolishBuilding,
   depositToBank,
+  getChurchRadius,
   getCropOutputMultiplier,
   getCropWaterDistance,
   getEnclosureBuyStatus,
@@ -53,12 +62,19 @@ import {
   getHarvestCenterTile,
   getLaborShortfall,
   getMoney,
+  getNearestChurchDistance,
   getNearestStaffedWaterTowerDistance,
   getRepairCost,
   getResources,
+  getRockDistance,
   getWellWaterDistance,
+  hireLady,
+  hireNun,
+  hirePriest,
+  isServedByChurch,
   repairBuilding,
   setBuildingPriority,
+  setGateOpen,
   setTradingPostOrder,
   trainBrawler,
   trainCowboy,
@@ -105,6 +121,11 @@ export class BuildingInfoPanel {
     });
     gameEvents.on('production-tick', () => this.render());
     gameEvents.on('rally-point-changed', () => this.render());
+    // Phase 69: a gate can be toggled elsewhere (the 'G' hotkey, the building
+    // bar's all-gates button) while its info panel is open, so re-render on
+    // the same event MainScene listens to for the sprite swap, not just on
+    // this panel's own button clicks.
+    gameEvents.on('gate-state-changed', () => this.render());
     gameEvents.on('rally-point-mode-changed', (buildingId: string | null) => {
       this.rallyPointArmedFor = buildingId;
       this.render();
@@ -142,11 +163,14 @@ export class BuildingInfoPanel {
     const isTradingPost = this.selected.type === BuildingType.TradingPost;
     const isWatchtower = this.selected.type === BuildingType.Watchtower;
     const isHouse = this.selected.type === BuildingType.House;
+    const isWoodenGate = this.selected.type === BuildingType.WoodenGate;
+    const isChurch = this.selected.type === BuildingType.Church;
+    const isBrothel = this.selected.type === BuildingType.Brothel;
     // Harvesters (Forestry, Cactus Milker) have no `production` block but are
     // still production buildings from the player's point of view.
     const statusText = production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
-      : isBarracks || isHorsery || isBank || isTradingPost
+      : isBarracks || isHorsery || isBank || isTradingPost || isChurch || isBrothel
         ? `Staffed: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
         : isWatchtower
           ? `Defense: ${
@@ -241,6 +265,21 @@ export class BuildingInfoPanel {
           : `Gravel ${gravelDistance} tile${gravelDistance === 1 ? '' : 's'} away`
       : null;
 
+    // Phase 67: Coal Mine mirrors Quarry/Iron Mine's Gravel-distance readout
+    // above, just against Rock/getRockDistance - informational only, since
+    // placement is already hard-gated on this at build time.
+    const isCoalGated = this.selected.type === BuildingType.CoalMine;
+    const rockDistance = isCoalGated
+      ? getRockDistance(this.selected.tileX, this.selected.tileY, this.selected.type)
+      : null;
+    const rockText = isCoalGated
+      ? rockDistance === null
+        ? `No Rock within ${COAL_MAX_DISTANCE_TILES} tiles`
+        : rockDistance === 0
+          ? 'Built on Rock'
+          : `Rock ${rockDistance} tile${rockDistance === 1 ? '' : 's'} away`
+      : null;
+
     // Phase 54: PotatoField's water-dependent output - mirrors the Well/
     // Gravel distance status lines above, plus a note when a Water Tower is
     // actually the thing keeping it alive.
@@ -288,6 +327,33 @@ export class BuildingInfoPanel {
     // Phase 62: imminent-decay warning, shown near the current-tier view once
     // the unmet streak is a meaningful fraction of the hysteresis threshold.
     const houseDecayWarningText = isHouse ? this.formatHouseDecayWarning(this.selected) : null;
+    // Phase 70: a House's Church coverage - deliberately its own line,
+    // rendered independently from formatHouseNeedsText's resource-need list
+    // (Church isn't a ResourceKey/HouseNeedGroup, so it can never appear
+    // there) and independently from the per-tier tab strip's need display.
+    // Only shown when Church coverage is actually relevant to this House:
+    // its current tier requires one, OR its next tier (the one it's trying to
+    // grow into) will.
+    const houseChurchText = isHouse ? this.formatHouseChurchText(this.selected) : null;
+    // Phase 70: Church's own clergy/service-radius status.
+    const churchClergyText = isChurch
+      ? `Nuns: ${this.selected.nunCount ?? 0} | Priests: ${this.selected.priestCount ?? 0}`
+      : null;
+    const churchRadiusText = isChurch
+      ? `Service radius: ${getChurchRadius(this.selected)} tiles${
+          (this.selected.priestCount ?? 0) > 0
+            ? ` | Priests add +$${CHURCH_PRIEST_TAX_BONUS}/tick tax per served Tier-2/3 House`
+            : ''
+        }`
+      : null;
+    // Phase 69: WoodenGate's live open/closed state, shown as its own status
+    // line above the toggle button rendered further down.
+    const gateStatusText = isWoodenGate
+      ? `Gate: ${this.selected.gateOpen === false ? 'Closed (blocks raiders like a Wooden Wall)' : 'Open (passable by everyone, raiders included)'}`
+      : null;
+    // Phase 72: Brothel's own hire status + live patronage-income readout.
+    const ladyText = isBrothel ? `Ladies: ${this.selected.ladyCount ?? 0}/${BROTHEL_MAX_LADIES}` : null;
+    const brothelIncomeText = isBrothel ? this.formatBrothelIncomeText(this.selected, workersRequired) : null;
 
     this.panel.hidden = false;
     this.panel.innerHTML = `
@@ -300,12 +366,16 @@ export class BuildingInfoPanel {
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}
       ${gravelText ? `<div>${gravelText}</div>` : ''}
+      ${rockText ? `<div>${rockText}</div>` : ''}
       ${cropWaterText ? `<div>${cropWaterText}</div>` : ''}
       ${waterTowerText ? `<div>${waterTowerText}</div>` : ''}
       ${houseTierText ? `<div>${houseTierText}</div>` : ''}
       ${houseNeedsText ? `<div>${houseNeedsText}</div>` : ''}
       ${houseProgressText ? `<div>${houseProgressText}</div>` : ''}
       ${houseDecayWarningText ? `<div class="house-tier-decay-warning">${houseDecayWarningText}</div>` : ''}
+      ${houseChurchText ? `<div>${houseChurchText}</div>` : ''}
+      ${churchClergyText ? `<div>${churchClergyText}</div>` : ''}
+      ${churchRadiusText ? `<div>${churchRadiusText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
@@ -319,6 +389,9 @@ export class BuildingInfoPanel {
       ${trainingQueueText ? `<div>${trainingQueueText}</div>` : ''}
       ${rallyPointText ? `<div>${rallyPointText}</div>` : ''}
       ${balanceText ? `<div>${balanceText}</div>` : ''}
+      ${gateStatusText ? `<div>${gateStatusText}</div>` : ''}
+      ${ladyText ? `<div>${ladyText}</div>` : ''}
+      ${brothelIncomeText ? `<div>${brothelIncomeText}</div>` : ''}
     `;
 
     if (isDamaged) {
@@ -326,6 +399,9 @@ export class BuildingInfoPanel {
     }
     if (isHouse) {
       this.renderHouseTierTabs(this.selected);
+    }
+    if (isWoodenGate) {
+      this.renderGateToggleButton(this.selected);
     }
     if (animalConfig) {
       this.renderBuyAnimalButton(this.selected, animalConfig);
@@ -344,6 +420,13 @@ export class BuildingInfoPanel {
     if (isBank) {
       this.renderDepositButton(this.selected);
       this.renderWithdrawButton(this.selected);
+    }
+    if (isChurch) {
+      this.renderHireNunButton(this.selected);
+      this.renderHirePriestButton(this.selected);
+    }
+    if (isBrothel) {
+      this.renderHireLadyButton(this.selected);
     }
     if (isTradingPost) {
       this.renderTradeOrderRows(this.selected);
@@ -422,6 +505,39 @@ export class BuildingInfoPanel {
       return null;
     }
     return `Needs unmet for ${building.houseNeedsUnmetStreak}/${HOUSE_TIER_HYSTERESIS_TICKS} ticks - tier will drop soon`;
+  }
+
+  /**
+   * Phase 70: a House's Church-coverage line - deliberately separate from
+   * formatHouseNeedsText (Church isn't a ResourceKey/HouseNeedGroup) and from
+   * the per-tier tab strip's need display. Only shown when Church coverage is
+   * actually relevant right now: the House's CURRENT tier requires one (so
+   * losing coverage risks a downgrade), or the NEXT tier it could grow into
+   * will (so an as-yet-unserved Tier 1 House knows a Church is coming).
+   * Tier 3 with no next tier still shows via the current-tier branch.
+   */
+  private formatHouseChurchText(building: PlacedBuilding): string | null {
+    const tierConfig = HOUSE_TIER_CONFIG[building.houseTier];
+    const nextTier = building.houseTier < 3 ? ((building.houseTier + 1) as HouseTier) : null;
+    const nextTierConfig = nextTier !== null ? HOUSE_TIER_CONFIG[nextTier] : null;
+
+    if (tierConfig.requiresChurch) {
+      const served = isServedByChurch(building);
+      const distance = getNearestChurchDistance(building);
+      if (served && distance !== null) {
+        return `Church: Served (Church ${distance} tile${distance === 1 ? '' : 's'} away)`;
+      }
+      return 'Church: Not served - needs a Church within range';
+    }
+
+    if (nextTierConfig?.requiresChurch) {
+      const served = isServedByChurch(building);
+      return served
+        ? 'Church: Served (ready for Tier growth)'
+        : `Church: Not served yet - Tier ${nextTier} will require a nearby staffed Church`;
+    }
+
+    return null;
   }
 
   /**
@@ -898,6 +1014,122 @@ export class BuildingInfoPanel {
   }
 
   /**
+   * Phase 70: hiring clergy is instant (no training queue - see
+   * gameState.hireNun's doc comment), so the disabled-reason set is a subset
+   * of the Barracks/Horsery train-button pattern above: no "at max" needs a
+   * trainingQueue.length term since there's no queue to be mid-way through.
+   */
+  private renderHireNunButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0 || building.disabled
+        ? 'disabled'
+        : (building.nunCount ?? 0) + (building.priestCount ?? 0) >= CHURCH_MAX_CLERGY
+          ? 'at max clergy'
+          : getMoney() < CHURCH_NUN_COST
+            ? "can't afford"
+            : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Hire Nun ($${CHURCH_NUN_COST})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      hireNun(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /** Mirrors renderHireNunButton exactly, gated on CHURCH_PRIEST_COST instead. */
+  private renderHirePriestButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0 || building.disabled
+        ? 'disabled'
+        : (building.nunCount ?? 0) + (building.priestCount ?? 0) >= CHURCH_MAX_CLERGY
+          ? 'at max clergy'
+          : getMoney() < CHURCH_PRIEST_COST
+            ? "can't afford"
+            : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Hire Priest ($${CHURCH_PRIEST_COST})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      hirePriest(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /**
+   * Phase 72: hiring a lady is instant (no training queue), exactly mirroring
+   * renderHireNunButton/renderHirePriestButton's shape and disabled-reason set.
+   */
+  private renderHireLadyButton(building: PlacedBuilding): void {
+    const blockReason =
+      building.hp <= 0 || building.disabled
+        ? 'disabled'
+        : (building.ladyCount ?? 0) >= BROTHEL_MAX_LADIES
+          ? 'at max ladies'
+          : getMoney() < BROTHEL_LADY_COST
+            ? "can't afford"
+            : null;
+
+    const button = document.createElement('button');
+    button.textContent = `Hire Lady ($${BROTHEL_LADY_COST})`;
+    button.disabled = blockReason !== null;
+    button.addEventListener('click', () => {
+      hireLady(building.id);
+      this.render();
+    });
+    this.panel.appendChild(button);
+
+    if (blockReason) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = blockReason;
+      this.panel.appendChild(hint);
+    }
+  }
+
+  /**
+   * Phase 72: live "Serving N Houses -> +$X.X/tick" readout sourced from last
+   * tick's runBrothelIncome result, mirroring formatSaleText's shape/priority
+   * order (a real result first, then why there isn't one). lastBrothelIncome
+   * is undefined until the first production tick after placement, matching
+   * lastSale/lastHarvest's "absent means not yet meaningful" convention.
+   */
+  private formatBrothelIncomeText(building: PlacedBuilding, workersRequired: number): string {
+    const result = building.lastBrothelIncome;
+    if (result && result.income > 0) {
+      return `Serving ${result.housesServed} House${result.housesServed === 1 ? '' : 's'} -> +$${result.income.toFixed(1)}/tick`;
+    }
+    if (!building.staffed) {
+      return `Not earning - ${this.formatUnderstaffedReason(building, workersRequired)}`;
+    }
+    if ((building.ladyCount ?? 0) <= 0) {
+      return 'Not earning - no ladies hired';
+    }
+    if (result && result.housesServed === 0) {
+      return `Not earning - no Houses within ${BROTHEL_SERVICE_RADIUS_TILES} tiles`;
+    }
+    return 'Not earning - no Houses in range';
+  }
+
+  /**
    * Phase 53: "Cowboy (2 ticks left), Cowboy (5 ticks left)" - only the front
    * job's remainingTicks actually counts down (gameState.runTrainingQueues),
    * so every later job in the list still shows its full COWBOY_TRAIN_TICKS/
@@ -950,6 +1182,26 @@ export class BuildingInfoPanel {
       });
       this.panel.appendChild(clearButton);
     }
+  }
+
+  /**
+   * Phase 69: a single toggle button, label reflecting the CURRENT state and
+   * the action clicking it takes (matching renderRallyPointControls' own
+   * "Set"/"Cancel" toggle-label convention above) - calls setGateOpen, which
+   * recomputes any nearby farm's enclosure BEFORE firing 'gate-state-changed'
+   * (see that function's doc comment), so this.render() below always reflects
+   * the already-fresh enclosure state, never a stale one.
+   */
+  private renderGateToggleButton(building: PlacedBuilding): void {
+    const isOpen = building.gateOpen !== false;
+    const button = document.createElement('button');
+    button.textContent = isOpen ? 'Close Gate' : 'Open Gate';
+    button.disabled = building.hp <= 0;
+    button.addEventListener('click', () => {
+      setGateOpen(building.id, !isOpen);
+      this.render();
+    });
+    this.panel.appendChild(button);
   }
 
   private renderDepositButton(building: PlacedBuilding): void {

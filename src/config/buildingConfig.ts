@@ -2,6 +2,13 @@ import {
   BANK_INTEREST_RATE,
   BRAWLER_MAX_PER_BARRACKS,
   BRAWLER_TRAIN_COST,
+  CHURCH_BASE_RADIUS_TILES,
+  CHURCH_MAX_CLERGY,
+  CHURCH_NUN_COST,
+  CHURCH_PRIEST_COST,
+  CHURCH_PRIEST_TAX_BONUS,
+  CHURCH_RADIUS_PER_CLERGY,
+  COAL_MAX_DISTANCE_TILES,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_TRAIN_COST,
   DYNAMITER_MAX_PER_BARRACKS,
@@ -29,6 +36,8 @@ export enum BuildingType {
   CowRanch = 'CowRanch',
   Fence = 'Fence',
   Gate = 'Gate',
+  WoodenWall = 'WoodenWall',
+  WoodenGate = 'WoodenGate',
   Warehouse = 'Warehouse',
   Supermarket = 'Supermarket',
   Barracks = 'Barracks',
@@ -44,10 +53,13 @@ export enum BuildingType {
   Watchtower = 'Watchtower',
   Quarry = 'Quarry',
   IronMine = 'IronMine',
+  CoalMine = 'CoalMine',
   Blacksmith = 'Blacksmith',
   TradingPost = 'TradingPost',
   WaterTower = 'WaterTower',
   Granary = 'Granary',
+  Church = 'Church',
+  Brothel = 'Brothel',
 }
 
 /**
@@ -84,7 +96,8 @@ export type ResourceKey =
   | 'agaveJuice'
   | 'stone'
   | 'iron'
-  | 'tools';
+  | 'tools'
+  | 'coal';
 
 /**
  * Phase 32: per-unit cash value used to price the resource stock inside net
@@ -109,6 +122,10 @@ export const RESOURCE_VALUES: Record<ResourceKey, number> = {
   stone: 3,
   iron: 6,
   tools: 20,
+  // Phase 67: Coal - a third raw-extraction input for Blacksmith, priced
+  // between Stone and Iron (rarer terrain gate than Gravel, but still a raw
+  // material rather than a manufactured good).
+  coal: 4,
 };
 
 export interface BuildingProduction {
@@ -169,6 +186,17 @@ export interface HouseTierConfig {
   /** Money collected into the town's pool per tick once this tier's needs are met (0 for Tier 1). */
   taxPerTick: number;
   needs: HouseNeedGroup[];
+  /**
+   * Phase 70: Church, Clergy & the Tier-2 Service Gate. When true, reaching
+   * (or staying at) this tier ALSO requires the House to be within a staffed
+   * Church's service radius (gameState's isServedByChurch), on top of every
+   * needs[] resource group above - kept as a separate boolean rather than a
+   * fake ResourceKey entry inside `needs`, since resourceGraph.ts and the
+   * info panel's need-rendering both scan `needs` expecting only real
+   * ResourceKeys. Undefined/false on Tier 1 (a brand-new House shouldn't
+   * require a Church before it can even exist); true on Tier 2 and 3.
+   */
+  requiresChurch?: boolean;
 }
 
 /**
@@ -200,6 +228,7 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
       { label: 'Water', options: { water: 0.3 } },
       { label: 'Meat or Eggs', options: { meat: 0.1, eggs: 0.1 } },
     ],
+    requiresChurch: true,
   },
   3: {
     tier: 3,
@@ -210,6 +239,7 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
       { label: 'Meat or Eggs', options: { meat: 0.15, eggs: 0.15 } },
       { label: 'Clothes or Liquor', options: { clothes: 0.05, liquor: 0.1 } },
     ],
+    requiresChurch: true,
   },
 };
 
@@ -455,6 +485,39 @@ export interface PlacedBuilding {
    * lastSale/lastHarvest's "absent means not yet meaningful" convention.
    */
   rallyPoint?: { x: number; y: number };
+  /**
+   * Phase 69: only meaningful for WoodenGate. true = open (passable by
+   * everyone, raiders included - the enclosure BFS treats it as a 'gate'
+   * boundary tile exactly like the legacy Gate); false = closed (blocks
+   * raider movement and the enclosure BFS exactly like a WoodenWall/Fence).
+   * Defaults to true (open) on placement. Undefined for every other building
+   * type, matching rallyPoint's "absent means not applicable" convention.
+   */
+  gateOpen?: boolean;
+  /**
+   * Phase 70: only meaningful for Church; hired clergy counts (both start at
+   * 0/undefined on placement, mirroring cowboyCount/animalCount's "starts
+   * empty until bought/hired" convention). Unlike Barracks' trained units,
+   * hiring a Nun/Priest is instant (gameState's hireNun/hirePriest) - no
+   * training queue, since clergy aren't combat units and have no HP/garrison
+   * slot of their own. Combined they drive getChurchRadius's service radius.
+   */
+  nunCount?: number;
+  priestCount?: number;
+  /**
+   * Phase 72: only meaningful for Brothel; hired lady count, starts at
+   * 0/undefined on placement, mirroring nunCount/priestCount's "starts empty
+   * until hired" convention. Hiring is instant like Church's clergy (no HP,
+   * no training queue, no garrison sprite of its own).
+   */
+  ladyCount?: number;
+  /**
+   * Phase 72: only meaningful for Brothel; last tick's runBrothelIncome
+   * result, for the info panel's live "Serving N Houses -> +$X/tick" readout.
+   * Undefined until the first production tick after placement, matching
+   * lastSale/lastHarvest's "absent means not yet meaningful" convention.
+   */
+  lastBrothelIncome?: { housesServed: number; income: number };
 }
 
 /**
@@ -692,6 +755,59 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     upkeep: 0,
     maxHp: 25,
     unlockRequirement: { populationAtLeast: 3 },
+  },
+  /**
+   * Phase 68: Wooden Walls. Unlike Fence/Gate, a Wooden Wall is deliberately
+   * NEVER detoured around (see MainScene's resolveWallInteraction) - a
+   * raider facing one must attack and destroy it to get through. That's
+   * enforced purely in MainScene's targeting logic; what makes it a real
+   * gameplay tradeoff rather than a free upgrade is maxHp 120 (6x Fence's 20),
+   * so breaking through actually costs meaningful raid time. Deliberately not
+   * literally impassable (that would let a player wall off the whole map and
+   * stall every raid forever) - it's a higher up-front cost for a wall that
+   * reliably holds rather than gets walked around, not an unbreakable one.
+   * Same 1x1 footprint/line-placement/passive-no-upkeep shape as Fence;
+   * unlocks at the same populationAtLeast tier as Gate (3->4, one tick later
+   * since it's a costlier, more deliberate wall choice than a basic Fence).
+   */
+  [BuildingType.WoodenWall]: {
+    type: BuildingType.WoodenWall,
+    label: 'Wooden Wall',
+    cost: 20,
+    materials: { wood: 2 },
+    size: { width: 1, height: 1 },
+    color: 0x6d4c41,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0,
+    maxHp: 120,
+    unlockRequirement: { populationAtLeast: 4 },
+  },
+  /**
+   * Phase 69: Wooden Gates. A real mechanical departure from the legacy Gate
+   * (which stays exactly as it was - always passable, zero state): a Wooden
+   * Gate carries its own `gateOpen` PlacedBuilding field, toggled by the
+   * player (gameState.setGateOpen/setAllGates, BuildingInfoPanel's
+   * Open/Closed button, the 'G' hotkey). Open behaves exactly like the
+   * legacy Gate (never blocks raiders, a passable 'gate' boundary tile for
+   * the enclosure BFS); closed behaves exactly like a WoodenWall (hard
+   * blocks raider movement with no detour attempt, a 'fence' boundary tile).
+   * Same 1x1/passive/no-upkeep shape as Gate/WoodenWall; unlocks at the same
+   * populationAtLeast tier as WoodenWall (4) since it's the toggleable
+   * cousin of that wall, not the cheap always-open legacy Gate. Deliberately
+   * NOT in LINE_PLACEMENT_BUILDING_TYPES - a Gate (either kind) is a
+   * specific chosen entry point, not a run to drag-place.
+   */
+  [BuildingType.WoodenGate]: {
+    type: BuildingType.WoodenGate,
+    label: 'Wooden Gate',
+    cost: 40,
+    materials: { wood: 3, logs: 2 },
+    size: { width: 1, height: 1 },
+    color: 0x8d6748,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 0,
+    maxHp: 90,
+    unlockRequirement: { populationAtLeast: 4 },
   },
   [BuildingType.Warehouse]: {
     type: BuildingType.Warehouse,
@@ -954,19 +1070,41 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     maxHp: 80,
     unlockRequirement: { populationAtLeast: 10 },
   },
+  /**
+   * Phase 67: Coal Mine joins Quarry/Iron Mine as the third Gravel/Rock-gated
+   * raw extractor (gated to Rock specifically, via getRockDistance in
+   * gameState.ts - the scarcer, tighter-radius terrain Phase 67 adds
+   * alongside Rock). Material-free like its two siblings, and the tightest
+   * populationAtLeast gate of the three since it's Blacksmith's newest,
+   * scarcest input.
+   */
+  [BuildingType.CoalMine]: {
+    type: BuildingType.CoalMine,
+    label: 'Coal Mine',
+    cost: 170,
+    size: { width: 2, height: 2 },
+    color: 0x37474f,
+    category: BuildingCategory.Farming,
+    upkeep: 1.2,
+    production: { outputs: { coal: 0.8 } },
+    maxHp: 80,
+    unlockRequirement: { populationAtLeast: 10 },
+  },
   [BuildingType.Blacksmith]: {
     type: BuildingType.Blacksmith,
     label: 'Blacksmith',
     cost: 180,
     // The processor of the pair, like Sewery/WoodCutter/Liquor Still -
-    // material-costed in Wood rather than the Stone/Iron it consumes as
+    // material-costed in Wood rather than the Stone/Iron/Coal it consumes as
     // production inputs.
     materials: { wood: 6 },
     size: { width: 2, height: 2 },
     color: 0x455a64,
     category: BuildingCategory.Industry,
     upkeep: 1.5,
-    production: { inputs: { stone: 2, iron: 1 }, outputs: { tools: 1 } },
+    // Phase 67: Coal added as a third input; tools output raised 1 -> 1.5 to
+    // keep throughput roughly flat despite the extra dependency.
+    production: { inputs: { stone: 2, iron: 1, coal: 1 }, outputs: { tools: 1.5 } },
     maxHp: 80,
     unlockRequirement: { populationAtLeast: 12 },
   },
@@ -1017,6 +1155,56 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     maxHp: 55,
     unlockRequirement: { populationAtLeast: 6 },
   },
+  /**
+   * Phase 70: Church, Clergy & the Tier-2 Service Gate. A staffed, no-
+   * production infrastructure relay - like Water Tower - but its "irrigation
+   * radius" is a service radius for nearby Houses instead of crop output:
+   * HOUSE_TIER_CONFIG's Tier 2/3 entries both carry requiresChurch: true, so
+   * a House can no longer grow past (or hold) Tier 2 without being served by
+   * a nearby staffed Church (gameState's isServedByChurch/runHouseNeeds).
+   * Deadlock check: Tier 1 grants POPULATION_PER_HOUSE (2) population each,
+   * so two Tier-1 Houses alone already clear this building's own
+   * populationAtLeast 4 gate without needing any Tier-2 growth first - the
+   * Church is reachable before it's required.
+   */
+  [BuildingType.Church]: {
+    type: BuildingType.Church,
+    label: 'Church',
+    cost: 200,
+    materials: { wood: 8 },
+    size: { width: 2, height: 2 },
+    color: 0xefebe9,
+    category: BuildingCategory.Infrastructure,
+    upkeep: 1.5,
+    requiresWorkers: true,
+    maxHp: 90,
+    unlockRequirement: { populationAtLeast: 4 },
+  },
+  /**
+   * Phase 72: Brothel & Patronage Income. A staffed, no-production Commerce
+   * building whose income (gameState's runBrothelIncome) is patronage-based
+   * rather than a flat per-lady faucet: each hired lady (up to
+   * BROTHEL_MAX_LADIES, gameState's hireLady) can serve up to
+   * BROTHEL_HOUSES_PER_LADY Houses within BROTHEL_SERVICE_RADIUS_TILES,
+   * scaled by each served House's tier - a Brothel built in a dense
+   * neighborhood earns real money, one built in an empty corner earns little.
+   * unlockRequirement uses netWorthAtLeast rather than population, matching
+   * Warehouse/Supermarket/Bank's own net-worth-gated Commerce/Infrastructure
+   * precedent for a mid-late-game money sink/faucet.
+   */
+  [BuildingType.Brothel]: {
+    type: BuildingType.Brothel,
+    label: 'Brothel',
+    cost: 240,
+    materials: { wood: 6 },
+    size: { width: 2, height: 2 },
+    color: 0x6a1b3a,
+    category: BuildingCategory.Commerce,
+    upkeep: 2,
+    requiresWorkers: true,
+    maxHp: 90,
+    unlockRequirement: { netWorthAtLeast: 3000 },
+  },
 };
 
 /**
@@ -1030,10 +1218,44 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
 export const LINE_PLACEMENT_BUILDING_TYPES: ReadonlySet<BuildingType> = new Set([
   BuildingType.Road,
   BuildingType.Fence,
+  BuildingType.WoodenWall,
 ]);
 
 export function isLinePlacementBuilding(type: BuildingType): boolean {
   return LINE_PLACEMENT_BUILDING_TYPES.has(type);
+}
+
+/**
+ * Phase 68: the single shared predicate for "does this live building block a
+ * raider's straight-line movement sample" (MainScene's
+ * sampleForBlockingWall/findWallDetourPoint). Fence blocks-but-is-detourable
+ * (Phase 61); WoodenWall blocks and is NEVER detoured around (resolveWallInteraction
+ * skips the detour attempt outright for it). Gate is deliberately excluded -
+ * it never blocks, exactly like a Wooden Gate left open. Every other building
+ * type never blocks a raider's line sample at all. A dead (0 HP) blocker
+ * never blocks, matching the pre-existing Fence-only check this replaces.
+ *
+ * Phase 69: WoodenGate is the one conditional case - it blocks (like a
+ * WoodenWall) only while closed (`gateOpen === false`); while open (or on the
+ * `undefined` default, treated as open for safety) it never blocks, exactly
+ * like the legacy Gate. This is the ONLY place gate-open-state changes a
+ * raider's actual movement outcome - MainScene's resolveWallInteraction reads
+ * this predicate rather than re-deriving its own gateOpen check.
+ */
+export function blocksRaiderMovement(building: PlacedBuilding): boolean {
+  if (building.hp <= 0) {
+    return false;
+  }
+  if (building.type === BuildingType.Fence) {
+    return true;
+  }
+  if (building.type === BuildingType.WoodenWall) {
+    return true;
+  }
+  if (building.type === BuildingType.WoodenGate) {
+    return building.gateOpen === false;
+  }
+  return false;
 }
 
 /**
@@ -1127,10 +1349,20 @@ export const BUILDING_ATLAS_KEY = 'buildings-atlas';
  * PlacedBuilding's `houseTier` unconditionally) but only changes the key for
  * House at Tier 2/3; everything else always resolves to its single base
  * frame, exactly as before.
+ *
+ * Phase 69: `gateOpen` is the same idea for WoodenGate - accepted for every
+ * type (so callers can just pass a PlacedBuilding's `gateOpen` unconditionally
+ * alongside `houseTier`) but only changes the key for WoodenGate, and only
+ * when explicitly `false` (closed); `true`/`undefined` both resolve to the
+ * base (open) frame, matching gateOpen's own "undefined defaults to open"
+ * convention.
  */
-export function buildingTextureKey(type: BuildingType, tier?: HouseTier): string {
+export function buildingTextureKey(type: BuildingType, tier?: HouseTier, gateOpen?: boolean): string {
   if (type === BuildingType.House && tier && tier > 1) {
     return `building-${type}-tier${tier}`;
+  }
+  if (type === BuildingType.WoodenGate && gateOpen === false) {
+    return `building-${type}-closed`;
   }
   return `building-${type}`;
 }
@@ -1367,6 +1599,7 @@ export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   stone: 'Stone',
   iron: 'Iron',
   tools: 'Tools',
+  coal: 'Coal',
 };
 
 /** Exported (Phase 37): also used to format a building's `materials` cost for tooltips/the building bar. */
@@ -1408,6 +1641,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Quarry || definition.type === BuildingType.IronMine) {
     parts.push(`Must be on or within ${GRAVEL_MAX_DISTANCE_TILES} tiles of Gravel`);
+  }
+  if (definition.type === BuildingType.CoalMine) {
+    parts.push(`Must be on or within ${COAL_MAX_DISTANCE_TILES} tiles of Rock`);
   }
   if (definition.type === BuildingType.PotatoField) {
     parts.push(
@@ -1466,6 +1702,22 @@ export function describeBuilding(definition: BuildingDefinition): string {
   if (definition.type === BuildingType.House) {
     parts.push(
       `Grows Tier 1->3 as needs are met (pop ${HOUSE_TIER_CONFIG[1].population}/${HOUSE_TIER_CONFIG[2].population}/${HOUSE_TIER_CONFIG[3].population}, tax $0/$${HOUSE_TIER_CONFIG[2].taxPerTick}/$${HOUSE_TIER_CONFIG[3].taxPerTick} per tick)`,
+    );
+    parts.push('Tier 2/3 also require being served by a nearby staffed Church');
+  }
+  if (definition.type === BuildingType.Church) {
+    parts.push(
+      `Serves Houses within ${CHURCH_BASE_RADIUS_TILES}+ tiles (grows with hired clergy) - required for Tier 2/3 growth`,
+    );
+    parts.push(`Nuns: $${CHURCH_NUN_COST} each, Priests: $${CHURCH_PRIEST_COST} each, up to ${CHURCH_MAX_CLERGY} combined`);
+    parts.push(`Each clergy: +${CHURCH_RADIUS_PER_CLERGY} tiles radius | Priests also add +$${CHURCH_PRIEST_TAX_BONUS}/tick tax per served Tier-2/3 House`);
+  }
+  if (definition.type === BuildingType.WoodenWall) {
+    parts.push('Blocks raiders completely - they must destroy it to pass (no walking around).');
+  }
+  if (definition.type === BuildingType.WoodenGate) {
+    parts.push(
+      'Toggleable: Open lets everyone through (raiders included), Closed blocks like a Wooden Wall - switch it back and forth anytime from the info panel or the G hotkey.',
     );
   }
   return parts.join(' | ');
