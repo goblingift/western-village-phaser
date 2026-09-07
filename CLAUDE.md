@@ -54,6 +54,7 @@ Player places buildings (cattle farm, butcher, well, house, road) on a tilemap a
 3. **Git Branches**: Each feature in its own branch, review diffs like code review
 4. **Performance**: For >50 buildings use culling + pooling, avoid heavy calculations in update loop unless necessary
 5. **Documentation**: Briefly document new features in this file under "Feature History"
+6. **Commit per phase — always, no batching**: When implementing a multi-phase plan (e.g. a numbered Phase N/N+1/... sequence approved by the user), each phase gets committed to git **immediately after it lands and its build/lint pass** — before starting the next phase, not after the whole plan is done. Add the phase's Feature History row to CLAUDE.md as part of that same commit. Do NOT let multiple phases accumulate uncommitted in the working tree "to commit later as one batch" — once two phases have touched overlapping files (very likely in this codebase: `buildingConfig.ts`, `gameState.ts`, `MainScene.ts`, `constants.ts` are touched by nearly every phase), their diffs can no longer be cleanly separated after the fact, and the per-phase git history the user relies on for review is lost permanently. If in doubt about whether the user wants a commit, ask — do not silently skip it and only commit at the very end.
 
 ## Performance Rules
 
