@@ -96,99 +96,17 @@ interface PixelSprite {
 }
 
 /**
- * Phase 30 terrain: the Western basin is dry ground, so the old grass default
- * is gone. Dirt is the base, Gravel and Sand are the two variants painted in
- * patches over it (see mapConfig.paintGround) - all three are buildable and
- * differ only in texture/hue, so the player reads them as terrain flavour
- * rather than as a rules distinction.
+ * Phase 73 (visual overhaul): the procedural Dirt/Gravel/Sand/Water/Rock
+ * PixelSprite definitions that used to live here are gone. Terrain tiles are
+ * now loaded from a real PNG (public/art/tiles-atlas.png, currently a
+ * PLACEHOLDER pending real AI-generated art - see
+ * docs/phase_73_to_78_visual_overhaul_plan.md and public/art/README.md) via
+ * `this.load.image(TILESET_KEY, ...)` in `preload()`. The TileType enum order
+ * (Dirt=0, Gravel=1, Sand=2, Water=3, Rock=4) that used to govern
+ * TILE_SPRITES' array order now instead governs the PNG's 5 left-to-right
+ * frame order - see `mapConfig.ts`'s TileType enum, which is the actual
+ * source of truth both before and after this change.
  */
-const DIRT_SPRITE: PixelSprite = {
-  // K are shallow cracks in baked earth, H a few sun-bleached highlights.
-  palette: { D: 0x9c7b52, K: 0x836542, H: 0xb09067 },
-  pattern: [
-    'DDDDDDDD',
-    'DDKDDDDD',
-    'DDDDDHDD',
-    'DKKDDDDD',
-    'DDDDDDHD',
-    'DDDDKDDD',
-    'DHDDKDDD',
-    'DDDDDDDD',
-  ],
-};
-
-const GRAVEL_SPRITE: PixelSprite = {
-  // Denser, cooler-toned speckle than Dirt: P are pebbles, S their shadows.
-  palette: { G: 0x8a8172, P: 0xa9a094, S: 0x6d6558 },
-  pattern: [
-    'GGPGGGSG',
-    'GSGGPGGG',
-    'GGGSGGPG',
-    'PGGGGSGG',
-    'GGSGPGGG',
-    'GPGGGGGS',
-    'GGGPSGGG',
-    'SGGGGGPG',
-  ],
-};
-
-const WATER_SPRITE: PixelSprite = {
-  palette: { W: 0x2f7fbf, D: 0x1c5c8f, H: 0x6ec6ff },
-  pattern: [
-    'WWWWWWWW',
-    'WWWWWWWW',
-    'WHHWWHHW',
-    'WWWWWWWW',
-    'WWDWWWDW',
-    'WWHHWWHH',
-    'WWWWWWWW',
-    'WWWWWWWW',
-  ],
-};
-
-const SAND_SPRITE: PixelSprite = {
-  // Phase 30 dropped the baked-in cactus stub that used to sit here: cacti
-  // are real, harvestable world entities now (VEGETATION_SPRITES below), so
-  // painting fake ones into the terrain would misread as harvestable.
-  // K forms a short cracked-earth fissure, D/H are dune shading.
-  palette: { S: 0xd2b48c, D: 0xb08968, H: 0xe8d0a9, K: 0x9c7b52 },
-  pattern: [
-    'SSSSSSSS',
-    'SSDSSSSS',
-    'SSSSSSHS',
-    'SSSSDSSS',
-    'SSSSSSSS',
-    'SSSSSKSS',
-    'SHSSSKSS',
-    'SSSSSSSS',
-  ],
-};
-
-/**
- * Phase 67: bare rock/stone ground - the terrain Quarry/Iron/Coal all key
- * off. Greyish and mottled like Gravel but darker and blockier (B are large
- * flat stone-face blocks, C the mortar-like cracks between them) so it reads
- * as solid outcrop rather than Gravel's loose pebble scatter.
- */
-const ROCK_SPRITE: PixelSprite = {
-  palette: { R: 0x6b6560, B: 0x827c76, C: 0x4a4542 },
-  pattern: [
-    'RRRBBRRR',
-    'RBBBBBCR',
-    'CBBRRBBR',
-    'RBCRRCBR',
-    'RRBBBBRR',
-    'RCRRRRCR',
-    'RBBCCBBR',
-    'RRRBBRRR',
-  ],
-};
-
-// Order must match the TileType enum values (Dirt=0, Gravel=1, Sand=2,
-// Water=3, Rock=4), since tile indices in the generated tilemap are used
-// directly as frame indices. Rock is appended at the end (Phase 67), never
-// inserted, to keep every earlier index stable.
-const TILE_SPRITES: PixelSprite[] = [DIRT_SPRITE, GRAVEL_SPRITE, SAND_SPRITE, WATER_SPRITE, ROCK_SPRITE];
 
 /**
  * Phase 30 vegetation: drawn tile-sized (the full 8x8 PIXEL_GRID) rather than
@@ -1529,12 +1447,37 @@ function drawPixelSprite(
 }
 
 export class BootScene extends Phaser.Scene {
+  /** Phase 73: loading-progress visuals, created in preload(), torn down at the start of create(). */
+  private loadingBarGraphics: Phaser.GameObjects.Graphics | null = null;
+  private loadingText: Phaser.GameObjects.Text | null = null;
+
   constructor() {
     super('BootScene');
   }
 
   preload(): void {
-    this.generateTilesetTexture();
+    this.createLoadingBar();
+
+    // Phase 73 (visual overhaul, pipeline foundation): terrain tiles are the
+    // first real network-loaded asset the game has ever had. Everything else
+    // below stays 100% procedural (generateBuildingAtlas etc., Phases 74-78)
+    // until each category's own phase replaces it - see
+    // docs/phase_73_to_78_visual_overhaul_plan.md.
+    //
+    // TILESET_KEY is load-bearing (MainScene's `map.addTilesetImage('tiles',
+    // TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0)` call). A plain `load.image`
+    // is sufficient (not `load.spritesheet`): Phaser's Tileset computes its 5
+    // per-tile texture-coordinate rects directly from the raw source image's
+    // pixel dimensions and the tileWidth/tileHeight passed to
+    // addTilesetImage (Tileset.updateTileData), independent of Phaser's own
+    // named-frame system - exactly how the old procedural
+    // `graphics.generateTexture(TILESET_KEY, ...)` (which also produced a
+    // single default frame) already worked, so this is a zero-behavior-change
+    // swap of "generate a canvas texture" for "load a PNG into that key".
+    // See public/art/README.md: the shipped tiles-atlas.png is currently a
+    // PLACEHOLDER, not final art.
+    this.load.image(TILESET_KEY, 'art/tiles-atlas.png');
+
     this.generateBuildingAtlas();
     this.generateAnimalAtlas();
     this.generateAccentAtlas();
@@ -1552,8 +1495,52 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.destroyLoadingBar();
     this.publishBuildingIcons();
     this.scene.start('MainScene');
+  }
+
+  /**
+   * Phase 73: minimal loading-progress bar. Boot used to be instant (zero
+   * loaded assets); tiles-atlas.png is now a real `this.load.image()` network
+   * fetch, so a (likely very brief) gap is now possible where previously
+   * there was none. `this.load.on('progress', ...)` fires with a 0-1 fraction
+   * as each queued file completes.
+   */
+  private createLoadingBar(): void {
+    const barWidth = 320;
+    const barHeight = 24;
+    const x = this.cameras.main.width / 2 - barWidth / 2;
+    const y = this.cameras.main.height / 2 - barHeight / 2;
+
+    const graphics = this.add.graphics();
+    graphics.fillStyle(0x3e2723, 1);
+    graphics.fillRect(x - 4, y - 4, barWidth + 8, barHeight + 8);
+    graphics.fillStyle(0x1c1c1c, 1);
+    graphics.fillRect(x, y, barWidth, barHeight);
+    this.loadingBarGraphics = graphics;
+
+    this.loadingText = this.add
+      .text(this.cameras.main.width / 2, y - 20, 'Loading...', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#efebe9',
+      })
+      .setOrigin(0.5, 1);
+
+    this.load.on('progress', (fraction: number) => {
+      graphics.fillStyle(0x1c1c1c, 1);
+      graphics.fillRect(x, y, barWidth, barHeight);
+      graphics.fillStyle(0xffd54f, 1);
+      graphics.fillRect(x, y, barWidth * fraction, barHeight);
+    });
+  }
+
+  private destroyLoadingBar(): void {
+    this.loadingBarGraphics?.destroy();
+    this.loadingBarGraphics = null;
+    this.loadingText?.destroy();
+    this.loadingText = null;
   }
 
   /**
@@ -1591,17 +1578,6 @@ export class BootScene extends Phaser.Scene {
     } catch {
       // Icons stay empty; BuildingBar renders its text-label fallback.
     }
-  }
-
-  private generateTilesetTexture(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-
-    TILE_SPRITES.forEach((sprite, index) => {
-      drawPixelSprite(graphics, index * TILE_SIZE, 0, sprite);
-    });
-
-    graphics.generateTexture(TILESET_KEY, TILE_SPRITES.length * TILE_SIZE, TILE_SIZE);
-    graphics.destroy();
   }
 
   private generateBuildingAtlas(): void {

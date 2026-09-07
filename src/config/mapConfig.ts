@@ -4,8 +4,10 @@ import { MAP_HEIGHT_TILES, MAP_WIDTH_TILES } from './constants';
  * Phase 30: the map is a dry Western basin, not a meadow. The three ground
  * variants (Dirt/Gravel/Sand) are all buildable and differ only cosmetically;
  * Water is the single impassable/unbuildable terrain. Enum values double as
- * tilemap frame indices (see BootScene.TILE_SPRITES), so the order here and
- * the order of the sprite list must stay in sync.
+ * tilemap frame indices - Phase 73 (visual overhaul) moved the tile art from
+ * BootScene's procedurally-generated TILE_SPRITES array to a loaded PNG
+ * (public/art/tiles-atlas.png, 5 frames left-to-right in this exact enum
+ * order), so the order here and the PNG's frame order must stay in sync.
  */
 export enum TileType {
   Dirt = 0,
@@ -13,12 +15,14 @@ export enum TileType {
   Sand = 2,
   Water = 3,
   // Phase 67: appended, not inserted - enum values double as tilemap frame
-  // indices (BootScene.TILE_SPRITES), so Rock must come after Water.
+  // indices (public/art/tiles-atlas.png's frame order, Phase 73), so Rock
+  // must come after Water.
   Rock = 4,
 }
 
-// Base colors matching the pixel-art tile sprites generated in BootScene, used
-// for flat-color rendering where per-pixel detail isn't needed (e.g. minimap).
+// Base colors matching the tile sprites (currently a Phase 73 placeholder PNG
+// pending real art), used for flat-color rendering where per-pixel detail
+// isn't needed (e.g. minimap).
 export const TILE_COLORS: Record<TileType, number> = {
   [TileType.Dirt]: 0x9c7b52,
   [TileType.Gravel]: 0x8a8172,

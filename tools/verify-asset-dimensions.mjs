@@ -1,0 +1,92 @@
+// Phase 73 (visual overhaul pipeline foundation): dimension-verification
+// tool. Per the plan's §3.4 step 5 / §5i risk: buildings/tiles/units are
+// rendered at native texture pixel size with `setOrigin(0, 0)` (buildings) or
+// centred (units) and are NEVER `setDisplaySize`d - so a PNG that is even 1px
+// off from its expected frame size does not error, it just silently misaligns
+// on the map or the unit grid forever. This script is the automated guard
+// against that failure mode.
+//
+// Usage: node tools/verify-asset-dimensions.mjs
+// Exit code 0 = every checked file matches its expected dimensions.
+// Exit code 1 = at least one file is missing or the wrong size (message
+//   printed to stderr explains exactly which file and what was expected vs.
+//   found).
+//
+// This is deliberately a flat, hand-maintained table rather than something
+// that tries to derive expected sizes from BUILDING_DEFINITIONS/etc. - Phase
+// 73 only ships one asset (the terrain tileset). Later phases (74-78) should
+// append one entry per new atlas file they ship (buildings-atlas.png,
+// animals-atlas.png, ...) rather than building a generic derivation layer
+// ahead of need.
+
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readPngDimensions } from './png-writer.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, '..');
+
+/**
+ * @typedef {{ file: string, expectedWidth: number, expectedHeight: number, note?: string }} AssetCheck
+ */
+
+/** @type {AssetCheck[]} */
+const ASSET_CHECKS = [
+  {
+    file: 'public/art/tiles-atlas.png',
+    expectedWidth: 160,
+    expectedHeight: 32,
+    note: '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 32x32px each',
+  },
+  // Phase 74: append buildings-atlas.png here once it ships.
+  // Phase 75: append cowboys-atlas.png / mounted-cowboys-atlas.png / ...
+  // Phase 76: append raiders-atlas.png / raider-camps-atlas.png / wildlife-atlas.png
+  // Phase 77: append vegetation-atlas.png / carts-atlas.png / accents-atlas.png
+  // Phase 78: append resource-icons-atlas.png
+];
+
+function main() {
+  let failed = false;
+
+  for (const check of ASSET_CHECKS) {
+    const absolutePath = join(repoRoot, check.file);
+
+    if (!existsSync(absolutePath)) {
+      console.error(`[FAIL] ${check.file}: file does not exist.`);
+      failed = true;
+      continue;
+    }
+
+    let dimensions;
+    try {
+      const buffer = readFileSync(absolutePath);
+      dimensions = readPngDimensions(buffer);
+    } catch (error) {
+      console.error(`[FAIL] ${check.file}: could not read PNG dimensions (${error.message}).`);
+      failed = true;
+      continue;
+    }
+
+    if (dimensions.width !== check.expectedWidth || dimensions.height !== check.expectedHeight) {
+      console.error(
+        `[FAIL] ${check.file}: expected ${check.expectedWidth}x${check.expectedHeight}px` +
+          (check.note ? ` (${check.note})` : '') +
+          `, found ${dimensions.width}x${dimensions.height}px.`,
+      );
+      failed = true;
+      continue;
+    }
+
+    console.log(`[OK]   ${check.file}: ${dimensions.width}x${dimensions.height}px matches expected.`);
+  }
+
+  if (failed) {
+    console.error('\nAsset dimension verification FAILED. See errors above.');
+    process.exit(1);
+  }
+
+  console.log('\nAsset dimension verification passed for all checked files.');
+}
+
+main();

@@ -11,6 +11,24 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
   backgroundColor: '#2d2d2d',
   scene: [BootScene, MainScene],
   /**
+   * Phase 73 (visual overhaul, pipeline foundation): `pixelArt: true` sets
+   * `antialias: false` + `roundPixels: true` and forces NEAREST texture
+   * filtering. With every sprite so far generated 1:1 straight onto a canvas
+   * texture (never scaled), this had no visible effect - but `public/art/`
+   * assets are now loaded PNGs rendered under camera zoom 0.5-2.0
+   * (`CAMERA_MIN_ZOOM`/`MAX_ZOOM`, constants.ts) and the House-tier
+   * `setScale(1.25)` upgrade-pop tween (MainScene), both of which would
+   * otherwise interpolate/blur pixel art under Phaser's default linear
+   * filtering. Sanity-checked against the HUD/minimap/HP-bar/selection-ring
+   * `Graphics` draws elsewhere in the codebase: all are axis-aligned filled
+   * rects/lines with no rotation or sub-pixel edges, so `roundPixels`/
+   * disabled antialiasing has no negative effect there either (crisper if
+   * anything) - see docs/phase_73_to_78_visual_overhaul_plan.md §5(h)/(b.4).
+   */
+  render: {
+    pixelArt: true,
+  },
+  /**
    * Phase 65 (regression fix). Must stay false. With the default `true`,
    * ScaleManager.getParent() runs before the canvas is injected, measures the
    * still-empty #stage as 0px tall, concludes "clearly no CSS has been set on
