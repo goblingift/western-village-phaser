@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { BuildingCategory, BuildingType, PlacedBuilding, ResourceKey } from '../config/buildingConfig';
+import type { TownRank } from '../config/townRank';
 import type { DayPhaseChange, GameOverSummary, Resources } from './gameState';
 import type { NotificationEntry } from './notifications';
 import type { VegetationEntity } from './vegetation';
@@ -152,6 +153,16 @@ export interface GameEventMap {
    * re-renders if that gate is currently selected.
    */
   'gate-state-changed': (building: PlacedBuilding) => void;
+  /**
+   * Phase 83: fired by gameState's runTownRankCheck whenever the town's
+   * derived rank (see config/townRank.ts) actually climbs a tier - mirrors
+   * 'house-tier-changed's exact shape (a before/after comparison, no separate
+   * debounce Set needed since the comparison itself only ever fires once per
+   * crossing). ObjectivesPanel already re-renders every production-tick and
+   * would pick up the new rank on its own, but this event is what
+   * notifications.ts's promotion notice and any future UI cue key off.
+   */
+  'town-rank-changed': (payload: { rank: TownRank; previousRank: TownRank }) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

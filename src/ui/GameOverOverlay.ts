@@ -1,4 +1,5 @@
 import { BUILDING_DEFINITIONS, BuildingType } from '../config/buildingConfig';
+import { TOWN_RANK_LABELS } from '../config/townRank';
 import { GameOverSummary } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
 import { RecordComparison, RunRecord, formatDuration, getRecord, submitRunResult } from '../state/records';
@@ -62,6 +63,7 @@ export class GameOverOverlay {
     this.content.innerHTML = `
       <h2>${heading}</h2>
       ${subheading}
+      <div class="stat">Town rank: ${TOWN_RANK_LABELS[summary.townRank]}</div>
       <div class="stat">Net worth: $${netWorth.total}${this.newBestTag(comparison.netWorth)}</div>
       <div class="stat">Survived: ${formatDuration(summary.elapsedSeconds)}${this.newBestTag(comparison.survivalSeconds)}</div>
       ${this.renderRecords(previousBest, comparison, summary.difficulty, summary.mode)}

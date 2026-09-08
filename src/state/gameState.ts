@@ -130,6 +130,15 @@ import {
 } from './worldEvents';
 import { resetRaiderCamps } from './raiderCamps';
 import { EnclosureResult, EnclosureTileState, computeEnclosure, isEnclosureValid } from './enclosures';
+import {
+  TOWN_RANK_LABELS,
+  TOWN_RANK_ORDER,
+  TownRank,
+  TownRankProgress,
+  TownRankSnapshot,
+  getRankForSnapshot,
+  getRankProgress,
+} from '../config/townRank';
 
 export interface Resources {
   rawMeat: number;
@@ -216,6 +225,8 @@ export interface GameOverSummary {
   difficulty: Difficulty;
   mode: RunMode;
   elapsedSeconds: number;
+  /** Phase 83: the town's final derived rank (see config/townRank.ts), shown on the game-over screen. */
+  townRank: TownRank;
 }
 
 export type GameOverReason = 'time' | 'destroyed';
@@ -341,6 +352,14 @@ let buildingsEverBuiltByType: Partial<Record<BuildingType, number>> = {};
 let elapsedSeconds = 0;
 let gameOver = false;
 let totalPopulation = 0;
+/**
+ * Phase 83: the town's current derived rank (see config/townRank.ts),
+ * recomputed every production tick by runTownRankCheck. Starts at 'camp' -
+ * TOWN_RANK_THRESHOLDS.camp is an empty requirement, matching a fresh
+ * resetGame() town exactly, so this initial value is never actually wrong
+ * even before the first tick runs.
+ */
+let currentTownRank: TownRank = 'camp';
 /**
  * Phase 39: chosen on the pre-game (and post-game-over) difficulty/mode
  * picker and passed into resetGame; defaults reproduce the pre-Phase-39
@@ -950,6 +969,65 @@ export function getActiveObjectives(): ObjectiveView[] {
       unit: definition?.unit,
     };
   });
+}
+
+/**
+ * Phase 83: Town Rank Ladder. Builds a fresh TownRankSnapshot from values
+ * gameState already tracks/exposes elsewhere - net worth, day number, live
+ * population, lifetime completed-objective count - so config/townRank.ts
+ * never has to import gameState itself (matching objectives.ts's own
+ * buildObjectiveSnapshot pattern one section up).
+ */
+function buildTownRankSnapshot(): TownRankSnapshot {
+  return {
+    netWorth: computeNetWorth().total,
+    daysSurvived: getDayNumber(),
+    totalPopulation,
+    completedObjectives: getCompletedObjectiveCount(),
+  };
+}
+
+export function getTownRank(): TownRank {
+  return getRankForSnapshot(buildTownRankSnapshot());
+}
+
+export function getTownRankProgress(): TownRankProgress {
+  return getRankProgress(buildTownRankSnapshot());
+}
+
+/**
+ * Called at the end of runProductionTick (after runObjectivesCheck, since a
+ * completed objective this same tick can be exactly what pushes the town
+ * over a rank threshold). Mirrors runHouseNeeds' before/after comparison for
+ * detecting a house-tier change: no separate debounce Set is needed because
+ * comparing currentTownRank (the last-known value) against a freshly derived
+ * rank can only ever report a genuine crossing, and it can only ever fire
+ * once per crossing since currentTownRank is updated immediately after.
+ */
+function runTownRankCheck(): void {
+  const nextRank = getRankForSnapshot(buildTownRankSnapshot());
+  if (nextRank === currentTownRank) {
+    return;
+  }
+  const previousRank = currentTownRank;
+  currentTownRank = nextRank;
+
+  const previousIndex = TOWN_RANK_ORDER.indexOf(previousRank);
+  const nextIndex = TOWN_RANK_ORDER.indexOf(nextRank);
+  if (nextIndex > previousIndex) {
+    gameEvents.emit('town-rank-changed', { rank: nextRank, previousRank });
+    addNotification(
+      `The town has grown into a ${TOWN_RANK_LABELS[nextRank]}!`,
+      'info',
+      elapsedSeconds,
+    );
+  } else {
+    // Ranks are derived fresh every tick from live, non-monotonic inputs (net
+    // worth can fall, population can shrink after a raid) - a downgrade is
+    // possible and is still a real state change worth the event, just not
+    // worth a congratulatory notification.
+    gameEvents.emit('town-rank-changed', { rank: nextRank, previousRank });
+  }
 }
 
 export function getCompletedObjectiveCount(): number {
@@ -3399,6 +3477,7 @@ export function runProductionTick(): void {
 
   checkBuildingUnlocks();
   runObjectivesCheck();
+  runTownRankCheck();
 
   gameEvents.emit('money-changed', money);
   gameEvents.emit('resources-changed', { ...resources });
@@ -3656,6 +3735,7 @@ function endGame(reason: GameOverReason): void {
     difficulty: currentDifficulty,
     mode: currentRunMode,
     elapsedSeconds,
+    townRank: getTownRank(),
   });
 }
 
@@ -3705,6 +3785,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   totalUnitsTrained = 0;
   buildingLostThisNight = false;
   nightsSurvivedCleanCount = 0;
+  currentTownRank = 'camp';
   initObjectiveQueue();
 
   // Terrain is intentionally kept across a reset (the player replays the same

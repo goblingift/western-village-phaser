@@ -1,6 +1,7 @@
 import { formatObjectiveProgress } from '../config/objectives';
+import { TOWN_RANK_LABELS } from '../config/townRank';
 import { gameEvents } from '../state/gameEvents';
-import { ObjectiveView, getActiveObjectives, getCompletedObjectiveCount } from '../state/gameState';
+import { ObjectiveView, getActiveObjectives, getCompletedObjectiveCount, getTownRankProgress } from '../state/gameState';
 
 /**
  * Phase 56: Objectives / Quest Chain. A small, always-on DOM widget (unlike
@@ -20,12 +21,22 @@ import { ObjectiveView, getActiveObjectives, getCompletedObjectiveCount } from '
  */
 export class ObjectivesPanel {
   private panel: HTMLDivElement;
+  private rankHeader: HTMLDivElement;
   private header: HTMLDivElement;
   private list: HTMLDivElement;
 
   constructor(container: HTMLElement) {
     this.panel = document.createElement('div');
     this.panel.id = 'objectives-panel';
+
+    // Phase 83: Town Rank Ladder header, above the existing objectives list -
+    // reuses the same 'production-tick'/'game-reset'/'game-loaded' render
+    // cycle the objectives list already listens to, no new event wiring
+    // needed since gameState's runTownRankCheck runs every tick alongside
+    // runObjectivesCheck.
+    this.rankHeader = document.createElement('div');
+    this.rankHeader.id = 'town-rank-header';
+    this.panel.appendChild(this.rankHeader);
 
     this.header = document.createElement('div');
     this.header.className = 'objectives-panel-header';
@@ -44,7 +55,30 @@ export class ObjectivesPanel {
     this.render();
   }
 
+  private renderRankHeader(): void {
+    const { currentRank, nextRank, progressFraction, whatIsNeeded } = getTownRankProgress();
+    const rankLabel = TOWN_RANK_LABELS[currentRank];
+
+    if (!nextRank) {
+      this.rankHeader.innerHTML = `<div class="town-rank-name">${rankLabel}</div><div class="town-rank-next">Max rank reached</div>`;
+      return;
+    }
+
+    const needText = whatIsNeeded
+      .map((axis) => `${axis.label} ${Math.floor(axis.current)}/${axis.required}`)
+      .join(', ');
+    const percent = Math.round(progressFraction * 100);
+
+    this.rankHeader.innerHTML = `
+      <div class="town-rank-name">${rankLabel}</div>
+      <div class="town-rank-progress-bar"><div class="town-rank-progress-fill" style="width: ${percent}%"></div></div>
+      <div class="town-rank-next">Next: ${TOWN_RANK_LABELS[nextRank]} - ${needText}</div>
+    `;
+  }
+
   private render(): void {
+    this.renderRankHeader();
+
     const objectives = getActiveObjectives();
     const completedCount = getCompletedObjectiveCount();
     this.header.textContent = `Objectives${completedCount > 0 ? ` (${completedCount} completed)` : ''}`;

@@ -572,6 +572,35 @@
         color: #8d7f6e;
         padding: 6px 0;
       }
+      /* Phase 83: Town Rank Ladder header, docked above the objectives list
+         inside the same panel - no separate positioned element needed. */
+      #town-rank-header {
+        padding: 6px 10px 5px;
+        border-bottom: 1px solid #8d6e4a;
+      }
+      #town-rank-header .town-rank-name {
+        font-weight: bold;
+        font-size: 14px;
+        color: #ffd54f;
+        text-align: center;
+      }
+      #town-rank-header .town-rank-progress-bar {
+        margin-top: 4px;
+        height: 6px;
+        border-radius: 3px;
+        background: #4a3626;
+        overflow: hidden;
+      }
+      #town-rank-header .town-rank-progress-fill {
+        height: 100%;
+        background: #8bc34a;
+      }
+      #town-rank-header .town-rank-next {
+        margin-top: 4px;
+        font-size: 11px;
+        color: #cdbfae;
+        text-align: center;
+      }
       /* Phase 49: Statistics & Efficiency panel - opt-in, hidden by default
          (toggled by the 'V' hotkey / building bar's Stats button), anchored
          top-right so it never collides with the info panel (bottom-right) or
