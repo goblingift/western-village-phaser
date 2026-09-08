@@ -11,7 +11,6 @@ import {
   CAMERA_ZOOM_STEP,
   CATTLE_DISEASE_DURATION_MAX_SECONDS,
   CATTLE_DISEASE_DURATION_MIN_SECONDS,
-  CHURCH_BASE_RADIUS_TILES,
   COWBOY_DAMAGE,
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
@@ -44,7 +43,6 @@ import {
   MINIMAP_WIDTH,
   MOUNTED_COWBOY_MAX_HP,
   MOUNTED_COWBOY_WALK_SPEED_PX_PER_SEC,
-  POPULATION_PER_HOUSE,
   PRODUCTION_TICK_MS,
   ROAD_UNIT_SPEED_MULTIPLIER,
   ROAD_UNIT_SPEED_SAMPLE_THRESHOLD,
@@ -54,58 +52,28 @@ import {
   VIEWPORT_WIDTH,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
-  WILDLIFE_FLEE_HP_FRACTION,
-  WILDLIFE_MAX_INTERVAL_MS,
-  WILDLIFE_MIN_INTERVAL_MS,
-  WILDLIFE_VILLAGER_HP,
-  MAX_CONCURRENT_WILDLIFE,
   WORLD_EVENT_BANNER_DURATION_MS,
   WORLD_EVENT_MAX_INTERVAL_MS,
   WORLD_EVENT_MIN_INTERVAL_MS,
 } from '../config/constants';
 import { TILE_COLORS, TileType, getWorldTiles } from '../config/mapConfig';
-import { getResourceChainBuildingTypes } from '../config/resourceGraph';
-import {
-  VEGETATION_ATLAS_KEY,
-  VEGETATION_DEFINITIONS,
-  vegetationTextureKey,
-} from '../config/vegetationConfig';
-import {
-  VegetationEntity,
-  countVegetationInRadius,
-  getVegetation,
-  getVegetationAtTile,
-} from '../state/vegetation';
-import {
-  WILDLIFE_ATLAS_KEY,
-  WILDLIFE_DEFINITIONS,
-  WildlifeKind,
-  pickRandomWildlifeKind,
-  wildlifeTextureKey,
-} from '../config/wildlifeConfig';
+import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
+import { getVegetation, getVegetationAtTile } from '../state/vegetation';
 import { NightOverlay } from '../ui/NightOverlay';
 import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
 import {
-  ACCENTS_ATLAS_KEY,
-  AccentKind,
-  ANIMALS_ATLAS_KEY,
-  ANIMAL_SPRITE_SIZE,
   BRAWLERS_ATLAS_KEY,
   BRAWLER_TEXTURE_KEY,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingCategory,
   BuildingType,
-  CARTS_ATLAS_KEY,
-  CART_TEXTURE_KEY,
   COWBOYS_ATLAS_KEY,
   COWBOY_SPRITE_SIZE,
   COWBOY_TEXTURE_KEY,
   DYNAMITERS_ATLAS_KEY,
   DYNAMITER_TEXTURE_KEY,
-  HOUSE_TIER_CONFIG,
-  HouseTier,
   MARKETABLE_RESOURCE_KEYS,
   MOUNTED_COWBOYS_ATLAS_KEY,
   MOUNTED_COWBOY_SPRITE_HEIGHT,
@@ -116,15 +84,11 @@ import {
   RESOURCE_LABELS,
   ResourceKey,
   UnitKind,
-  VILLAGERS_ATLAS_KEY,
-  VILLAGER_TEXTURE_KEY,
-  accentTextureKey,
-  animalTextureKey,
+  ANIMAL_SPRITE_SIZE,
   buildingTextureKey,
   formatResourceMap,
   getFactionUnitDamageMultiplier,
   getUnitHpArray,
-  getWorkersRequired,
   isLinePlacementBuilding,
 } from '../config/buildingConfig';
 import {
@@ -153,7 +117,6 @@ import {
   applyWanderingSettlersReward,
   clearVegetationAt,
   computeNetWorth,
-  damageUnit,
   demolishBuilding,
   destroyBuilding,
   getBuildingAtTile,
@@ -161,15 +124,10 @@ import {
   getDayNumber,
   getDayPhase,
   getElapsedSeconds,
-  getChurchRadius,
-  getEnclosureFor,
-  getFenceLinks,
-  getHarvestCenterTile,
   getPlacedBuildings,
   getPlacementRejection,
   getPlacementWarning,
   isGameOver,
-  isServedByChurch,
   placeBuilding,
   runProductionTick,
   setAllGates,
@@ -178,10 +136,8 @@ import {
 } from '../state/gameState';
 import { DustStormOverlay } from '../ui/DustStormOverlay';
 import { Raider, RaidSystem } from './systems/RaidSystem';
-
-const FENCE_LINE_COLOR = 0x8d6748;
-/** Phase 48: chain-view map overlay outline color - gold, distinct from the green connection outline and the red/blue minimap combat dots. */
-const CHAIN_VIEW_HIGHLIGHT_COLOR = 0xffd54f;
+import { AmbientLifeSystem, Wildlife } from './systems/AmbientLifeSystem';
+import { WorldVisualsSystem } from './systems/WorldVisualsSystem';
 
 /**
  * Phase 55: Random World Events. Per-type duration range (seconds) and
@@ -212,8 +168,6 @@ const WORLD_EVENT_NOTIFICATION_KIND: Record<DurationWorldEventType, 'warning' | 
   dustStorm: 'warning',
 };
 
-/** Phase 30: trees/cacti render above the ground layer but below buildings (depth 10). */
-const VEGETATION_DEPTH = 5;
 const MINIMAP_VEGETATION_DOT_SIZE = 2;
 
 /** Phase 31: destruction animation - shake, fade, and a burst of dust motes. */
@@ -279,14 +233,6 @@ const OFFSCREEN_PING_RADIUS = 4;
 /** Keeps the ping's edge-clamped point from ever touching the minimap's own border stroke. */
 const OFFSCREEN_PING_EDGE_INSET = 5;
 const ANIMAL_SPRITE_DEPTH = 11;
-const ANIMAL_SLOT_GAP = 2;
-const ANIMAL_SLOT_STEP = ANIMAL_SPRITE_SIZE + ANIMAL_SLOT_GAP;
-const ANIMAL_WANDER_RADIUS_MIN = 10;
-const ANIMAL_WANDER_RADIUS_MAX = 12;
-const ANIMAL_WANDER_BOB_PX = 4;
-const ANIMAL_WANDER_DURATION_MIN_MS = 900;
-const ANIMAL_WANDER_DURATION_MAX_MS = 1600;
-const ANIMAL_WANDER_DELAY_MAX_MS = 1000;
 
 /** Garrisoned Cowboys (Phase 22) share the animal sprites' depth/layer - both are static ground props next to a building. */
 const COWBOY_SPRITE_DEPTH = ANIMAL_SPRITE_DEPTH;
@@ -304,40 +250,8 @@ const MOUNTED_COWBOY_SLOT_GAP = 2;
 const MOUNTED_COWBOY_SLOT_STEP_X = MOUNTED_COWBOY_SPRITE_WIDTH + MOUNTED_COWBOY_SLOT_GAP;
 const MOUNTED_COWBOY_SLOT_STEP_Y = MOUNTED_COWBOY_SPRITE_HEIGHT + MOUNTED_COWBOY_SLOT_GAP;
 
-/** Idle-animation accents (Phase 19): layered just above a building's own image (depth 10) and below animal sprites (depth 11). */
-const ACCENT_DEPTH = 10.5;
-
-const WELL_CRANK_ANGLE_DEG = 15;
-const WELL_CRANK_TWEEN_MS = 1000;
-
-const WAREHOUSE_DOOR_SWING_ANGLE_DEG = 8;
-const WAREHOUSE_DOOR_TWEEN_MS = 1800;
-
-const SUPERMARKET_AWNING_SCALE_X_MIN = 0.95;
-const SUPERMARKET_AWNING_SCALE_X_MAX = 1.05;
-const SUPERMARKET_AWNING_TWEEN_MS = 1800;
-
-const CHICKEN_DOOR_SCALE_Y_CLOSED = 0.3;
-const CHICKEN_DOOR_DURATION_MIN_MS = 600;
-const CHICKEN_DOOR_DURATION_MAX_MS = 900;
-const CHICKEN_DOOR_REPEAT_DELAY_MIN_MS = 200;
-const CHICKEN_DOOR_REPEAT_DELAY_MAX_MS = 900;
-
-const HOUSE_SMOKE_PUFF_COUNT = 3;
-const HOUSE_SMOKE_PUFF_RADIUS = 3;
-const HOUSE_SMOKE_COLOR = 0xf5f5f5;
-const HOUSE_SMOKE_START_ALPHA = 0.6;
-const HOUSE_SMOKE_RISE_PX = 14;
-const HOUSE_SMOKE_DURATION_MIN_MS = 1200;
-const HOUSE_SMOKE_DURATION_MAX_MS = 1800;
-const HOUSE_SMOKE_STAGGER_MS = 500;
-
-/** Above buildings (10), accents (10.5) and animals (11); below the HUD (1000). */
-const VILLAGER_SPRITE_DEPTH = 12;
 /** Above villagers (12); HP bars sit topmost of the per-building layers so damage is always visible. */
 const HP_BAR_DEPTH = 13;
-const HP_BAR_HEIGHT = 4;
-const HP_BAR_MARGIN_ABOVE_BUILDING = 3;
 const HP_BAR_BG_COLOR = 0x2b1d12;
 const HP_BAR_FILL_COLOR = 0x4caf50;
 const HP_BAR_EMPTY_COLOR = 0xd32f2f;
@@ -363,30 +277,6 @@ const UNIT_HP_BAR_MARGIN_ABOVE_PX = 2;
  * uses this default too rather than needing its own override.
  */
 const UNIT_SPRITE_HALF_HEIGHT_PX = ANIMAL_SPRITE_SIZE / 2;
-/** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. Raised 30 -> 40 (Phase 66) for the bigger, more populated 60x45 map. */
-const VILLAGER_CAP = 40;
-const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
-const VILLAGER_PAUSE_MIN_MS = 500;
-const VILLAGER_PAUSE_MAX_MS = 2000;
-
-/**
- * Phase 60: Goods Carts on Roads - purely cosmetic, short-lived (one leg,
- * then fade out and destroy) so create-then-destroy is simpler than pooling
- * at this volume, mirroring the villager/animal small-unit depth band rather
- * than getting its own. Cap mirrors VILLAGER_CAP's "display-only cap,
- * skip-spawning-past-it" precedent.
- */
-const MAX_VISIBLE_CARTS = 8;
-const CART_WALK_SPEED_PX_PER_SEC = 40;
-const CART_SPRITE_DEPTH = ANIMAL_SPRITE_DEPTH;
-const CART_FADE_OUT_DURATION_MS = 300;
-/** Depots a cart can travel to - every building type with an autonomous-sale or storage role, none of which have a `production` field so they can never themselves be the cart's *source*. */
-const CART_DEPOT_BUILDING_TYPES: readonly BuildingType[] = [
-  BuildingType.Warehouse,
-  BuildingType.Supermarket,
-  BuildingType.Saloon,
-  BuildingType.TradingPost,
-];
 
 /**
  * Phase 57: Raider Camps render at the same depth band as buildings (10)
@@ -399,20 +289,6 @@ const RAIDER_CAMP_SPRITE_HALF_HEIGHT_PX = RAIDER_CAMP_SPRITE_SIZE / 2;
 const COWBOY_SHOT_DEPTH = 13.5;
 const COWBOY_SHOT_COLOR = 0xffee58;
 const COWBOY_SHOT_FADE_MS = 200;
-
-/**
- * Phase 71: Hostile Wildlife shares the raider/villager/animal small-unit
- * depth band. Hit-test radius mirrors RAIDER_ATTACK_HIT_RADIUS_PX so a
- * right-click-on-a-creature reads with the same forgiving tolerance as
- * right-click-on-a-raider does.
- */
-const WILDLIFE_SPRITE_DEPTH = 12;
-const WILDLIFE_ATTACK_HIT_RADIUS_PX = 10;
-/** Roam-leg pacing, matching startVillagerWander's own pause band - wildlife idles between roam legs the same way a decorative villager does. */
-const WILDLIFE_ROAM_PAUSE_MIN_MS = 500;
-const WILDLIFE_ROAM_PAUSE_MAX_MS = 2000;
-/** How far (world px) a fleeing creature's one-shot tween travels toward the nearest map edge before it despawns. */
-const WILDLIFE_FLEE_SPEED_PX_PER_SEC = 90;
 
 /** Phase 24: Cowboys are player-directed units, so their selection/movement constants live near the combat ones above. */
 const COWBOY_WALK_SPEED_PX_PER_SEC = 60;
@@ -441,51 +317,6 @@ const UNIT_DOUBLE_CLICK_MS = 300;
 const CONTROL_GROUP_DOUBLE_TAP_MS = 400;
 
 /**
- * Phase 34: the harvest radius ring. A Forestry/Cactus Milker's 5-tile reach
- * is 160px - a sixth of the viewport at zoom 1 - and was previously completely
- * invisible, so "will this building reach those trees" was pure guesswork.
- * Drawn under the buildings (depth 6, just above vegetation at 5) so it reads
- * as a footprint marking on the ground rather than an overlay.
- */
-const HARVEST_RING_DEPTH = 6;
-const HARVEST_RING_COLOR = 0x8bc34a;
-const HARVEST_RING_EMPTY_COLOR = 0xef5350;
-const HARVEST_RING_FILL_ALPHA = 0.08;
-
-/**
- * Real Fence Enclosures debug overlay. Off by default, toggled with the 'E'
- * hotkey (setupHotkeys) - the same bare-toggle-emit convention 'C'/'V'
- * already use. Reuses the harvest ring's exact style (a tinted fill per tile
- * plus a stroked outline, drawn under buildings) rather than inventing a
- * second visual language: green means a valid (closed) enclosure, red means
- * open/not enclosed at all. Drawn on demand only - redrawn on
- * 'building-placed'/'building-removed'/'game-loaded'/'game-reset' (whichever
- * might have changed a farm's cached enclosure), never per-tick or per-frame.
- *
- * Item 4 (2026-09-07): the yellow "closed but wrong Gate count" state is
- * gone along with Gate's role in isEnclosureValid - a closed perimeter is
- * simply green now, regardless of how many Gates (if any) sit on it.
- * ENCLOSURE_WRONG_GATE_COUNT_COLOR was removed outright rather than kept
- * as dead code.
- *
- * Item 2 verification note: the debug overlay's boundary tiles were the
- * requested tool for confirming a farm's own footprint reads as part of the
- * enclosure's perimeter to the player (Item 2's root-cause investigation
- * confirmed this already works - see enclosures.ts/gameState.ts's
- * queryEnclosureTile doc comments and CLAUDE.md's Item 2 write-up). No
- * change was needed here: the green fill already stops exactly at the
- * farm's own footprint edge (queryEnclosureTile returns 'building' for it,
- * so it's never added to enclosedTiles), which visually reads as "this
- * building's wall counts as part of the boundary" without any extra
- * highlighting - tinting the footprint itself was considered and rejected as
- * redundant, since the building sprite already occupies that space clearly.
- */
-const ENCLOSURE_DEBUG_DEPTH = 6.2;
-const ENCLOSURE_DEBUG_FILL_ALPHA = 0.16;
-const ENCLOSURE_VALID_COLOR = 0x4caf50;
-const ENCLOSURE_OPEN_COLOR = 0xef5350;
-
-/**
  * Phase 53: Rally Points & Training Queue. A rally point is drawn as a tiny
  * flag-on-a-pole (a Graphics primitive, not a texture - same
  * minimal-footprint style as the harvest ring above) at depth just above the
@@ -500,63 +331,12 @@ const RALLY_POINT_FLAG_WIDTH_PX = 10;
 const RALLY_POINT_FLAG_HEIGHT_PX = 7;
 
 /**
- * Enclosure Detection Fix & Exit Indicator: a placement AID, not a rule -
- * drawn one tile outside a deterministic edge of the farm's footprint
- * (bottom-center, projected south) so the same farm always suggests the same
- * spot across redraws. Shown for any animal-holding farm whose enclosure is
- * not currently valid, plus whichever farm is currently selected (so a
- * player mid-build of a still-invalid pen keeps seeing it even after
- * clicking the building to check status) - and hidden the instant a farm's
- * pen becomes valid, mirroring HP bars hiding at full health, so a finished
- * town isn't cluttered with permanent arrows. Reuses the harvest ring/rally
- * flag's shared-Graphics-object, redraw-on-event (never per-tick) style.
- *
- * Item 4 (2026-09-07) repurposed this arrow's meaning. It originally read as
- * "put your one required Gate here" - a suggestion that stopped making sense
- * the moment Gate stopped being required for validity at all (a "suggested
- * Gate spot" arrow for a building that needs no Gate would actively mislead
- * players into thinking one is still needed). Two options were considered:
- * (a) delete the feature outright, or (b) repurpose it into a generic
- * "close your perimeter here" pointer. Kept (b): the arrow's underlying
- * mechanism - "here's a deterministic point just outside the pen you can
- * build wall at" - is still useful entirely independent of Gate, since a
- * fresh player's very first question is still "where do I even start
- * building the fence". The trigger condition changed accordingly: it now
- * fires purely on `!enclosure.closed` rather than `!isEnclosureValid`, since
- * a CLOSED-but-too-small pen (the only other way to be invalid post-Item-4)
- * needs more enclosed floor area, not a wall built at this specific spot -
- * pointing an arrow at a fixed edge tile would be actively wrong guidance
- * there, whereas it was previously (accidentally) fine advice since a
- * too-small pen was never reachable without deliberately fighting the old
- * Gate-count rule first.
- */
-const ENCLOSURE_EXIT_HINT_DEPTH = 6.3;
-const ENCLOSURE_EXIT_HINT_COLOR = 0xffca28;
-const ENCLOSURE_EXIT_HINT_ARROW_LENGTH_PX = 14;
-const ENCLOSURE_EXIT_HINT_ARROW_WIDTH_PX = 10;
-
-/**
- * Phase 34: understaffed / upkeep-unpaid badges. These sit at the HP bar's
- * depth band (they answer the same question - "why isn't this building
- * working") but slightly above it so a damaged AND understaffed building shows
- * both without the badge hiding behind the bar.
- */
-const STATUS_BADGE_DEPTH = 13.2;
-const STATUS_BADGE_SIZE = 8;
-const STATUS_BADGE_UNSTAFFED_COLOR = 0xffca28;
-const STATUS_BADGE_UNPAID_COLOR = 0xef5350;
-const STATUS_BADGE_OUTLINE_COLOR = 0x2b1d12;
-
-/**
- * Phase 34 night polish. The window light and campfire are created once with
- * the rest of a building's accents and simply faded in/out with the cycle, so
- * nothing is created or destroyed at a phase boundary.
+ * Phase 34 night polish. The window light and campfire tween durations moved
+ * to WorldVisualsSystem along with the accent-creation code they configure;
+ * this constant survives only because setupDayNightCycle passes it through to
+ * WorldVisualsSystem.fadeNightAccents's durationMs parameter.
  */
 const NIGHT_ACCENT_FADE_MS = 4000;
-const NIGHT_ACCENT_MAX_ALPHA = 0.95;
-const CAMPFIRE_FLICKER_MS = 420;
-/** Cool blue-grey multiply tint applied to tree/cactus sprites at night; daytime is untinted. */
-const VEGETATION_NIGHT_TINT = 0x6f86b8;
 
 /**
  * Phase 34 combat audio. Above this many cowboys firing in one combat tick,
@@ -570,56 +350,6 @@ const FOOTSTEP_INTERVAL_MS = 320;
 /** Per-animal ambient call scheduling; each animal picks a fresh delay in this range every time. */
 const ANIMAL_SOUND_MIN_DELAY_MS = 6000;
 const ANIMAL_SOUND_MAX_DELAY_MS = 16000;
-
-interface BuildingVisual {
-  building: PlacedBuilding;
-  image: Phaser.GameObjects.Image;
-  animalImages: Phaser.GameObjects.Image[];
-  accentObjects: Phaser.GameObjects.GameObject[];
-  /**
-   * Phase 34: the subset of accentObjects that only show at night (House
-   * window light, Barracks campfire). Tracked separately so the phase change
-   * can fade exactly those without touching the always-on idle accents, while
-   * cleanup still walks the single accentObjects list.
-   */
-  nightAccents: Phaser.GameObjects.Image[];
-}
-
-/**
- * Phase 71: promoted from a bare Phaser.GameObjects.Image[] (Phase 20) now
- * that a decorative villager can be killed by wildlife - it needs a stable
- * id (for wildlife.targetRef to survive across ticks the same way
- * Raider.id/CombatUnit.id already do) and its own hp. Deliberately still
- * NOT tied into gameState/totalPopulation in any way: this stays the exact
- * "capped cosmetic flourish decoupled from the real population figure" the
- * Phase 20 changelog documents - killing one only ever removes a sprite.
- */
-interface Villager {
-  id: string;
-  image: Phaser.GameObjects.Image;
-  hp: number;
-}
-
-/**
- * Phase 71: Hostile Wildlife. Roams like a decorative villager (chained
- * random-point tweens) rather than committing to one target the way a raider
- * does, and only ever targets living units/villagers - never a building, see
- * runWildlifeTick. Tracked at scene level (mirroring Raider[]/CombatUnit[]
- * above) since it's ephemeral/tween-heavy, transient combat state, exactly
- * the category the codebase's own Raider precedent describes - not a
- * standalone state/ module like state/raiderCamps.ts, which is deliberately
- * a *persisted*, slowly-changing map objective that wildlife is not.
- */
-interface Wildlife {
-  id: string;
-  kind: WildlifeKind;
-  image: Phaser.GameObjects.Image;
-  hp: number;
-  maxHp: number;
-  state: 'roaming' | 'hunting' | 'attacking' | 'fleeing';
-  targetRef: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } | null;
-  moveTween: Phaser.Tweens.Tween | null;
-}
 
 /**
  * Phase 24: a Cowboy is now an independently-positioned, player-directed unit
@@ -816,7 +546,6 @@ export class MainScene extends Phaser.Scene {
   private resourceHud!: ResourceHudPanel;
   private timerText!: Phaser.GameObjects.Text;
   private placementHintText!: Phaser.GameObjects.Text;
-  private vegetationImages = new Map<string, Phaser.GameObjects.Image>();
   private demolishMode = false;
   private gameSpeed = 1;
   /**
@@ -827,30 +556,42 @@ export class MainScene extends Phaser.Scene {
    * for exactly what stayed on MainScene (the shooter-resolution functions
    * that are fused with Hostile Wildlife combat) and why.
    */
-  private raidSystem!: RaidSystem;
+  /** Phase 86: non-private - WorldVisualsSystem/AmbientLifeSystem call back into RaidSystem (pickRaidSpawnPoint, sampleForBlockingWall, damageCamp, etc.) through this.scene.raidSystem. */
+  raidSystem!: RaidSystem;
+  /**
+   * Phase 86: MainScene Decomposition Part 2 - World Visuals. Owns building/
+   * animal/accent/vegetation visual creation, fence/connection/chain-view
+   * lines, building HP bars, status badges, harvest-radius/Church-service
+   * rings, and the enclosure debug overlay/exit-hint arrow. Constructed once
+   * in create(); see systems/WorldVisualsSystem.ts's own doc comment.
+   */
+  worldVisualsSystem!: WorldVisualsSystem;
+  /**
+   * Phase 86: MainScene Decomposition Part 2 - Ambient Life. Owns villagers,
+   * goods carts, and Hostile Wildlife (spawning, wandering, roam/hunt/attack/
+   * flee). Constructed once in create(); see systems/AmbientLifeSystem.ts's
+   * own doc comment.
+   */
+  ambientLifeSystem!: AmbientLifeSystem;
   /** Tracked so a building that is destroyed/demolished while its info panel is open closes that panel. */
-  private selectedBuildingId: string | null = null;
+  /** Phase 86: non-private - WorldVisualsSystem.redrawHarvestRing() reads the currently-selected building. */
+  selectedBuildingId: string | null = null;
   private phaseRemainingDisplay = DAY_PHASE_SECONDS;
-  private nightOverlay!: NightOverlay;
-  private harvestRingGraphics!: Phaser.GameObjects.Graphics;
-  /** Real Fence Enclosures debug overlay - off by default, toggled by the 'E' hotkey. */
-  private enclosureDebugGraphics!: Phaser.GameObjects.Graphics;
-  private enclosureDebugVisible = false;
-  /** Enclosure Detection Fix & Exit Indicator: always-on (not gated by the 'E' debug toggle) suggested-Gate-spot arrow, one shared Graphics object. */
-  private enclosureExitHintGraphics!: Phaser.GameObjects.Graphics;
+  /** Phase 86: non-private - WorldVisualsSystem.createNightAccents() reads the overlay's live alpha to match a freshly-placed building's night accents to the current darkness. */
+  nightOverlay!: NightOverlay;
   /** Phase 53: shared Graphics redrawn from scratch over every building with a rallyPoint set, mirroring connectionGraphics'/fenceLineGraphics' one-Graphics-per-redraw discipline rather than a GameObject per flag. */
   private rallyPointGraphics!: Phaser.GameObjects.Graphics;
   /** Phase 53: non-null while a "Set Rally Point" button has armed the next qualifying right-click to set that building's rally point instead of issuing a unit move/attack order. */
   private rallyPointModeBuildingId: string | null = null;
   private rallyPointModeHintText!: Phaser.GameObjects.Text;
-  private statusBadgeGraphics!: Phaser.GameObjects.Graphics;
   private lastFootstepAt = 0;
   private animalSoundTimer: Phaser.Time.TimerEvent | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private pointerDownX = 0;
   private pointerDownY = 0;
-  private selectedType: BuildingType | null = null;
+  /** Phase 86: non-private - WorldVisualsSystem.redrawHarvestRing() reads the currently-selected placement type for its placement-preview ring. */
+  selectedType: BuildingType | null = null;
   private previewImage: Phaser.GameObjects.Image | null = null;
   /** Phase 43: pooled preview tiles for a drag-to-place line (Road/Fence), indexed by position along the line; grown on demand, never shrunk (extras past the current line length are just hidden). */
   private linePreviewImages: Phaser.GameObjects.Image[] = [];
@@ -896,23 +637,6 @@ export class MainScene extends Phaser.Scene {
    * finger happens to lift last.
    */
   private touchPointersSuppressedForTap = new Set<number>();
-  private buildingVisuals = new Map<string, BuildingVisual>();
-  /** Phase 71: promoted from Phaser.GameObjects.Image[] to Villager[] - a decorative villager now has hp and can be killed by wildlife (see the Villager interface doc comment). */
-  private villagers: Villager[] = [];
-  /** Phase 71: monotonically increasing so every Villager.id is unique for the life of the scene, mirroring raiderIdCounter/unitIdCounter. */
-  private villagerIdCounter = 0;
-  /** Phase 60: Goods Carts on Roads - short-lived travel sprites, tracked only so game-reset can kill their tweens and destroy them; MAX_VISIBLE_CARTS is enforced against this array's length. */
-  private activeCarts: Phaser.GameObjects.Image[] = [];
-  /**
-   * Phase 71: Hostile Wildlife. An ambient hazard, not a wave/raid concept -
-   * spawns continuously from minute one via its own self-rescheduling timer
-   * (scheduleNextWildlifeCheck), independent of raidActive/night gating.
-   */
-  private wildlife: Wildlife[] = [];
-  private wildlifeIdCounter = 0;
-  private wildlifeCheckTimer: Phaser.Time.TimerEvent | null = null;
-  /** Fire-once-per-session debounce for the Mountain Lion spawn notification, so a run with several lions doesn't spam the log. */
-  private mountainLionNotified = false;
   /** Phase 51: Traveling Merchant - self-rescheduling timer mirroring raidCheckTimer, but with no wave/active-state to gate on. */
   private merchantCheckTimer: Phaser.Time.TimerEvent | null = null;
   /** Phase 55: Random World Events - self-rescheduling timer mirroring merchantCheckTimer. */
@@ -959,10 +683,7 @@ export class MainScene extends Phaser.Scene {
   private dragStartWorldX = 0;
   private dragStartWorldY = 0;
   private cowboySelectionHintText!: Phaser.GameObjects.Text;
-  private connectionGraphics!: Phaser.GameObjects.Graphics;
-  private fenceLineGraphics!: Phaser.GameObjects.Graphics;
-  private hpBarGraphics!: Phaser.GameObjects.Graphics;
-  /** Phase 40: separate shared Graphics object for Cowboy/Cowboy-on-Horse/Raider HP bars, mirroring hpBarGraphics' one-Graphics-per-tick-redraw discipline rather than a GameObject per unit. */
+  /** Phase 40: separate shared Graphics object for Cowboy/Cowboy-on-Horse/Raider HP bars, mirroring WorldVisualsSystem's building hpBarGraphics' one-Graphics-per-tick-redraw discipline rather than a GameObject per unit. */
   private unitHpBarGraphics!: Phaser.GameObjects.Graphics;
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
@@ -983,11 +704,6 @@ export class MainScene extends Phaser.Scene {
   /** Phase 85: non-private - RaidSystem.resetRaidState() clears both wave-scoped maps. */
   minimapBuildingFlashes = new Map<string, MinimapBuildingFlash>();
   offscreenThreats = new Map<string, OffscreenThreat>();
-  /** Phase 48: chain-view map overlay - which resource (if any) ResourceHudPanel currently has selected, and a single shared Graphics redrawn on selection/placement changes (same pattern as connectionGraphics). */
-  private selectedResourceKey: ResourceKey | null = null;
-  /** Phase 48: 'C' toggles the overlay's visibility without forgetting the selection, distinct from Escape/re-click which clears it outright. */
-  private chainViewVisible = true;
-  private chainViewGraphics!: Phaser.GameObjects.Graphics;
 
   constructor() {
     super('MainScene');
@@ -1002,11 +718,18 @@ export class MainScene extends Phaser.Scene {
     this.input.addPointer(2);
 
     // Must run before anything that calls registerUiObject (setupInfoText
-    // onward); buildTilemap/setupVegetationVisuals create world-only objects
-    // and are unaffected by ordering here.
+    // onward); buildTilemap/worldVisualsSystem.setupVegetationVisuals create
+    // world-only objects and are unaffected by ordering here.
     this.setupUiCamera();
     this.buildTilemap();
-    this.setupVegetationVisuals();
+    // Phase 86: MainScene Decomposition Part 2. RaidSystem is constructed
+    // ahead of these two (unchanged from Phase 85) since AmbientLifeSystem's
+    // wildlife hunting AI reaches into it (pickRaidSpawnPoint,
+    // sampleForBlockingWall) via this.scene.raidSystem the moment it's set up.
+    this.raidSystem = new RaidSystem(this);
+    this.worldVisualsSystem = new WorldVisualsSystem(this);
+    this.ambientLifeSystem = new AmbientLifeSystem(this);
+    this.worldVisualsSystem.setupVegetationVisuals();
     this.setupCameraDrag();
     this.setupCameraZoom();
     this.setupTouchGestures();
@@ -1021,10 +744,10 @@ export class MainScene extends Phaser.Scene {
     this.setupBuildingRemoval();
     this.setupBuildingSelection();
     this.setupProductionTimer();
-    this.setupConnectionVisuals();
-    this.setupGoodsCarts();
-    this.setupFenceVisuals();
-    this.setupChainView();
+    this.worldVisualsSystem.setupConnectionVisuals();
+    this.ambientLifeSystem.setupGoodsCarts();
+    this.worldVisualsSystem.setupFenceVisuals();
+    this.worldVisualsSystem.setupChainView();
     this.setupAnimalVisuals();
     this.setupHouseTierVisuals();
     this.setupGateVisuals();
@@ -1032,19 +755,19 @@ export class MainScene extends Phaser.Scene {
     this.setupUnitControl();
     this.setupRallyPoints();
     this.setupHotkeys();
-    this.setupHpBarVisuals();
-    this.setupStatusBadges();
-    this.setupHarvestRadiusRing();
-    this.setupEnclosureDebugOverlay();
-    this.setupEnclosureExitHint();
+    this.worldVisualsSystem.setupHpBarVisuals();
+    this.setupUnitHpBarVisuals();
+    this.worldVisualsSystem.setupStatusBadges();
+    this.worldVisualsSystem.setupHarvestRadiusRing();
+    this.worldVisualsSystem.setupEnclosureDebugOverlay();
+    this.worldVisualsSystem.setupEnclosureExitHint();
     this.setupDayNightCycle();
     this.setupAudio();
-    this.raidSystem = new RaidSystem(this);
     this.raidSystem.setupRaidSystem();
     this.raidSystem.setupRaiderCamps();
     this.setupMerchantSystem();
     this.setupWorldEventSystem();
-    this.setupWildlifeSystem();
+    this.ambientLifeSystem.setupWildlifeSystem();
     this.setupNotificationLog();
     this.setupGameOverHalt();
     this.setupGameReset();
@@ -1195,56 +918,6 @@ export class MainScene extends Phaser.Scene {
       for (let x = 0; x < MAP_WIDTH_TILES; x++) {
         this.groundLayer.putTileAt(tileData[y][x], x, y);
       }
-    }
-  }
-
-  /**
-   * Phase 30: one sprite per live vegetation entity, keyed by entity id.
-   * Driven purely by the vegetation module's add/remove events (harvesting
-   * depleting a tree, a Forestry replanting one) rather than redrawn per
-   * tick, mirroring how animal sprites are driven only by 'animal-bought'.
-   */
-  private setupVegetationVisuals(): void {
-    this.redrawAllVegetation();
-
-    gameEvents.on('vegetation-added', (entity: VegetationEntity) => {
-      this.addVegetationSprite(entity);
-      this.redrawMinimap();
-    });
-
-    gameEvents.on('vegetation-removed', (entity: VegetationEntity) => {
-      const image = this.vegetationImages.get(entity.id);
-      if (image) {
-        this.tweens.killTweensOf(image);
-        image.destroy();
-        this.vegetationImages.delete(entity.id);
-      }
-      this.redrawMinimap();
-    });
-  }
-
-  private addVegetationSprite(entity: VegetationEntity): void {
-    const image = this.add
-      .image(entity.tileX * TILE_SIZE, entity.tileY * TILE_SIZE, VEGETATION_ATLAS_KEY, vegetationTextureKey(entity.kind))
-      .setOrigin(0, 0)
-      .setDepth(VEGETATION_DEPTH);
-    // Phase 34: a tree replanted at 2am must not be the only green thing on a
-    // blue map, so new sprites adopt the current phase's tint immediately.
-    if (getDayPhase() === 'night') {
-      image.setTint(VEGETATION_NIGHT_TINT);
-    }
-    this.vegetationImages.set(entity.id, image);
-  }
-
-  private redrawAllVegetation(): void {
-    for (const image of this.vegetationImages.values()) {
-      this.tweens.killTweensOf(image);
-      image.destroy();
-    }
-    this.vegetationImages.clear();
-
-    for (const entity of getVegetation()) {
-      this.addVegetationSprite(entity);
     }
   }
 
@@ -2084,7 +1757,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.minimapCombatGraphics.fillStyle(MINIMAP_WILDLIFE_COLOR, 1);
-    for (const creature of this.wildlife) {
+    for (const creature of this.ambientLifeSystem.wildlife) {
       const tileX = creature.image.x / TILE_SIZE;
       const tileY = creature.image.y / TILE_SIZE;
       this.minimapCombatGraphics.fillRect(
@@ -2206,7 +1879,7 @@ export class MainScene extends Phaser.Scene {
     const right = view.right + CULL_MARGIN_PX;
     const bottom = view.bottom + CULL_MARGIN_PX;
 
-    for (const visual of this.buildingVisuals.values()) {
+    for (const visual of this.worldVisualsSystem.buildingVisuals.values()) {
       const { width, height } = BUILDING_DEFINITIONS[visual.building.type].size;
       const buildingLeft = visual.building.tileX * TILE_SIZE;
       const buildingTop = visual.building.tileY * TILE_SIZE;
@@ -2227,12 +1900,12 @@ export class MainScene extends Phaser.Scene {
       }
     }
 
-    for (const image of this.vegetationImages.values()) {
+    for (const image of this.worldVisualsSystem.vegetationImages.values()) {
       const isVisible = image.x >= left && image.x <= right && image.y >= top && image.y <= bottom;
       image.setVisible(isVisible);
     }
 
-    for (const villager of this.villagers) {
+    for (const villager of this.ambientLifeSystem.villagers) {
       const isVisible =
         villager.image.x >= left && villager.image.x <= right && villager.image.y >= top && villager.image.y <= bottom;
       villager.image.setVisible(isVisible);
@@ -2581,7 +2254,7 @@ export class MainScene extends Phaser.Scene {
     );
     this.lineCostText.setVisible(true);
     this.placementHintText.setVisible(false);
-    this.harvestRingGraphics.clear();
+    this.worldVisualsSystem.clearHarvestRing();
   }
 
   /**
@@ -2640,7 +2313,7 @@ export class MainScene extends Phaser.Scene {
 
     // Phase 34: a harvester's reach is drawn under the preview so "will this
     // actually reach anything" is answerable before paying for it.
-    this.redrawHarvestRing(tileX, tileY);
+    this.worldVisualsSystem.redrawHarvestRing(tileX, tileY);
 
     const rejection = getPlacementRejection(tileX, tileY, this.selectedType);
     this.previewImage.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
@@ -2743,9 +2416,9 @@ export class MainScene extends Phaser.Scene {
    */
   private setupBuildingRemoval(): void {
     gameEvents.on('building-removed', ({ building, reason }: BuildingRemovedPayload) => {
-      const visual = this.buildingVisuals.get(building.id);
+      const visual = this.worldVisualsSystem.buildingVisuals.get(building.id);
       if (visual) {
-        this.buildingVisuals.delete(building.id);
+        this.worldVisualsSystem.buildingVisuals.delete(building.id);
 
         for (const animalImage of visual.animalImages) {
           this.tweens.killTweensOf(animalImage);
@@ -2766,16 +2439,16 @@ export class MainScene extends Phaser.Scene {
 
       this.removeUnitsOfBuilding(building.id);
       if (building.type === BuildingType.House) {
-        this.removeVillagersForLostHouse();
+        this.ambientLifeSystem.removeVillagersForLostHouse();
       }
 
       if (this.selectedBuildingId === building.id) {
         gameEvents.emit('building-selected', null);
       }
 
-      this.redrawConnectionOutlines();
-      this.redrawFenceLines();
-      this.redrawHpBars();
+      this.worldVisualsSystem.redrawConnectionOutlines();
+      this.worldVisualsSystem.redrawFenceLines();
+      this.worldVisualsSystem.redrawHpBars();
       this.redrawMinimap();
     });
   }
@@ -2846,25 +2519,6 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /**
-   * A destroyed House takes its population with it (gameState recomputes
-   * total population from the House count every tick), so the same number of
-   * villager sprites has to go too or the town would keep visibly bustling
-   * with people it no longer houses. Removed LIFO, mirroring the order
-   * spawnVillagersForHouse added them under VILLAGER_CAP.
-   */
-  private removeVillagersForLostHouse(): void {
-    const removeCount = Math.min(POPULATION_PER_HOUSE, this.villagers.length);
-    for (let index = 0; index < removeCount; index++) {
-      const villager = this.villagers.pop();
-      if (!villager) {
-        break;
-      }
-      this.tweens.killTweensOf(villager.image);
-      villager.image.destroy();
-    }
-  }
-
   /** Units are owned by the building that trained them, so they go when it does. */
   private removeUnitsOfBuilding(buildingId: string): void {
     const survivors: CombatUnit[] = [];
@@ -2904,89 +2558,15 @@ export class MainScene extends Phaser.Scene {
     // A freshly placed Barracks/Horsery always starts with zero trained units
     // (see gameState.ts), so there is nothing to spawn here - Cowboy/mounted-
     // Cowboy units only ever appear via the 'cowboy-trained'/'mounted-cowboy-
-    // trained' events. A loaded save's restoreBuildingVisual, below, is the
-    // one path that DOES need to spawn units up front (a restored Barracks
-    // can already have a nonzero cowboyCount).
-    this.createVisualForBuilding(building);
+    // trained' events. A loaded save's worldVisualsSystem.restoreBuildingVisual,
+    // used elsewhere, is the one path that DOES need to spawn units up front
+    // (a restored Barracks can already have a nonzero cowboyCount).
+    this.worldVisualsSystem.createVisualForBuilding(building);
     // Phase 82: cull immediately so a building placed off-screen (e.g. the
     // far end of a drag-placed Road/Fence line) starts in the correct
     // visibility state rather than waiting for the next throttled tick.
     this.updateViewportCulling();
     return true;
-  }
-
-  /**
-   * The visual-creation half of placeBuildingAt (image + animals + accents +
-   * villagers), split out in Phase 52 so a loaded save's restoreBuildingVisual
-   * can build the exact same visual for a building it didn't just place
-   * through gameState.placeBuilding - avoiding a second, parallel
-   * visual-creation path that could drift from this one.
-   */
-  private createVisualForBuilding(building: PlacedBuilding): BuildingVisual {
-    const image = this.add
-      .image(
-        building.tileX * TILE_SIZE,
-        building.tileY * TILE_SIZE,
-        BUILDING_ATLAS_KEY,
-        buildingTextureKey(building.type, building.houseTier, building.gateOpen),
-      )
-      .setOrigin(0, 0)
-      .setDepth(10);
-
-    const visual: BuildingVisual = {
-      building,
-      image,
-      animalImages: [],
-      accentObjects: [],
-      nightAccents: [],
-    };
-    this.buildingVisuals.set(building.id, visual);
-    if (
-      building.type === BuildingType.Fence ||
-      building.type === BuildingType.Gate ||
-      building.type === BuildingType.WoodenWall ||
-      building.type === BuildingType.WoodenGate
-    ) {
-      // connections-updated already fired before this building's visual existed; redraw now that it does.
-      this.redrawFenceLines();
-    }
-    this.redrawAnimalSprites(visual);
-    this.createBuildingAccents(visual);
-    if (building.type === BuildingType.House) {
-      this.spawnVillagersForHouse(building);
-    }
-    return visual;
-  }
-
-  /**
-   * Phase 52: the load-time counterpart to placeBuildingAt. Builds the exact
-   * same visual (createVisualForBuilding) but additionally re-spawns any
-   * garrisoned units the restored building's per-kind HP arrays record - a
-   * freshly-placed building can never have these (see placeBuildingAt's
-   * comment), but a loaded one can. Spawned at the unit's static home slot
-   * (spawnUnitOfKind), not wherever it was standing when the save was made -
-   * see persistence.ts's doc comment for why live unit position is out of
-   * scope for this phase. Phase 58: a Barracks now has three garrisoned kinds
-   * to restore instead of one.
-   */
-  private restoreBuildingVisual(building: PlacedBuilding): void {
-    this.createVisualForBuilding(building);
-
-    const restoreKind = (kind: UnitKind, hpArray: number[]) => {
-      for (let index = 0; index < hpArray.length; index++) {
-        if (hpArray[index] > 0) {
-          this.spawnUnitOfKind(building, kind, index);
-        }
-      }
-    };
-
-    if (building.type === BuildingType.Barracks) {
-      restoreKind('cowboy', building.cowboyHp);
-      restoreKind('brawler', building.brawlerHp);
-      restoreKind('dynamiter', building.dynamiterHp);
-    } else if (building.type === BuildingType.Horsery) {
-      restoreKind('cowboyOnHorse', building.mountedCowboyHp);
-    }
   }
 
   private tryPlaceAt(pointer: Phaser.Input.Pointer): void {
@@ -3003,349 +2583,29 @@ export class MainScene extends Phaser.Scene {
     this.applyShiftRepeatPolicy();
   }
 
-  /** Building-type-gated idle-animation accents (Phase 19); only these 5 types get one, everything else gets nothing. */
-  private createBuildingAccents(visual: BuildingVisual): void {
-    const { building } = visual;
-    const originX = building.tileX * TILE_SIZE;
-    const originY = building.tileY * TILE_SIZE;
-
-    switch (building.type) {
-      case BuildingType.Well:
-        visual.accentObjects.push(this.createWellCrankAccent(originX, originY));
-        break;
-      case BuildingType.Warehouse:
-        visual.accentObjects.push(this.createWarehouseDoorAccent(originX, originY));
-        break;
-      case BuildingType.Supermarket:
-        visual.accentObjects.push(this.createSupermarketAwningAccent(originX, originY));
-        break;
-      case BuildingType.ChickenFarm:
-        visual.accentObjects.push(this.createChickenDoorAccent(originX, originY));
-        break;
-      case BuildingType.House:
-        visual.accentObjects.push(...this.createHouseSmokeAccents(originX, originY));
-        break;
-      default:
-        break;
-    }
-
-    this.createNightAccents(visual, originX, originY);
-  }
-
-  /**
-   * Phase 34: the night-only half of a building's accents. Created here with
-   * everything else (never at a phase boundary) and simply held at alpha 0
-   * through the day, so a phase change is a tween on existing objects rather
-   * than a create/destroy churn across every House on the map.
-   */
-  private createNightAccents(visual: BuildingVisual, originX: number, originY: number): void {
-    const { building } = visual;
-
-    if (building.type === BuildingType.House) {
-      // Sits over the House's front window, centred on its 1x1 footprint.
-      const light = this.createAccentImage(originX + 12, originY + 16, 'HouseWindowLight').setOrigin(0, 0);
-      visual.nightAccents.push(light);
-      visual.accentObjects.push(light);
-    }
-
-    if (building.type === BuildingType.Barracks) {
-      // Pitched just outside the Barracks' footprint, in its yard.
-      const fire = this.createAccentImage(originX + 4, originY + 46, 'Campfire').setOrigin(0, 0);
-      visual.nightAccents.push(fire);
-      visual.accentObjects.push(fire);
-
-      // Flicker runs permanently; it's only ever visible when the alpha tween
-      // below has faded the fire in, so there's nothing to start/stop.
-      this.tweens.add({
-        targets: fire,
-        scaleY: 1.15,
-        duration: CAMPFIRE_FLICKER_MS,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
-    }
-
-    // Read from the overlay's live alpha rather than a binary day/night check,
-    // so a House placed halfway through dusk lights its window to match the
-    // current darkness instead of popping to fully lit (or staying dark until
-    // the next phase change).
-    const nightFactor = this.nightOverlay.getNightFactor();
-    for (const accent of visual.nightAccents) {
-      accent.setAlpha(nightFactor * NIGHT_ACCENT_MAX_ALPHA);
-    }
-  }
-
-  private createAccentImage(x: number, y: number, kind: AccentKind): Phaser.GameObjects.Image {
-    return this.add.image(x, y, ACCENTS_ATLAS_KEY, accentTextureKey(kind)).setDepth(ACCENT_DEPTH);
-  }
-
-  /** Crank bar pivots from its own center, between the well's support posts; starts at -15deg so the yoyo tween sweeps it through 0 up to +15deg. */
-  private createWellCrankAccent(originX: number, originY: number): Phaser.GameObjects.Image {
-    const crank = this.createAccentImage(originX + 16, originY + 2, 'WellCrank').setOrigin(0.5, 0.5);
-    crank.setAngle(-WELL_CRANK_ANGLE_DEG);
-
-    this.tweens.add({
-      targets: crank,
-      angle: WELL_CRANK_ANGLE_DEG,
-      duration: WELL_CRANK_TWEEN_MS,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-
-    return crank;
-  }
-
-  /**
-   * Pivots from its top edge (hinge) rather than a symmetric center swing:
-   * a real hay-loft door only opens outward one way, and a top-hinged swing
-   * reads more clearly at this scale than the doc's suggested -8/+8 center
-   * rotation, which looked like the whole door wobbling in place.
-   */
-  private createWarehouseDoorAccent(originX: number, originY: number): Phaser.GameObjects.Image {
-    const door = this.createAccentImage(originX + 28, originY + 24, 'WarehouseDoor').setOrigin(0.5, 0);
-
-    this.tweens.add({
-      targets: door,
-      angle: WAREHOUSE_DOOR_SWING_ANGLE_DEG,
-      duration: WAREHOUSE_DOOR_TWEEN_MS,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-
-    return door;
-  }
-
-  private createSupermarketAwningAccent(originX: number, originY: number): Phaser.GameObjects.Image {
-    const awning = this.createAccentImage(originX + 32, originY + 8, 'SupermarketAwning').setOrigin(0.5, 0.5);
-    awning.setScale(SUPERMARKET_AWNING_SCALE_X_MIN, 1);
-
-    this.tweens.add({
-      targets: awning,
-      scaleX: SUPERMARKET_AWNING_SCALE_X_MAX,
-      duration: SUPERMARKET_AWNING_TWEEN_MS,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-
-    return awning;
-  }
-
-  /**
-   * Duration and repeatDelay are randomized once per building instance (not
-   * per repeat cycle - Phaser tween repeatDelay is fixed once the tween is
-   * created) so multiple chicken farms don't flap in lockstep; each single
-   * building's own cycle stays regular.
-   */
-  private createChickenDoorAccent(originX: number, originY: number): Phaser.GameObjects.Image {
-    const door = this.createAccentImage(originX + 16, originY + 28, 'ChickenDoor').setOrigin(0.5, 1);
-    const duration = Phaser.Math.Between(CHICKEN_DOOR_DURATION_MIN_MS, CHICKEN_DOOR_DURATION_MAX_MS);
-    const repeatDelay = Phaser.Math.Between(CHICKEN_DOOR_REPEAT_DELAY_MIN_MS, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
-    const delay = Phaser.Math.Between(0, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
-
-    this.tweens.add({
-      targets: door,
-      scaleY: CHICKEN_DOOR_SCALE_Y_CLOSED,
-      duration,
-      delay,
-      repeatDelay,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-
-    return door;
-  }
-
-  /**
-   * Three plain circles rather than atlas sprites - a fading puff has no
-   * silhouette detail worth pixel-art treatment. Each tween's `repeat: -1`
-   * automatically snaps y/alpha back to their starting values before
-   * re-running, so no manual reset is needed; the staggered `delay` per
-   * puff is what keeps them from rising in sync.
-   */
-  private createHouseSmokeAccents(originX: number, originY: number): Phaser.GameObjects.Arc[] {
-    const startX = originX + 16;
-    const startY = originY + 2;
-    const puffs: Phaser.GameObjects.Arc[] = [];
-
-    for (let index = 0; index < HOUSE_SMOKE_PUFF_COUNT; index++) {
-      const puff = this.add
-        .circle(startX, startY, HOUSE_SMOKE_PUFF_RADIUS, HOUSE_SMOKE_COLOR, HOUSE_SMOKE_START_ALPHA)
-        .setDepth(ACCENT_DEPTH);
-      const duration = Phaser.Math.Between(HOUSE_SMOKE_DURATION_MIN_MS, HOUSE_SMOKE_DURATION_MAX_MS);
-
-      this.tweens.add({
-        targets: puff,
-        y: startY - HOUSE_SMOKE_RISE_PX,
-        alpha: 0,
-        duration,
-        delay: index * HOUSE_SMOKE_STAGGER_MS,
-        repeat: -1,
-        ease: 'Sine.easeOut',
-      });
-
-      puffs.push(puff);
-    }
-
-    return puffs;
-  }
-
-  private setupConnectionVisuals(): void {
-    this.connectionGraphics = this.add.graphics();
-    this.connectionGraphics.setDepth(20);
-
-    gameEvents.on('connections-updated', () => this.redrawConnectionOutlines());
-  }
-
-  private redrawConnectionOutlines(): void {
-    this.connectionGraphics.clear();
-    this.connectionGraphics.lineStyle(3, 0x00ff00, 1);
-
-    for (const { building } of this.buildingVisuals.values()) {
-      if (!building.connected) {
-        continue;
-      }
-      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-      const px = building.tileX * TILE_SIZE;
-      const py = building.tileY * TILE_SIZE;
-      this.connectionGraphics.strokeRect(px + 1, py + 1, width * TILE_SIZE - 2, height * TILE_SIZE - 2);
-    }
-  }
-
-  private setupFenceVisuals(): void {
-    this.fenceLineGraphics = this.add.graphics();
-    this.fenceLineGraphics.setDepth(15);
-
-    gameEvents.on('connections-updated', () => this.redrawFenceLines());
-  }
-
-  private redrawFenceLines(): void {
-    this.fenceLineGraphics.clear();
-    this.fenceLineGraphics.lineStyle(4, FENCE_LINE_COLOR, 1);
-
-    for (const { fromId, toId } of getFenceLinks()) {
-      const from = this.buildingVisuals.get(fromId);
-      const to = this.buildingVisuals.get(toId);
-      if (!from || !to) {
-        continue;
-      }
-      const fromCenter = this.tileCenter(from.building);
-      const toCenter = this.tileCenter(to.building);
-      this.fenceLineGraphics.lineBetween(fromCenter.x, fromCenter.y, toCenter.x, toCenter.y);
-    }
-  }
-
-  /**
-   * Phase 48: Chain Encyclopedia & Resource Tooltips' map-side half. Mirrors
-   * redrawConnectionOutlines' one-shared-Graphics-object approach rather than
-   * a GameObject per highlighted building - a rect stroke per currently-
-   * placed building whose type produces or consumes the ResourceHudPanel-
-   * selected resource (config/resourceGraph.ts's getResourceChainBuildingTypes,
-   * itself derived from BUILDING_DEFINITIONS/HOUSE_TIER_CONFIG/the sell-rate
-   * tables - no new PlacedBuilding state, purely informational). Redrawn on
-   * selection change and on 'connections-updated' (fired on every placement/
-   * removal, regardless of building type) so a newly-placed matching building
-   * lights up without a dedicated 'building-placed' listener.
-   */
-  private setupChainView(): void {
-    this.chainViewGraphics = this.add.graphics();
-    this.chainViewGraphics.setDepth(21);
-
-    gameEvents.on('resource-selected', (key: ResourceKey | null) => {
-      this.selectedResourceKey = key;
-      this.redrawChainViewHighlight();
-    });
-    gameEvents.on('connections-updated', () => this.redrawChainViewHighlight());
-
-    this.input.keyboard?.on('keydown-ESC', () => {
-      if (this.selectedResourceKey !== null) {
-        gameEvents.emit('resource-selected', null);
-      }
-    });
-  }
-
-  private redrawChainViewHighlight(): void {
-    this.chainViewGraphics.clear();
-    if (!this.selectedResourceKey || !this.chainViewVisible) {
-      return;
-    }
-
-    const chainTypes = getResourceChainBuildingTypes(this.selectedResourceKey);
-    this.chainViewGraphics.lineStyle(3, CHAIN_VIEW_HIGHLIGHT_COLOR, 1);
-
-    for (const building of getPlacedBuildings()) {
-      if (!chainTypes.has(building.type)) {
-        continue;
-      }
-      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-      const px = building.tileX * TILE_SIZE;
-      const py = building.tileY * TILE_SIZE;
-      this.chainViewGraphics.strokeRect(px + 1, py + 1, width * TILE_SIZE - 2, height * TILE_SIZE - 2);
-    }
-  }
-
-  /** 'C' toggles the overlay's visibility without discarding the current selection - unlike Escape/re-click, which clear it outright. No-op if nothing is selected. */
-  private toggleChainViewVisibility(): void {
-    if (!this.selectedResourceKey) {
-      return;
-    }
-    this.chainViewVisible = !this.chainViewVisible;
-    this.redrawChainViewHighlight();
-  }
-
-  private setupHpBarVisuals(): void {
-    this.hpBarGraphics = this.add.graphics();
-    this.hpBarGraphics.setDepth(HP_BAR_DEPTH);
+  /** Phase 86: split off from the old setupHpBarVisuals - building HP bars (hpBarGraphics/redrawHpBars) moved to WorldVisualsSystem; this keeps just the unit/raider/camp half, which is fused with combat state and stays here. */
+  private setupUnitHpBarVisuals(): void {
     this.unitHpBarGraphics = this.add.graphics();
     this.unitHpBarGraphics.setDepth(HP_BAR_DEPTH);
 
-    // Redrawn every tick (cheap at this building count) rather than only on
-    // damage events, since no damage source exists yet - this keeps the bars
-    // correct automatically once one is added later.
-    gameEvents.on('production-tick', () => this.redrawHpBars());
     // Phase 40: unit HP doesn't regenerate, so this only ever needs to react
     // to combat (runRaidCombatTick already calls it directly after damage is
     // applied) - but it's also hooked to the same production-tick cadence as
-    // the building bars above so a unit trained/healed mid-tick still reads
+    // the building bars so a unit trained/healed mid-tick still reads
     // correctly even outside an active raid.
     gameEvents.on('production-tick', () => this.redrawUnitHpBars());
-  }
-
-  private redrawHpBars(): void {
-    this.hpBarGraphics.clear();
-
-    for (const { building } of this.buildingVisuals.values()) {
-      const { size, maxHp } = BUILDING_DEFINITIONS[building.type];
-      if (building.hp >= maxHp) {
-        continue;
-      }
-
-      const barWidth = size.width * TILE_SIZE - 4;
-      const px = building.tileX * TILE_SIZE + 2;
-      const py = building.tileY * TILE_SIZE - HP_BAR_HEIGHT - HP_BAR_MARGIN_ABOVE_BUILDING;
-      const ratio = Math.max(0, building.hp / maxHp);
-
-      this.hpBarGraphics.fillStyle(HP_BAR_BG_COLOR, 1);
-      this.hpBarGraphics.fillRect(px, py, barWidth, HP_BAR_HEIGHT);
-      this.hpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
-      this.hpBarGraphics.fillRect(px, py, barWidth * ratio, HP_BAR_HEIGHT);
-    }
   }
 
   /**
    * Phase 40: one shared Graphics object for every live Cowboy/Cowboy-on-Horse
    * and every live raider, redrawn wholesale each call - same discipline as
-   * redrawHpBars, just iterating cowboyUnits/raiders instead of
-   * buildingVisuals. Player units hide their bar at full HP (matching the
-   * building convention); raiders always show theirs since they're
-   * transient, combat-only entities where "how close is this one to dying"
-   * is useful at a glance even at full health. Phase 57: every live Raider
-   * Camp gets the same always-shown treatment as a raider - it's a standing
-   * objective the player is actively expected to whittle down.
+   * WorldVisualsSystem's building redrawHpBars, just iterating cowboyUnits/
+   * raiders instead of buildingVisuals. Player units hide their bar at full
+   * HP (matching the building convention); raiders always show theirs since
+   * they're transient, combat-only entities where "how close is this one to
+   * dying" is useful at a glance even at full health. Phase 57: every live
+   * Raider Camp gets the same always-shown treatment as a raider - it's a
+   * standing objective the player is actively expected to whittle down.
    */
   private redrawUnitHpBars(): void {
     this.unitHpBarGraphics.clear();
@@ -3405,349 +2665,6 @@ export class MainScene extends Phaser.Scene {
     this.unitHpBarGraphics.fillRect(px, py, UNIT_HP_BAR_WIDTH, UNIT_HP_BAR_HEIGHT);
     this.unitHpBarGraphics.fillStyle(ratio > 0 ? HP_BAR_FILL_COLOR : HP_BAR_EMPTY_COLOR, 1);
     this.unitHpBarGraphics.fillRect(px, py, UNIT_HP_BAR_WIDTH * ratio, UNIT_HP_BAR_HEIGHT);
-  }
-
-  /**
-   * Phase 34: understaffed / upkeep-unpaid badge over the building sprite.
-   *
-   * These two states are by far the most common reason a building silently
-   * produces nothing, and until now the only way to find out was to click the
-   * building and read the info panel - which is exactly why Bug 1's bogus "no
-   * trees nearby" message went unchallenged for so long. Redrawn on the
-   * production tick alongside the HP bars, since both staffing and upkeep are
-   * recomputed from scratch every tick in gameState.
-   */
-  private setupStatusBadges(): void {
-    this.statusBadgeGraphics = this.add.graphics().setDepth(STATUS_BADGE_DEPTH);
-    gameEvents.on('production-tick', () => this.redrawStatusBadges());
-  }
-
-  private redrawStatusBadges(): void {
-    this.statusBadgeGraphics.clear();
-
-    for (const { building } of this.buildingVisuals.values()) {
-      const workersRequired = getWorkersRequired(building.type);
-      const understaffed = workersRequired > 0 && !building.staffed;
-      if (!understaffed && !building.disabled) {
-        continue;
-      }
-
-      // Unpaid outranks understaffed: an unpaid building has money as its
-      // blocker, and the player fixing staffing first would achieve nothing.
-      const color = building.disabled ? STATUS_BADGE_UNPAID_COLOR : STATUS_BADGE_UNSTAFFED_COLOR;
-      const { width } = BUILDING_DEFINITIONS[building.type].size;
-      const x = building.tileX * TILE_SIZE + width * TILE_SIZE - STATUS_BADGE_SIZE - 1;
-      const y = building.tileY * TILE_SIZE + 1;
-
-      this.statusBadgeGraphics.fillStyle(STATUS_BADGE_OUTLINE_COLOR, 0.9);
-      this.statusBadgeGraphics.fillRect(x - 1, y - 1, STATUS_BADGE_SIZE + 2, STATUS_BADGE_SIZE + 2);
-      this.statusBadgeGraphics.fillStyle(color, 1);
-      this.statusBadgeGraphics.fillRect(x, y, STATUS_BADGE_SIZE, STATUS_BADGE_SIZE);
-      // A dark notch punched out of the middle reads as an exclamation mark
-      // at this size, which two solid colours alone would not.
-      this.statusBadgeGraphics.fillStyle(STATUS_BADGE_OUTLINE_COLOR, 1);
-      this.statusBadgeGraphics.fillRect(x + 3, y + 1, 2, 4);
-      this.statusBadgeGraphics.fillRect(x + 3, y + 6, 2, 1);
-    }
-  }
-
-  /**
-   * Phase 34: the harvest radius, drawn both while previewing a harvester's
-   * placement and while one is selected. Deliberately drawn as a square rather
-   * than a circle: findNearestVegetation/countVegetationInRadius both use a
-   * square (Chebyshev) radius test, so a circle would be a picture of a rule
-   * the game does not implement - the corners would look out of range and
-   * still be harvested.
-   *
-   * Phase 70: reused verbatim for Church's service radius (also a square/
-   * Chebyshev distance test - isServedByChurch/getChurchRadius in gameState.ts)
-   * rather than a second Graphics object and event-wiring block, since the
-   * two rings are drawn in the exact same two contexts (placement preview,
-   * currently-selected building) and never need to be visible simultaneously.
-   */
-  private setupHarvestRadiusRing(): void {
-    this.harvestRingGraphics = this.add.graphics().setDepth(HARVEST_RING_DEPTH);
-
-    gameEvents.on('building-selected', () => this.redrawHarvestRing());
-    gameEvents.on('cancel-placement', () => this.redrawHarvestRing());
-    // Vegetation appearing/disappearing inside the ring flips its colour.
-    gameEvents.on('vegetation-added', () => this.redrawHarvestRing());
-    gameEvents.on('vegetation-removed', () => this.redrawHarvestRing());
-    // Phase 70: hiring clergy changes a live Church's radius/coverage; a
-    // production tick can flip a House's served/unserved status even with no
-    // radius change (a Church going unstaffed/disabled/destroyed).
-    gameEvents.on('money-changed', () => this.redrawHarvestRing());
-    gameEvents.on('production-tick', () => this.redrawHarvestRing());
-    gameEvents.on('game-reset', () => this.harvestRingGraphics.clear());
-  }
-
-  /**
-   * Drawn for whichever of the two contexts is live: the placement preview
-   * takes priority (the player is actively deciding where to put one), and
-   * otherwise the currently selected building's own radius is shown.
-   */
-  private redrawHarvestRing(previewTileX?: number, previewTileY?: number): void {
-    this.harvestRingGraphics.clear();
-
-    if (this.selectedType !== null) {
-      const harvest = BUILDING_DEFINITIONS[this.selectedType].harvest;
-      if (harvest && previewTileX !== undefined && previewTileY !== undefined) {
-        const center = getHarvestCenterTile(previewTileX, previewTileY, this.selectedType);
-        this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
-      } else if (
-        this.selectedType === BuildingType.Church &&
-        previewTileX !== undefined &&
-        previewTileY !== undefined
-      ) {
-        // A freshly-placed Church starts with 0 clergy, so the preview shows
-        // just its base radius (CHURCH_BASE_RADIUS_TILES) - no live building
-        // exists yet to read nunCount/priestCount off of.
-        const center = getHarvestCenterTile(previewTileX, previewTileY, this.selectedType);
-        this.drawServiceRing(center.tileX, center.tileY, CHURCH_BASE_RADIUS_TILES, true);
-      }
-      return;
-    }
-
-    const selected = this.selectedBuildingId ? getBuildingById(this.selectedBuildingId) : null;
-    if (!selected) {
-      return;
-    }
-    const harvest = BUILDING_DEFINITIONS[selected.type].harvest;
-    if (harvest) {
-      const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
-      this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
-      return;
-    }
-    if (selected.type === BuildingType.Church) {
-      const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
-      // A Church's own ring is always "served" green - it's the source of
-      // coverage, not a consumer of it; empty/red is reserved for a House
-      // with nothing covering it (see the House branch below).
-      this.drawServiceRing(center.tileX, center.tileY, getChurchRadius(selected), true);
-      return;
-    }
-    if (selected.type === BuildingType.House) {
-      const tierConfig = HOUSE_TIER_CONFIG[selected.houseTier];
-      const nextTier = selected.houseTier < 3 ? ((selected.houseTier + 1) as HouseTier) : null;
-      const nextTierConfig = nextTier !== null ? HOUSE_TIER_CONFIG[nextTier] : null;
-      if (tierConfig.requiresChurch || nextTierConfig?.requiresChurch) {
-        // A House has no radius of its own to draw - instead, ring the
-        // nearest Church's actual coverage area (if any) so the player can
-        // see at a glance whether this House sits inside it. No Church at
-        // all anywhere on the map simply draws nothing (there's no radius to
-        // show), matching the harvest ring's own "nothing to draw" behavior
-        // when a harvester has no vegetation kind configured.
-        this.drawNearestChurchRingFor(selected);
-      }
-    }
-  }
-
-  /** Finds and rings whichever Church is actually serving (or nearly serving) `house` - the nearest one, regardless of whether it currently qualifies, so the player can see how close they are. */
-  private drawNearestChurchRingFor(house: PlacedBuilding): void {
-    const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
-    let nearest: PlacedBuilding | null = null;
-    let nearestDistance = Infinity;
-    for (const building of getPlacedBuildings()) {
-      if (building.type !== BuildingType.Church) {
-        continue;
-      }
-      const churchCenter = getHarvestCenterTile(building.tileX, building.tileY, building.type);
-      const distance = Math.max(
-        Math.abs(houseCenter.tileX - churchCenter.tileX),
-        Math.abs(houseCenter.tileY - churchCenter.tileY),
-      );
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = building;
-      }
-    }
-    if (!nearest) {
-      return;
-    }
-    const center = getHarvestCenterTile(nearest.tileX, nearest.tileY, nearest.type);
-    this.drawServiceRing(center.tileX, center.tileY, getChurchRadius(nearest), isServedByChurch(house));
-  }
-
-  private drawHarvestRing(
-    centerTileX: number,
-    centerTileY: number,
-    radiusTiles: number,
-    kind: VegetationEntity['kind'],
-  ): void {
-    const hasVegetation = countVegetationInRadius(kind, centerTileX, centerTileY, radiusTiles) > 0;
-    this.drawServiceRing(centerTileX, centerTileY, radiusTiles, hasVegetation);
-  }
-
-  /** The shared square-ring (Chebyshev) primitive both the harvest radius and Church's service radius draw through - green when `ok`, red otherwise. */
-  private drawServiceRing(centerTileX: number, centerTileY: number, radiusTiles: number, ok: boolean): void {
-    const color = ok ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR;
-
-    const px = (centerTileX - radiusTiles) * TILE_SIZE;
-    const py = (centerTileY - radiusTiles) * TILE_SIZE;
-    const size = (radiusTiles * 2 + 1) * TILE_SIZE;
-
-    this.harvestRingGraphics.fillStyle(color, HARVEST_RING_FILL_ALPHA);
-    this.harvestRingGraphics.fillRect(px, py, size, size);
-    this.harvestRingGraphics.lineStyle(2, color, 0.9);
-    this.harvestRingGraphics.strokeRect(px, py, size, size);
-  }
-
-  /**
-   * Real Fence Enclosures debug overlay: off by default (enclosureDebugVisible
-   * starts false), toggled by the 'E' hotkey. Redrawn only on events that
-   * could plausibly change a farm's cached enclosure result - never on a
-   * timer/per-frame - and a no-op draw (just cleared) whenever it's hidden, so
-   * toggling it off costs nothing per tick either.
-   */
-  private setupEnclosureDebugOverlay(): void {
-    this.enclosureDebugGraphics = this.add.graphics().setDepth(ENCLOSURE_DEBUG_DEPTH);
-
-    const redraw = () => this.redrawEnclosureDebugOverlay();
-    gameEvents.on('building-placed', redraw);
-    gameEvents.on('building-removed', redraw);
-    gameEvents.on('building-repaired', redraw);
-    gameEvents.on('game-loaded', redraw);
-    gameEvents.on('game-reset', () => this.enclosureDebugGraphics.clear());
-  }
-
-  private toggleEnclosureDebugOverlay(): void {
-    this.enclosureDebugVisible = !this.enclosureDebugVisible;
-    this.redrawEnclosureDebugOverlay();
-  }
-
-  private redrawEnclosureDebugOverlay(): void {
-    this.enclosureDebugGraphics.clear();
-    if (!this.enclosureDebugVisible) {
-      return;
-    }
-
-    for (const building of getPlacedBuildings()) {
-      const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
-      if (!animalConfig) {
-        continue;
-      }
-      const enclosure = getEnclosureFor(building.id);
-      if (!enclosure) {
-        continue;
-      }
-
-      if (!enclosure.closed) {
-        // Nothing enclosed to shade - just outline the farm's own footprint
-        // in red so it's clear at a glance which farms are unfenced.
-        const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-        this.enclosureDebugGraphics.lineStyle(2, ENCLOSURE_OPEN_COLOR, 0.9);
-        this.enclosureDebugGraphics.strokeRect(
-          building.tileX * TILE_SIZE,
-          building.tileY * TILE_SIZE,
-          width * TILE_SIZE,
-          height * TILE_SIZE,
-        );
-        continue;
-      }
-
-      this.enclosureDebugGraphics.fillStyle(ENCLOSURE_VALID_COLOR, ENCLOSURE_DEBUG_FILL_ALPHA);
-      for (const tile of enclosure.enclosedTiles) {
-        this.enclosureDebugGraphics.fillRect(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-      }
-      this.enclosureDebugGraphics.lineStyle(2, ENCLOSURE_VALID_COLOR, 0.9);
-      for (const tile of enclosure.enclosedTiles) {
-        this.enclosureDebugGraphics.strokeRect(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-      }
-    }
-  }
-
-  /**
-   * Enclosure Detection Fix & Exit Indicator: unlike the 'E' debug overlay
-   * above (off by default, a diagnostic tool), this arrow is always active -
-   * it's a placement aid a player needs to see without knowing a debug
-   * hotkey exists. Redrawn on exactly the same set of "a farm's cached
-   * enclosure might have changed" events the debug overlay already listens
-   * for, plus 'building-selected' (the selected-farm-always-shown half of
-   * the visibility rule) and 'cancel-placement' (selection can change
-   * without a fresh building-selected emit in a couple of UI paths - cheap
-   * to redraw defensively here since this whole pass is O(placed farms)).
-   */
-  private setupEnclosureExitHint(): void {
-    this.enclosureExitHintGraphics = this.add.graphics().setDepth(ENCLOSURE_EXIT_HINT_DEPTH);
-
-    const redraw = () => this.redrawEnclosureExitHints();
-    gameEvents.on('building-placed', redraw);
-    gameEvents.on('building-removed', redraw);
-    gameEvents.on('building-repaired', redraw);
-    gameEvents.on('game-loaded', redraw);
-    gameEvents.on('building-selected', redraw);
-    gameEvents.on('cancel-placement', redraw);
-    // Phase 69: a WoodenGate toggling open/closed can flip a nearby farm's
-    // enclosure validity the same tick (setGateOpen/setAllGates already
-    // recomputed the cache before firing this event).
-    gameEvents.on('gate-state-changed', redraw);
-    gameEvents.on('game-reset', () => this.enclosureExitHintGraphics.clear());
-  }
-
-  private redrawEnclosureExitHints(): void {
-    this.enclosureExitHintGraphics.clear();
-
-    for (const building of getPlacedBuildings()) {
-      const animalConfig = BUILDING_DEFINITIONS[building.type].animal;
-      if (!animalConfig) {
-        continue;
-      }
-      // Item 4: fires on "not closed" rather than the old "not valid" -
-      // once the perimeter is closed there is no more wall to build at this
-      // specific spot, whether or not the pen is big enough yet (a
-      // closed-but-too-small pen needs more enclosed AREA, not a wall
-      // segment here - pointing the arrow there would be misleading, see
-      // this feature's doc comment above). Unlike the pre-Item-4 behavior,
-      // a selected-but-closed farm no longer keeps showing the arrow: there
-      // is nothing left for it to usefully suggest once the loop is shut.
-      const enclosure = getEnclosureFor(building.id);
-      if (enclosure && enclosure.closed) {
-        continue;
-      }
-
-      const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-      // Deterministic anchor: bottom-center tile of the footprint, one tile
-      // further south (outside the footprint) - same spot every redraw for a
-      // given building, regardless of enclosure state.
-      const anchorTileX = building.tileX + Math.floor((width - 1) / 2);
-      const anchorTileY = building.tileY + height;
-      const px = anchorTileX * TILE_SIZE + TILE_SIZE / 2;
-      const py = anchorTileY * TILE_SIZE + TILE_SIZE / 2;
-      this.drawExitArrow(px, py);
-    }
-  }
-
-  /**
-   * A small downward-pointing triangle "arrow" suggesting a spot to close off
-   * the pen's Fence perimeter - a placement aid only, never a gameplay
-   * constraint. Item 4 (2026-09-07): previously suggested a Gate spot
-   * specifically; repurposed to a generic "build wall here" pointer now that
-   * Gate no longer factors into enclosure validity (see this method's
-   * callers' doc comment for the full rationale).
-   */
-  private drawExitArrow(centerX: number, centerY: number): void {
-    const halfLength = ENCLOSURE_EXIT_HINT_ARROW_LENGTH_PX / 2;
-    const halfWidth = ENCLOSURE_EXIT_HINT_ARROW_WIDTH_PX / 2;
-    const tipY = centerY + halfLength;
-    const tailY = centerY - halfLength;
-    this.enclosureExitHintGraphics.fillStyle(ENCLOSURE_EXIT_HINT_COLOR, 0.95);
-    this.enclosureExitHintGraphics.fillTriangle(
-      centerX - halfWidth,
-      tailY,
-      centerX + halfWidth,
-      tailY,
-      centerX,
-      tipY,
-    );
-    this.enclosureExitHintGraphics.lineStyle(1, 0x5d4037, 0.8);
-    this.enclosureExitHintGraphics.strokeTriangle(
-      centerX - halfWidth,
-      tailY,
-      centerX + halfWidth,
-      tailY,
-      centerX,
-      tipY,
-    );
   }
 
   /**
@@ -3844,11 +2761,11 @@ export class MainScene extends Phaser.Scene {
   private setupDayNightCycle(): void {
     this.nightOverlay = new NightOverlay(this);
     this.registerUiObject(...this.nightOverlay.getUiObjects());
-    this.applyVegetationTint(getDayPhase());
+    this.worldVisualsSystem.applyVegetationTint(getDayPhase());
 
     gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
-      this.applyVegetationTint(phase);
-      this.fadeNightAccents(phase);
+      this.worldVisualsSystem.applyVegetationTint(phase);
+      this.worldVisualsSystem.fadeNightAccents(phase, NIGHT_ACCENT_FADE_MS);
       this.timerText.setText(this.formatTimerText());
       this.showPhaseNotice(dayNumber, phase);
       // Phase 71: top decorative villager sprites back up toward VILLAGER_CAP
@@ -3856,34 +2773,9 @@ export class MainScene extends Phaser.Scene {
       // topUpVillagersOnDawn's own doc comment for why this never touches
       // real population.
       if (phase === 'day') {
-        this.topUpVillagersOnDawn();
+        this.ambientLifeSystem.topUpVillagersOnDawn();
       }
     });
-  }
-
-  /** Cool blue-grey multiply tint on every tree/cactus at night; cleared at dawn. */
-  private applyVegetationTint(phase: DayPhase): void {
-    for (const image of this.vegetationImages.values()) {
-      if (phase === 'night') {
-        image.setTint(VEGETATION_NIGHT_TINT);
-      } else {
-        image.clearTint();
-      }
-    }
-  }
-
-  private fadeNightAccents(phase: DayPhase): void {
-    const target = phase === 'night' ? NIGHT_ACCENT_MAX_ALPHA : 0;
-    for (const visual of this.buildingVisuals.values()) {
-      for (const accent of visual.nightAccents) {
-        this.tweens.add({
-          targets: accent,
-          alpha: target,
-          duration: NIGHT_ACCENT_FADE_MS,
-          ease: 'Sine.easeInOut',
-        });
-      }
-    }
   }
 
   /**
@@ -3946,7 +2838,7 @@ export class MainScene extends Phaser.Scene {
     const candidates: { x: number; y: number; sound: 'animalChicken' | 'animalPig' | 'animalCow' }[] = [];
     const worldView = this.cameras.main.worldView;
 
-    for (const visual of this.buildingVisuals.values()) {
+    for (const visual of this.worldVisualsSystem.buildingVisuals.values()) {
       const animalConfig = BUILDING_DEFINITIONS[visual.building.type].animal;
       if (!animalConfig || visual.animalImages.length === 0) {
         continue;
@@ -4085,9 +2977,9 @@ export class MainScene extends Phaser.Scene {
 
   private setupAnimalVisuals(): void {
     gameEvents.on('animal-bought', (building: PlacedBuilding) => {
-      const visual = this.buildingVisuals.get(building.id);
+      const visual = this.worldVisualsSystem.buildingVisuals.get(building.id);
       if (visual) {
-        this.redrawAnimalSprites(visual);
+        this.worldVisualsSystem.redrawAnimalSprites(visual);
       }
     });
   }
@@ -4102,7 +2994,7 @@ export class MainScene extends Phaser.Scene {
    */
   private setupHouseTierVisuals(): void {
     gameEvents.on('house-tier-changed', ({ building, direction }: HouseTierChangePayload) => {
-      const visual = this.buildingVisuals.get(building.id);
+      const visual = this.worldVisualsSystem.buildingVisuals.get(building.id);
       if (!visual) {
         return;
       }
@@ -4134,7 +3026,7 @@ export class MainScene extends Phaser.Scene {
    */
   private setupGateVisuals(): void {
     gameEvents.on('gate-state-changed', (building: PlacedBuilding) => {
-      const visual = this.buildingVisuals.get(building.id);
+      const visual = this.worldVisualsSystem.buildingVisuals.get(building.id);
       if (!visual) {
         return;
       }
@@ -4163,87 +3055,6 @@ export class MainScene extends Phaser.Scene {
     }
     const anyOpen = gates.some((gate) => gate.gateOpen !== false);
     setAllGates(!anyOpen);
-  }
-
-  /** Only called on placement and 'animal-bought' (i.e. when animalCount actually changes), never per production tick. */
-  private redrawAnimalSprites(visual: BuildingVisual): void {
-    for (const animalImage of visual.animalImages) {
-      this.tweens.killTweensOf(animalImage);
-      animalImage.destroy();
-    }
-    visual.animalImages = [];
-
-    const animalConfig = BUILDING_DEFINITIONS[visual.building.type].animal;
-    if (!animalConfig) {
-      return;
-    }
-
-    for (let index = 0; index < visual.building.animalCount; index++) {
-      const slot = this.getAnimalSlotPosition(visual.building, index);
-      const animalImage = this.add
-        .image(slot.x, slot.y, ANIMALS_ATLAS_KEY, animalTextureKey(animalConfig.animalLabel))
-        .setDepth(ANIMAL_SPRITE_DEPTH);
-      visual.animalImages.push(animalImage);
-      this.startAnimalWander(animalImage, slot);
-    }
-  }
-
-  /**
-   * Confined wander: a single yoyo-ing tween drifts the sprite between its
-   * slot anchor and a randomized offset point (+ a subtle vertical bob),
-   * looping forever. `direction` records which way the sprite faces during
-   * the outbound half of the cycle; `onYoyo` (outbound leg finished, tween
-   * reverses back toward the anchor) and `onRepeat` (return leg finished,
-   * tween restarts outbound) fire exactly at the two points the movement
-   * direction flips, so flipping the sprite there is enough to always face
-   * the way it's currently moving without tracking position every frame.
-   */
-  private startAnimalWander(animalImage: Phaser.GameObjects.Image, slot: { x: number; y: number }): void {
-    const radiusX = Phaser.Math.Between(ANIMAL_WANDER_RADIUS_MIN, ANIMAL_WANDER_RADIUS_MAX);
-    const direction = Math.random() < 0.5 ? -1 : 1;
-    const targetX = slot.x + radiusX * direction;
-    const targetY = slot.y + Phaser.Math.Between(-ANIMAL_WANDER_BOB_PX, ANIMAL_WANDER_BOB_PX);
-    const duration = Phaser.Math.Between(ANIMAL_WANDER_DURATION_MIN_MS, ANIMAL_WANDER_DURATION_MAX_MS);
-    const delay = Phaser.Math.Between(0, ANIMAL_WANDER_DELAY_MAX_MS);
-
-    animalImage.setFlipX(direction < 0);
-
-    this.tweens.add({
-      targets: animalImage,
-      x: targetX,
-      y: targetY,
-      duration,
-      delay,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-      onYoyo: () => animalImage.setFlipX(direction >= 0),
-      onRepeat: () => animalImage.setFlipX(direction < 0),
-    });
-  }
-
-  /**
-   * Deterministic per-index slot: a row of critters just beneath the
-   * building's footprint (its yard), wrapping into further rows once a row
-   * fills up, so slot N always lands in the same spot and never overlaps
-   * the building sprite itself.
-   */
-  private getAnimalSlotPosition(building: PlacedBuilding, index: number): { x: number; y: number } {
-    const { width, height } = BUILDING_DEFINITIONS[building.type].size;
-    const footprintPxWidth = width * TILE_SIZE;
-    const columns = Math.max(1, Math.floor(footprintPxWidth / ANIMAL_SLOT_STEP));
-    const col = index % columns;
-    const row = Math.floor(index / columns);
-
-    const rowPxWidth = columns * ANIMAL_SLOT_STEP - ANIMAL_SLOT_GAP;
-    const startX =
-      building.tileX * TILE_SIZE + (footprintPxWidth - rowPxWidth) / 2 + ANIMAL_SLOT_STEP / 2;
-    const startY = building.tileY * TILE_SIZE + height * TILE_SIZE + ANIMAL_SLOT_STEP / 2;
-
-    return {
-      x: startX + col * ANIMAL_SLOT_STEP,
-      y: startY + row * ANIMAL_SLOT_STEP,
-    };
   }
 
   private setupCowboyVisuals(): void {
@@ -4292,7 +3103,8 @@ export class MainScene extends Phaser.Scene {
    * Barracks' Cowboys) rather than two near-duplicate functions plus two more
    * for the two new kinds.
    */
-  private spawnUnitOfKind(building: PlacedBuilding, kind: UnitKind, index: number): CombatUnit {
+  /** Phase 86: non-private - WorldVisualsSystem.restoreBuildingVisual() re-spawns a loaded save's garrisoned units the same way. */
+  spawnUnitOfKind(building: PlacedBuilding, kind: UnitKind, index: number): CombatUnit {
     const visual = UNIT_VISUAL_CONFIG[kind];
     const slot =
       kind === 'cowboyOnHorse'
@@ -4363,7 +3175,8 @@ export class MainScene extends Phaser.Scene {
    * buildingConfig's getUnitHpArray instead of a two-way kind ternary, now
    * that there are four kinds/arrays to pick from.
    */
-  private isCowboyUnitAlive(unit: CombatUnit): boolean {
+  /** Phase 86: non-private - AmbientLifeSystem.findNearestPrey()/applyWildlifeDamage() check unit liveness the same way combat code does. */
+  isCowboyUnitAlive(unit: CombatUnit): boolean {
     const building = getBuildingById(unit.barracksId);
     if (!building || building.hp <= 0) {
       return false;
@@ -4527,7 +3340,7 @@ export class MainScene extends Phaser.Scene {
       this.issueUnitAttackOrder({ kind: 'camp', id: camp.id }, { x: camp.x, y: camp.y });
       return;
     }
-    const creature = this.findWildlifeAt(world.x, world.y);
+    const creature = this.ambientLifeSystem.findWildlifeAt(world.x, world.y);
     if (creature) {
       this.issueUnitAttackOrder(
         { kind: 'wildlife', id: creature.id },
@@ -4724,7 +3537,9 @@ export class MainScene extends Phaser.Scene {
       return raider ? { x: raider.image.x, y: raider.image.y } : null;
     }
     if (target.kind === 'wildlife') {
-      const creature = this.wildlife.find((candidate) => candidate.id === target.id && candidate.hp > 0);
+      const creature = this.ambientLifeSystem.wildlife.find(
+        (candidate) => candidate.id === target.id && candidate.hp > 0,
+      );
       return creature ? { x: creature.image.x, y: creature.image.y } : null;
     }
     const camp = getRaiderCampById(target.id);
@@ -4872,7 +3687,7 @@ export class MainScene extends Phaser.Scene {
       }
 
       if (event.code === 'KeyC') {
-        this.toggleChainViewVisibility();
+        this.worldVisualsSystem.toggleChainViewVisibility();
         event.preventDefault();
       }
 
@@ -4886,11 +3701,11 @@ export class MainScene extends Phaser.Scene {
 
       // Real Fence Enclosures: 'E' ("enclosure") toggles the debug overlay
       // showing every farm's cached enclosure state. Unlike 'C'/'V' this is a
-      // local MainScene toggle (the overlay is drawn straight onto the world,
-      // not a separate panel), so it calls its own method rather than
+      // local toggle (the overlay is drawn straight onto the world, not a
+      // separate panel), so it calls WorldVisualsSystem's method rather than
       // emitting a bare event.
       if (event.code === 'KeyE') {
-        this.toggleEnclosureDebugOverlay();
+        this.worldVisualsSystem.toggleEnclosureDebugOverlay();
         event.preventDefault();
       }
 
@@ -5017,226 +3832,6 @@ export class MainScene extends Phaser.Scene {
     gameEvents.emit('building-selected', null);
   }
 
-  /**
-   * Spawns POPULATION_PER_HOUSE sprites per House placement (population
-   * capacity, not employment - employment is recomputed every tick and
-   * shouldn't churn sprites in/out). Capped at VILLAGER_CAP total for
-   * performance, so a later House may spawn fewer (or none).
-   *
-   * Phase 46: deliberately NOT scaled by houseTier - this is a fixed
-   * decorative flourish at placement time, whereas the workforce-relevant
-   * population figure (gameState's totalPopulation, HUD's Pop X/Y) is
-   * computed fresh from HOUSE_TIER_CONFIG every tick. Re-syncing rendered
-   * sprite counts to a live tier would add churn/pooling complexity for a
-   * purely cosmetic number already capped and decoupled from gameplay.
-   */
-  private spawnVillagersForHouse(building: PlacedBuilding): void {
-    const spawnCount = Math.min(POPULATION_PER_HOUSE, VILLAGER_CAP - this.villagers.length);
-    const origin = this.tileCenter(building);
-
-    for (let index = 0; index < spawnCount; index++) {
-      this.spawnOneVillagerAt(origin.x, origin.y);
-    }
-  }
-
-  /**
-   * Phase 71: extracted out of spawnVillagerForHouse's own loop body so
-   * topUpVillagersOnDawn (which has no single origin building) can spawn a
-   * replacement villager the same way - at a random placed building's tile
-   * center, mirroring pickVillagerTarget's own fallback for an empty town.
-   */
-  private spawnOneVillagerAt(x: number, y: number): void {
-    const image = this.add
-      .image(x, y, VILLAGERS_ATLAS_KEY, VILLAGER_TEXTURE_KEY)
-      .setDepth(VILLAGER_SPRITE_DEPTH);
-    const villager: Villager = { id: `villager-${this.villagerIdCounter++}`, image, hp: WILDLIFE_VILLAGER_HP };
-    this.villagers.push(villager);
-    this.startVillagerWander(image);
-  }
-
-  /**
-   * Phase 71: villager count is a capped cosmetic flourish (Phase 20),
-   * decoupled from gameState's real totalPopulation - this only tops rendered
-   * sprites back up toward VILLAGER_CAP after wildlife kills have thinned
-   * them, it never touches population/workforce. Reuses the existing dawn
-   * hook (day-phase-changed, phase === 'day') rather than inventing a new
-   * schedule, and spawns each replacement at a random placed building the
-   * same way pickVillagerTarget already picks a wander destination.
-   */
-  private topUpVillagersOnDawn(): void {
-    const missing = VILLAGER_CAP - this.villagers.length;
-    if (missing <= 0) {
-      return;
-    }
-    for (let index = 0; index < missing; index++) {
-      const point = this.pickVillagerTarget();
-      this.spawnOneVillagerAt(point.x, point.y);
-    }
-  }
-
-  /**
-   * Point-to-point wander, one leg at a time: each leg is its own tween,
-   * chained via onComplete rather than a single repeating/yoyo tween, since
-   * every leg goes to a fresh random target instead of bouncing between two
-   * fixed points. `villager.active` is checked on every (re-)entry so a
-   * pending post-reset callback (scheduled before game-reset destroyed this
-   * sprite) quietly stops the loop instead of animating a dead image.
-   */
-  private startVillagerWander(villager: Phaser.GameObjects.Image): void {
-    if (!villager.active) {
-      return;
-    }
-
-    const target = this.pickVillagerTarget();
-    const distance = Phaser.Math.Distance.Between(villager.x, villager.y, target.x, target.y);
-    const duration = (distance / VILLAGER_WALK_SPEED_PX_PER_SEC) * 1000;
-
-    villager.setFlipX(target.x < villager.x);
-
-    this.tweens.add({
-      targets: villager,
-      x: target.x,
-      y: target.y,
-      duration: Math.max(duration, 1),
-      ease: 'Linear',
-      onComplete: () => {
-        const pause = Phaser.Math.Between(VILLAGER_PAUSE_MIN_MS, VILLAGER_PAUSE_MAX_MS);
-        this.time.delayedCall(pause, () => this.startVillagerWander(villager));
-      },
-    });
-  }
-
-  /**
-   * Random placed building's tile center, clamped to map bounds.
-   *
-   * Phase 31 made the empty-list case reachable for the first time: before
-   * buildings could be destroyed or demolished, a villager's own House was
-   * guaranteed to still be standing whenever this ran, so
-   * `buildings[Between(0, -1)]` was unreachable. Now a town can lose every
-   * last building while its villagers are still walking, so an empty list
-   * falls back to a random point on the map rather than dereferencing
-   * undefined.
-   */
-  private pickVillagerTarget(): { x: number; y: number } {
-    const buildings = getPlacedBuildings();
-    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
-    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
-
-    if (buildings.length === 0) {
-      return {
-        x: Phaser.Math.Between(0, mapWidthPx),
-        y: Phaser.Math.Between(0, mapHeightPx),
-      };
-    }
-
-    const building = buildings[Phaser.Math.Between(0, buildings.length - 1)];
-    const center = this.tileCenter(building);
-
-    return {
-      x: Phaser.Math.Clamp(center.x, 0, mapWidthPx),
-      y: Phaser.Math.Clamp(center.y, 0, mapHeightPx),
-    };
-  }
-
-  /**
-   * Phase 60: Goods Carts on Roads. Rides the same 'production-tick' event
-   * every other per-tick redraw pass listens to, firing after
-   * runProductionTick has already updated every PlacedBuilding's
-   * `active`/`connected` flags for this tick (Roads & Logistics' existing
-   * BFS - see gameState's updateConnections/isBuildingConnected - already
-   * computes `connected`; `active` is set true at the exact point a building
-   * successfully produced output this tick, see recordProductivityTick's call
-   * sites in runProductionTick). No gameplay side effect: this only spawns a
-   * cosmetic sprite, never touches resources/money/the +10% bonus itself.
-   */
-  private setupGoodsCarts(): void {
-    gameEvents.on('production-tick', () => {
-      if (this.activeCarts.length >= MAX_VISIBLE_CARTS) {
-        return;
-      }
-
-      const depots = getPlacedBuildings().filter(
-        (building) =>
-          CART_DEPOT_BUILDING_TYPES.includes(building.type) && building.connected && building.hp > 0,
-      );
-      if (depots.length === 0) {
-        return;
-      }
-
-      for (const building of getPlacedBuildings()) {
-        if (this.activeCarts.length >= MAX_VISIBLE_CARTS) {
-          break;
-        }
-        if (!building.active || !building.connected) {
-          continue;
-        }
-
-        const depot = this.findNearestCartDepot(building, depots);
-        if (depot) {
-          this.spawnGoodsCart(building, depot);
-        }
-      }
-    });
-  }
-
-  /** Straight-line nearest-by-tile-center search, no road-tile pathfinding (Phase 38's raider-fence-blocking precedent: simple robust behavior over full pathfinding, since roads are decorative for this purpose). */
-  private findNearestCartDepot(
-    from: PlacedBuilding,
-    depots: readonly PlacedBuilding[],
-  ): PlacedBuilding | null {
-    const origin = this.tileCenter(from);
-    let nearest: PlacedBuilding | null = null;
-    let nearestDistance = Infinity;
-
-    for (const depot of depots) {
-      const center = this.tileCenter(depot);
-      const distance = Phaser.Math.Distance.Between(origin.x, origin.y, center.x, center.y);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = depot;
-      }
-    }
-
-    return nearest;
-  }
-
-  /**
-   * Single point-to-point tween, same walk-speed/duration technique as
-   * startVillagerWander/sendRaiderToTarget - but one-shot rather than a
-   * forever-looping chain: on arrival it fades out and destroys itself
-   * instead of picking a new leg, since a cart represents one delivery, not a
-   * wandering resident.
-   */
-  private spawnGoodsCart(from: PlacedBuilding, to: PlacedBuilding): void {
-    const origin = this.tileCenter(from);
-    const destination = this.tileCenter(to);
-    const distance = Phaser.Math.Distance.Between(origin.x, origin.y, destination.x, destination.y);
-    const duration = (distance / CART_WALK_SPEED_PX_PER_SEC) * 1000;
-
-    const cart = this.add.image(origin.x, origin.y, CARTS_ATLAS_KEY, CART_TEXTURE_KEY).setDepth(CART_SPRITE_DEPTH);
-    cart.setFlipX(destination.x < origin.x);
-    this.activeCarts.push(cart);
-
-    this.tweens.add({
-      targets: cart,
-      x: destination.x,
-      y: destination.y,
-      duration: Math.max(duration, 1),
-      ease: 'Linear',
-      onComplete: () => {
-        this.tweens.add({
-          targets: cart,
-          alpha: 0,
-          duration: CART_FADE_OUT_DURATION_MS,
-          onComplete: () => {
-            this.activeCarts = this.activeCarts.filter((image) => image !== cart);
-            cart.destroy();
-          },
-        });
-      },
-    });
-  }
-
   private setupGameReset(): void {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
@@ -5249,28 +3844,13 @@ export class MainScene extends Phaser.Scene {
       // already validating against the new one.
       this.redrawGroundLayer();
 
-      for (const { image, animalImages, accentObjects } of this.buildingVisuals.values()) {
-        image.destroy();
-        for (const animalImage of animalImages) {
-          this.tweens.killTweensOf(animalImage);
-          animalImage.destroy();
-        }
-        for (const accentObject of accentObjects) {
-          this.tweens.killTweensOf(accentObject);
-          accentObject.destroy();
-        }
-      }
-      this.buildingVisuals.clear();
-      this.connectionGraphics.clear();
-      this.fenceLineGraphics.clear();
-      this.selectedResourceKey = null;
-      this.chainViewVisible = true;
-      this.chainViewGraphics.clear();
-      gameEvents.emit('resource-selected', null);
-      this.hpBarGraphics.clear();
+      // Phase 86: building/animal/accent/vegetation visuals, fence/connection/
+      // chain-view lines, building HP bars, status badges and the harvest/
+      // enclosure overlays are all torn down together by WorldVisualsSystem's
+      // own reset (also re-emits 'resource-selected'/null and rebuilds
+      // vegetation, matching this handler's prior inline order exactly).
+      this.worldVisualsSystem.resetForGameReset();
       this.unitHpBarGraphics.clear();
-      this.statusBadgeGraphics.clear();
-      this.harvestRingGraphics.clear();
 
       // Phase 34: setupGameOverHalt froze the scene's clocks behind the
       // game-over screen; Play Again is the one path back, so it restores
@@ -5279,17 +3859,9 @@ export class MainScene extends Phaser.Scene {
       this.tweens.timeScale = this.gameSpeed;
       setAudioGameSpeed(this.gameSpeed);
 
-      for (const villager of this.villagers) {
-        this.tweens.killTweensOf(villager.image);
-        villager.image.destroy();
-      }
-      this.villagers = [];
-
-      for (const cart of this.activeCarts) {
-        this.tweens.killTweensOf(cart);
-        cart.destroy();
-      }
-      this.activeCarts = [];
+      // Phase 86: villagers and goods carts are AmbientLifeSystem's own
+      // tracked collections now.
+      this.ambientLifeSystem.resetForGameReset();
 
       for (const unit of this.cowboyUnits) {
         unit.moveTween?.stop();
@@ -5305,17 +3877,13 @@ export class MainScene extends Phaser.Scene {
       this.cowboySelectionHintText.setVisible(false);
       this.placementHintText.setVisible(false);
 
-      // gameState.resetGame reseeds vegetation before emitting 'game-reset',
-      // so rebuilding every sprite from the current entity list here picks up
-      // the new layout.
-      this.redrawAllVegetation();
       this.raidSystem.resetRaiderCampVisuals();
       this.redrawMinimap();
 
       this.raidSystem.resetRaidState();
       this.resetMerchantState();
       this.resetWorldEventState();
-      this.resetWildlifeState();
+      this.ambientLifeSystem.resetWildlifeState();
       this.lastAutosaveDayNumber = -1;
 
       // Phase 82: buildingVisuals is empty and vegetation/villagers were just
@@ -5336,9 +3904,9 @@ export class MainScene extends Phaser.Scene {
    */
   private setupSaveLoad(): void {
     gameEvents.on('game-loaded', () => {
-      this.redrawAllVegetation();
+      this.worldVisualsSystem.redrawAllVegetation();
       for (const building of getPlacedBuildings()) {
-        this.restoreBuildingVisual(building);
+        this.worldVisualsSystem.restoreBuildingVisual(building);
       }
       // Phase 57: a loaded save's Raider Camps are real persisted state (see
       // persistence.ts) - restore their sprites the same way. Whether the
@@ -5518,363 +4086,6 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Phase 71: Hostile Wildlife. Self-rescheduling timer following
-   * scheduleNextMerchantCheck's exact shape (roll a random delay, fire,
-   * immediately roll the next one) - deliberately NO night-only/elapsed-time
-   * gating the way raids have (canRaidSpawnNow/RAID_EARLIEST_ELAPSED_MS):
-   * wildlife is an ambient world hazard from minute one, not a scheduled
-   * threat window.
-   */
-  private setupWildlifeSystem(): void {
-    this.scheduleNextWildlifeCheck();
-  }
-
-  private scheduleNextWildlifeCheck(): void {
-    const delay = Phaser.Math.Between(WILDLIFE_MIN_INTERVAL_MS, WILDLIFE_MAX_INTERVAL_MS);
-    this.wildlifeCheckTimer = this.time.delayedCall(delay, () => {
-      this.spawnWildlifeCreature();
-      this.scheduleNextWildlifeCheck();
-    });
-  }
-
-  /** Skips spawning (but still reschedules) once MAX_CONCURRENT_WILDLIFE is reached - a cap, not a hard stop of the timer. */
-  private spawnWildlifeCreature(): void {
-    if (this.wildlife.length >= MAX_CONCURRENT_WILDLIFE) {
-      return;
-    }
-
-    const kind = pickRandomWildlifeKind();
-    const definition = WILDLIFE_DEFINITIONS[kind];
-    const spawn = this.raidSystem.pickRaidSpawnPoint();
-
-    const image = this.add
-      .image(spawn.x, spawn.y, WILDLIFE_ATLAS_KEY, wildlifeTextureKey(kind))
-      .setDepth(WILDLIFE_SPRITE_DEPTH);
-
-    const creature: Wildlife = {
-      id: `wildlife-${this.wildlifeIdCounter++}`,
-      kind,
-      image,
-      hp: definition.maxHp,
-      maxHp: definition.maxHp,
-      state: 'roaming',
-      targetRef: null,
-      moveTween: null,
-    };
-    this.wildlife.push(creature);
-    this.startWildlifeRoam(creature);
-
-    if (kind === 'MountainLion' && !this.mountainLionNotified) {
-      this.mountainLionNotified = true;
-      addNotification('A Mountain Lion is prowling near your town.', 'warning', getElapsedSeconds());
-    }
-  }
-
-  /**
-   * Point-to-point wander, one leg at a time, closely mirroring
-   * startVillagerWander's own chained-tween technique (a close copy adapted
-   * for Wildlife's own record/state rather than a shared helper, matching
-   * the codebase's existing precedent of villager-wander and raider-tween
-   * being separate, purpose-specific implementations). Only ever called
-   * while state === 'roaming'; runWildlifeTick switches a creature straight
-   * into 'hunting' (its own fresh tween) the moment prey is found, so this
-   * loop's onComplete re-checks state before continuing itself.
-   */
-  private startWildlifeRoam(creature: Wildlife): void {
-    if (!creature.image.active || creature.state !== 'roaming') {
-      return;
-    }
-
-    const target = this.pickVillagerTarget();
-    const definition = WILDLIFE_DEFINITIONS[creature.kind];
-    const distance = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, target.x, target.y);
-    const duration = (distance / definition.speedPxPerSec) * 1000;
-
-    creature.image.setFlipX(target.x < creature.image.x);
-
-    creature.moveTween = this.tweens.add({
-      targets: creature.image,
-      x: target.x,
-      y: target.y,
-      duration: Math.max(duration, 1),
-      ease: 'Linear',
-      onComplete: () => {
-        creature.moveTween = null;
-        if (creature.state !== 'roaming') {
-          return;
-        }
-        const pause = Phaser.Math.Between(WILDLIFE_ROAM_PAUSE_MIN_MS, WILDLIFE_ROAM_PAUSE_MAX_MS);
-        this.time.delayedCall(pause, () => this.startWildlifeRoam(creature));
-      },
-    });
-  }
-
-  /**
-   * Runs on the same ~2s combat-tick cadence as raid combat (called from
-   * runRaidCombatTick), not per-frame - wildlife re-paths every tick while
-   * hunting (unlike a raider, which commits to one target and walks there
-   * once) since its prey (a unit/villager) keeps moving.
-   */
-  private runWildlifeTick(): void {
-    for (const creature of this.wildlife) {
-      this.updateWildlifeCreature(creature);
-    }
-    this.removeDeadWildlife();
-  }
-
-  private updateWildlifeCreature(creature: Wildlife): void {
-    if (creature.state === 'fleeing') {
-      // Handled entirely by the one-shot flee tween's onComplete (see
-      // startWildlifeFlee) - despawns the creature once it reaches the edge.
-      return;
-    }
-
-    const definition = WILDLIFE_DEFINITIONS[creature.kind];
-    if (creature.hp / creature.maxHp < WILDLIFE_FLEE_HP_FRACTION) {
-      this.startWildlifeFlee(creature);
-      return;
-    }
-
-    const detectionRangePx = definition.detectionRadiusTiles * TILE_SIZE;
-    const prey = this.findNearestPrey(creature.image.x, creature.image.y, detectionRangePx);
-
-    if (!prey) {
-      if (creature.state !== 'roaming') {
-        creature.state = 'roaming';
-        creature.targetRef = null;
-        this.tweens.killTweensOf(creature.image);
-        creature.moveTween = null;
-        this.startWildlifeRoam(creature);
-      }
-      return;
-    }
-
-    const attackRangePx = definition.attackRangeTiles * TILE_SIZE;
-    const distanceToPrey = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, prey.x, prey.y);
-
-    if (distanceToPrey <= attackRangePx) {
-      creature.state = 'attacking';
-      creature.targetRef = prey.ref;
-      this.tweens.killTweensOf(creature.image);
-      creature.moveTween = null;
-      this.applyWildlifeDamage(prey.ref, definition.damage);
-      return;
-    }
-
-    // Blocked by a Wall/Gate: wildlife does NOT get a raider-style detour or
-    // attack-the-wall fallback - keeping wildlife pathing simple (per the
-    // design intent) means a blocked hunt is simply abandoned this tick, and
-    // re-evaluated fresh next tick rather than committing to a path around
-    // the obstacle.
-    if (this.raidSystem.sampleForBlockingWall(creature.image.x, creature.image.y, prey.x, prey.y)) {
-      if (creature.state !== 'roaming') {
-        creature.state = 'roaming';
-        creature.targetRef = null;
-        this.tweens.killTweensOf(creature.image);
-        creature.moveTween = null;
-        this.startWildlifeRoam(creature);
-      }
-      return;
-    }
-
-    creature.state = 'hunting';
-    creature.targetRef = prey.ref;
-    this.tweens.killTweensOf(creature.image);
-    const distance = distanceToPrey;
-    const duration = (distance / definition.speedPxPerSec) * 1000;
-    creature.image.setFlipX(prey.x < creature.image.x);
-    creature.moveTween = this.tweens.add({
-      targets: creature.image,
-      x: prey.x,
-      y: prey.y,
-      duration: Math.max(duration, 1),
-      ease: 'Linear',
-      onComplete: () => {
-        creature.moveTween = null;
-      },
-    });
-  }
-
-  /**
-   * Nearest live unit OR villager within maxDistance - wildlife never
-   * targets a building (grepped for and confirmed absent from every branch
-   * above: only findNearestUnit/this.villagers are consulted here).
-   */
-  private findNearestPrey(
-    x: number,
-    y: number,
-    maxDistance: number,
-  ): { x: number; y: number; ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } } | null {
-    let bestDistance = maxDistance;
-    let best: { x: number; y: number; ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string } } | null = null;
-
-    for (const unit of this.cowboyUnits) {
-      if (!this.isCowboyUnitAlive(unit)) {
-        continue;
-      }
-      const distance = Phaser.Math.Distance.Between(x, y, unit.image.x, unit.image.y);
-      if (distance <= bestDistance) {
-        bestDistance = distance;
-        best = { x: unit.image.x, y: unit.image.y, ref: { kind: 'unit', unitId: unit.id } };
-      }
-    }
-
-    for (const villager of this.villagers) {
-      if (villager.hp <= 0) {
-        continue;
-      }
-      const distance = Phaser.Math.Distance.Between(x, y, villager.image.x, villager.image.y);
-      if (distance <= bestDistance) {
-        bestDistance = distance;
-        best = { x: villager.image.x, y: villager.image.y, ref: { kind: 'villager', villagerId: villager.id } };
-      }
-    }
-
-    return best;
-  }
-
-  /** Applies a hunting/attacking wildlife creature's per-tick bite to whichever prey kind it locked onto. */
-  private applyWildlifeDamage(
-    ref: { kind: 'unit'; unitId: string } | { kind: 'villager'; villagerId: string },
-    damage: number,
-  ): void {
-    if (ref.kind === 'unit') {
-      const unit = this.cowboyUnits.find((candidate) => candidate.id === ref.unitId);
-      if (!unit || !this.isCowboyUnitAlive(unit)) {
-        return;
-      }
-      const remaining = damageUnit(unit.barracksId, unit.kind, unit.index, damage);
-      if (remaining <= 0) {
-        this.killUnit(unit);
-      }
-      return;
-    }
-
-    const villager = this.villagers.find((candidate) => candidate.id === ref.villagerId);
-    if (!villager || villager.hp <= 0) {
-      return;
-    }
-    villager.hp = Math.max(0, villager.hp - damage);
-    if (villager.hp <= 0) {
-      this.killVillager(villager);
-    }
-  }
-
-  /** Mirrors killUnit's cleanup shape: kill tweens, dust puff, sound, destroy, drop from tracking. Never touches gameState/totalPopulation - see the Villager interface doc comment. */
-  private killVillager(villager: Villager): void {
-    this.tweens.killTweensOf(villager.image);
-    this.spawnDeathPuff(villager.image.x, villager.image.y);
-    playWorldSound('unitDeath', villager.image.x, villager.image.y);
-    villager.image.destroy();
-    this.villagers = this.villagers.filter((candidate) => candidate !== villager);
-  }
-
-  /** One-shot tween toward the nearest map edge point; despawns the creature on arrival rather than looping. */
-  private startWildlifeFlee(creature: Wildlife): void {
-    if (creature.state === 'fleeing') {
-      return;
-    }
-    creature.state = 'fleeing';
-    creature.targetRef = null;
-    this.tweens.killTweensOf(creature.image);
-
-    const edgePoint = this.nearestMapEdgePoint(creature.image.x, creature.image.y);
-    const distance = Phaser.Math.Distance.Between(creature.image.x, creature.image.y, edgePoint.x, edgePoint.y);
-    const duration = (distance / WILDLIFE_FLEE_SPEED_PX_PER_SEC) * 1000;
-    creature.image.setFlipX(edgePoint.x < creature.image.x);
-
-    creature.moveTween = this.tweens.add({
-      targets: creature.image,
-      x: edgePoint.x,
-      y: edgePoint.y,
-      duration: Math.max(duration, 1),
-      ease: 'Linear',
-      onComplete: () => {
-        creature.hp = 0;
-      },
-    });
-  }
-
-  /** Closest of the 4 map edges from a world point, clamped to bounds - the flee destination. */
-  private nearestMapEdgePoint(x: number, y: number): { x: number; y: number } {
-    const mapWidthPx = MAP_WIDTH_TILES * TILE_SIZE;
-    const mapHeightPx = MAP_HEIGHT_TILES * TILE_SIZE;
-    const distances = [
-      { x, y: 0, distance: y },
-      { x, y: mapHeightPx, distance: mapHeightPx - y },
-      { x: 0, y, distance: x },
-      { x: mapWidthPx, y, distance: mapWidthPx - x },
-    ];
-    distances.sort((a, b) => a.distance - b.distance);
-    return { x: distances[0].x, y: distances[0].y };
-  }
-
-  private removeDeadWildlife(): void {
-    const survivors: Wildlife[] = [];
-    for (const creature of this.wildlife) {
-      if (creature.hp > 0) {
-        survivors.push(creature);
-        continue;
-      }
-      this.tweens.killTweensOf(creature.image);
-      creature.image.destroy();
-    }
-    this.wildlife = survivors;
-  }
-
-  /** Nearest live wildlife creature to a world point within WILDLIFE_ATTACK_HIT_RADIUS_PX, or null - mirrors findRaiderAt/findCampAt for the right-click attack-order hit-test chain. */
-  private findWildlifeAt(worldX: number, worldY: number): Wildlife | null {
-    let best: Wildlife | null = null;
-    let bestDistance = WILDLIFE_ATTACK_HIT_RADIUS_PX;
-
-    for (const creature of this.wildlife) {
-      if (creature.hp <= 0) {
-        continue;
-      }
-      const distance = Phaser.Math.Distance.Between(worldX, worldY, creature.image.x, creature.image.y);
-      if (distance <= bestDistance) {
-        bestDistance = distance;
-        best = creature;
-      }
-    }
-
-    return best;
-  }
-
-  private findNearestWildlife(x: number, y: number, maxDistance: number): Wildlife | null {
-    let best: Wildlife | null = null;
-    let bestDistance = maxDistance;
-
-    for (const creature of this.wildlife) {
-      if (creature.hp <= 0) {
-        continue;
-      }
-      const distance = Phaser.Math.Distance.Between(x, y, creature.image.x, creature.image.y);
-      if (distance <= bestDistance) {
-        bestDistance = distance;
-        best = creature;
-      }
-    }
-
-    return best;
-  }
-
-  /** Cancels the pending spawn timer and clears every live creature, mirroring resetRaidState/resetMerchantState's exact reset-and-reschedule shape. */
-  private resetWildlifeState(): void {
-    this.wildlifeCheckTimer?.remove();
-    this.wildlifeCheckTimer = null;
-
-    for (const creature of this.wildlife) {
-      this.tweens.killTweensOf(creature.image);
-      creature.image.destroy();
-    }
-    this.wildlife = [];
-    this.mountainLionNotified = false;
-
-    this.scheduleNextWildlifeCheck();
-  }
-
-  /**
    * Runs on the same 2s cadence as production (see setupProductionTimer);
    * no-op when nothing is on the map so an idle game costs nothing extra.
    *
@@ -5895,21 +4106,26 @@ export class MainScene extends Phaser.Scene {
   private runRaidCombatTick(): void {
     const hasCampAttackOrder = this.cowboyUnits.some((unit) => unit.attackTarget?.kind === 'camp');
     const hasWildlifeAttackOrder = this.cowboyUnits.some((unit) => unit.attackTarget?.kind === 'wildlife');
-    if (this.raidSystem.raiders.length === 0 && this.wildlife.length === 0 && !hasCampAttackOrder && !hasWildlifeAttackOrder) {
+    if (
+      this.raidSystem.raiders.length === 0 &&
+      this.ambientLifeSystem.wildlife.length === 0 &&
+      !hasCampAttackOrder &&
+      !hasWildlifeAttackOrder
+    ) {
       return;
     }
 
     for (const raider of this.raidSystem.raiders) {
       this.raidSystem.updateRaiderTargeting(raider);
     }
-    this.runWildlifeTick();
+    this.ambientLifeSystem.runWildlifeTick();
     this.resolveUnitAttackOrders();
     this.raidSystem.resolveRaiderAttacks();
     this.resolveCowboyFire();
     this.resolveWatchtowerFire();
     this.raidSystem.removeDeadRaiders();
     this.removeDestroyedBuildings();
-    this.redrawHpBars();
+    this.worldVisualsSystem.redrawHpBars();
     this.redrawUnitHpBars();
   }
 
@@ -5977,7 +4193,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   /** A single small dust puff, reusing the destruction burst's look at unit scale. */
-  private spawnDeathPuff(x: number, y: number): void {
+  /** Phase 86: non-private - AmbientLifeSystem.killVillager() reuses this exact death-puff visual. */
+  spawnDeathPuff(x: number, y: number): void {
     const puff = this.add.circle(x, y, DUST_PUFF_RADIUS_MAX, DUST_PUFF_COLOR, 0.7).setDepth(DUST_DEPTH);
     this.tweens.add({
       targets: puff,
@@ -6140,7 +4357,7 @@ export class MainScene extends Phaser.Scene {
       });
     }
 
-    for (const creature of this.wildlife) {
+    for (const creature of this.ambientLifeSystem.wildlife) {
       if (creature.hp <= 0 || (primary.kind === 'wildlife' && creature.id === primary.wildlife.id)) {
         continue;
       }
@@ -6186,7 +4403,7 @@ export class MainScene extends Phaser.Scene {
           return distance <= rangePx ? { kind: 'raider', raider } : null;
         }
       } else if (unit.attackTarget.kind === 'wildlife') {
-        const creature = this.wildlife.find(
+        const creature = this.ambientLifeSystem.wildlife.find(
           (candidate) => candidate.id === unit.attackTarget!.id && candidate.hp > 0,
         );
         if (creature) {
@@ -6205,7 +4422,7 @@ export class MainScene extends Phaser.Scene {
     if (raider) {
       return { kind: 'raider', raider };
     }
-    const creature = this.findNearestWildlife(position.x, position.y, rangePx);
+    const creature = this.ambientLifeSystem.findNearestWildlife(position.x, position.y, rangePx);
     return creature ? { kind: 'wildlife', wildlife: creature } : null;
   }
 
@@ -6235,7 +4452,7 @@ export class MainScene extends Phaser.Scene {
       }
       const position = this.tileCenter(building);
       const raiderTarget = this.findNearestRaider(position.x, position.y, rangePx);
-      const wildlifeTarget = this.findNearestWildlife(position.x, position.y, rangePx);
+      const wildlifeTarget = this.ambientLifeSystem.findNearestWildlife(position.x, position.y, rangePx);
 
       let target: { hp: number; image: Phaser.GameObjects.Image } | null = raiderTarget;
       if (wildlifeTarget) {
