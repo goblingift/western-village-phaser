@@ -27,6 +27,7 @@ import {
 import { playPlacementSound, playUiSound, playWorldSound } from '../../audio/sound';
 import { gameEvents } from '../../state/gameEvents';
 import { getVegetationAtTile } from '../../state/vegetation';
+import { BlueprintTile, getBlueprintById, saveBlueprint } from '../../state/blueprints';
 import {
   clearVegetationAt,
   demolishBuilding,
@@ -205,6 +206,24 @@ export class InputSystem {
   private rallyPointModeBuildingId: string | null = null;
   private rallyPointModeHintText!: Phaser.GameObjects.Text;
 
+  /**
+   * Phase 88: Blueprint Copy-Paste. `blueprintCopyMode` and
+   * `blueprintPasteId` are a FOURTH mutually-exclusive left-drag mode,
+   * resolved the exact same way Phase 43's line-drag placement was: one more
+   * condition checked before setupCameraDrag's existing pan/box-select/line-
+   * drag branch chain (see its own updated comment). Copy mode captures a
+   * drag-rectangle of already-placed buildings on release; Paste mode (armed
+   * once a blueprint is chosen from BuildingBar's picker) shows a ghost of
+   * the whole relative tile-set following the cursor and commits on click,
+   * closely mirroring updateLinePreview/commitLinePlacement's shape but for a
+   * 2D relative-offset set instead of a 1D line run.
+   */
+  private blueprintCopyMode = false;
+  private blueprintPasteId: string | null = null;
+  /** Pooled ghost-preview tiles for the active paste blueprint, index-aligned with its `tiles` array - same grow-only reuse pattern as linePreviewImages. */
+  private blueprintPreviewImages: Phaser.GameObjects.Image[] = [];
+  private blueprintCostText!: Phaser.GameObjects.Text;
+
   constructor(scene: MainScene) {
     this.scene = scene;
   }
@@ -325,6 +344,15 @@ export class InputSystem {
       // selected (Road/Fence) automatically routes left-drag into the line
       // preview instead, with no separate mode flag needed on the box-select
       // side.
+      //
+      // Phase 88: Blueprint Copy-Paste adds a FOURTH mutually-exclusive mode
+      // to this same left-drag gesture, resolved the identical way Phase 43
+      // resolved its own conflict with box-select - one more condition
+      // checked ahead of the existing chain, with no new state machine.
+      // blueprintCopyMode and a non-null blueprintPasteId are themselves
+      // mutually exclusive by construction (see toggleBlueprintCopyMode/
+      // beginBlueprintPaste, each of which cancels the other), so only one of
+      // isBlueprintCopyDragging/isBlueprintPasting can ever be true at once.
       const dxFromDown = pointer.x - this.pointerDownX;
       const dyFromDown = pointer.y - this.pointerDownY;
       const dragDistance = Math.sqrt(dxFromDown * dxFromDown + dyFromDown * dyFromDown);
@@ -333,6 +361,9 @@ export class InputSystem {
         isLinePlacementBuilding(this.scene.selectedType) &&
         pointer.leftButtonDown() &&
         dragDistance > CLICK_MOVE_THRESHOLD;
+      const isBlueprintCopyDragging =
+        this.blueprintCopyMode && pointer.leftButtonDown() && dragDistance > CLICK_MOVE_THRESHOLD;
+      const isBlueprintPasting = this.blueprintPasteId !== null;
 
       if (pointer.rightButtonDown() && this.scene.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
@@ -340,9 +371,17 @@ export class InputSystem {
         this.scene.cameras.main.scrollX -= dx;
         this.scene.cameras.main.scrollY -= dy;
         this.scene.minimapSystem.redrawMinimapViewportThrottled();
+      } else if (isBlueprintPasting) {
+        this.updateBlueprintPastePreview(pointer);
+      } else if (isBlueprintCopyDragging) {
+        this.updateSelectionRectangle(pointer);
       } else if (isLineDragging) {
         this.updateLinePreview(pointer);
-      } else if (pointer.leftButtonDown() && this.scene.selectedType === null) {
+      } else if (
+        pointer.leftButtonDown() &&
+        this.scene.selectedType === null &&
+        !this.blueprintCopyMode
+      ) {
         this.updateSelectionRectangle(pointer);
       }
 
@@ -354,7 +393,7 @@ export class InputSystem {
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
       this.updateInfoText(pointer);
-      if (!isLineDragging) {
+      if (!isLineDragging && !isBlueprintPasting) {
         this.updatePreview(pointer);
       }
     });
@@ -838,6 +877,326 @@ export class InputSystem {
     });
   }
 
+  // ---------------------------------------------------------------------
+  // Blueprint copy-paste (Phase 88)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Copy mode is armed via BuildingBar's "Copy" button or the 'B' hotkey
+   * (see setupHotkeys); Paste mode is armed once a blueprint is chosen from
+   * BuildingBar's picker (`'blueprint-paste-selected'`). Both share the exact
+   * mode-exclusivity mechanism Phase 43 established for line-drag placement:
+   * a boolean/nullable field checked ahead of setupCameraDrag's existing
+   * pan/box-select/line-drag branch chain (see that method's own updated
+   * comment) rather than a new state machine. Entering either mode cancels
+   * placement/demolish mode and vice versa, mirroring how
+   * setupDemolishMode already cancels placement on entry.
+   */
+  setupBlueprints(): void {
+    this.blueprintCostText = this.scene.add
+      .text(0, 0, '', {
+        fontSize: '12px',
+        color: '#ffffff',
+        backgroundColor: '#2e7d32dd',
+        padding: { x: 4, y: 2 },
+      })
+      .setDepth(PLACEMENT_HINT_DEPTH)
+      .setVisible(false);
+
+    gameEvents.on('blueprint-paste-selected', (blueprintId: string | null) => {
+      this.beginBlueprintPaste(blueprintId);
+    });
+    // BuildingBar's Copy button has no direct reference to InputSystem (it
+    // only ever talks to gameState/gameEvents), so it emits this bare toggle
+    // rather than calling toggleBlueprintCopyMode() directly - the 'B'
+    // hotkey (setupHotkeys) calls the method itself since it already lives
+    // on this class.
+    gameEvents.on('toggle-blueprint-copy-mode', () => this.toggleBlueprintCopyMode());
+
+    // Entering placement/demolish mode or selecting another blueprint always
+    // cancels whichever blueprint mode is active - the same exclusivity rule
+    // setupDemolishMode/setupRallyPoints already apply to themselves.
+    gameEvents.on('select-building', () => {
+      this.exitBlueprintCopyMode();
+      this.cancelBlueprintPaste();
+    });
+    gameEvents.on('demolish-mode-changed', (active: boolean) => {
+      if (active) {
+        this.exitBlueprintCopyMode();
+        this.cancelBlueprintPaste();
+      }
+    });
+    gameEvents.on('cancel-placement', () => {
+      this.exitBlueprintCopyMode();
+      this.cancelBlueprintPaste();
+    });
+    gameEvents.on('game-reset', () => {
+      this.exitBlueprintCopyMode();
+      this.cancelBlueprintPaste();
+    });
+
+    this.scene.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (this.consumeTouchTapSuppression(pointer)) {
+        return;
+      }
+      if (this.scene.minimapSystem.isPointerInMinimap(pointer)) {
+        return;
+      }
+      if (!pointer.leftButtonReleased()) {
+        return;
+      }
+
+      if (this.blueprintCopyMode) {
+        this.commitBlueprintCopy(pointer);
+        return;
+      }
+      if (this.blueprintPasteId !== null) {
+        this.commitBlueprintPaste(pointer);
+      }
+    });
+  }
+
+  /** Called by BuildingBar's Copy button and the 'B' hotkey - toggles Copy mode, cancelling Paste mode and normal placement/demolish mode on entry (see setupBlueprints' exclusivity comment). */
+  toggleBlueprintCopyMode(): void {
+    if (this.blueprintCopyMode) {
+      this.exitBlueprintCopyMode();
+      return;
+    }
+    this.cancelBlueprintPaste();
+    gameEvents.emit('cancel-placement');
+    if (this.demolishMode) {
+      gameEvents.emit('demolish-mode-changed', false);
+    }
+    this.blueprintCopyMode = true;
+    gameEvents.emit('blueprint-copy-mode-changed', true);
+  }
+
+  private exitBlueprintCopyMode(): void {
+    if (!this.blueprintCopyMode) {
+      return;
+    }
+    this.blueprintCopyMode = false;
+    this.selectionRectGraphics.clear();
+    gameEvents.emit('blueprint-copy-mode-changed', false);
+  }
+
+  /**
+   * Scans every PlacedBuilding whose ORIGIN tile (tileX/tileY, not any tile
+   * of a multi-tile footprint) falls inside the released drag-rectangle, and
+   * saves the result as a Blueprint via a name prompt - mirroring
+   * SaveLoadOverlay's window.prompt convention (Phase 65's established
+   * pattern for a one-off text input, rather than inventing a form field for
+   * this single case). An empty capture is reported, not silently
+   * discarded - saveBlueprint itself returns the "nothing to save" reason,
+   * which is surfaced via the same transient world-space hint
+   * showTransientHint already uses for the bulldozer's "need $X to clear"
+   * message.
+   */
+  private commitBlueprintCopy(pointer: Phaser.Input.Pointer): void {
+    const dx = pointer.x - this.pointerDownX;
+    const dy = pointer.y - this.pointerDownY;
+    if (Math.sqrt(dx * dx + dy * dy) <= CLICK_MOVE_THRESHOLD) {
+      this.selectionRectGraphics.clear();
+      return;
+    }
+
+    const world = this.pointerWorldPoint(pointer);
+    const startTile = this.worldToTile(this.dragStartWorldX, this.dragStartWorldY);
+    const endTile = this.worldToTile(world.x, world.y);
+    const minTileX = Math.min(startTile.tileX, endTile.tileX);
+    const maxTileX = Math.max(startTile.tileX, endTile.tileX);
+    const minTileY = Math.min(startTile.tileY, endTile.tileY);
+    const maxTileY = Math.max(startTile.tileY, endTile.tileY);
+
+    const captured: BlueprintTile[] = [];
+    for (const building of getPlacedBuildings()) {
+      if (
+        building.tileX >= minTileX &&
+        building.tileX <= maxTileX &&
+        building.tileY >= minTileY &&
+        building.tileY <= maxTileY
+      ) {
+        captured.push({
+          dxTile: building.tileX - minTileX,
+          dyTile: building.tileY - minTileY,
+          type: building.type,
+        });
+      }
+    }
+
+    this.selectionRectGraphics.clear();
+    this.exitBlueprintCopyMode();
+
+    if (captured.length === 0) {
+      this.showTransientHint('No buildings in that selection', world.x, world.y);
+      return;
+    }
+
+    // Same window.prompt convention SaveLoadOverlay's own save-name prompt
+    // uses (Phase 65's established pattern for a one-off text input, rather
+    // than inventing a form field for this single case).
+    const name = window.prompt('Blueprint name:', '');
+    if (name === null) {
+      // Cancelled - nothing was saved (a genuine Cancel/Escape aborts the
+      // whole capture rather than saving an "Untitled Blueprint" the player
+      // explicitly backed out of).
+      return;
+    }
+
+    const result = saveBlueprint(name, captured);
+    if (!result.ok) {
+      this.showTransientHint(result.reason, world.x, world.y);
+      return;
+    }
+    playUiSound('moveConfirm');
+  }
+
+  /** Called by BuildingBar's picker when a blueprint row is chosen; `null` cancels an in-progress paste. Cancels Copy mode and normal placement/demolish mode on entry (see setupBlueprints' exclusivity comment). */
+  private beginBlueprintPaste(blueprintId: string | null): void {
+    if (blueprintId === null) {
+      this.cancelBlueprintPaste();
+      return;
+    }
+    const blueprint = getBlueprintById(blueprintId);
+    if (!blueprint) {
+      this.cancelBlueprintPaste();
+      return;
+    }
+    this.exitBlueprintCopyMode();
+    gameEvents.emit('cancel-placement');
+    if (this.demolishMode) {
+      gameEvents.emit('demolish-mode-changed', false);
+    }
+    this.blueprintPasteId = blueprintId;
+  }
+
+  private cancelBlueprintPaste(): void {
+    if (this.blueprintPasteId === null) {
+      return;
+    }
+    this.blueprintPasteId = null;
+    this.hideBlueprintPastePreview();
+  }
+
+  private hideBlueprintPastePreview(): void {
+    for (const image of this.blueprintPreviewImages) {
+      image.setVisible(false);
+    }
+    this.blueprintCostText?.setVisible(false);
+    this.placementHintText?.setVisible(false);
+  }
+
+  private getOrCreateBlueprintPreviewImage(index: number, type: BuildingType): Phaser.GameObjects.Image {
+    const existing = this.blueprintPreviewImages[index];
+    if (existing) {
+      existing.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(type));
+      return existing;
+    }
+    const image = this.scene.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(type));
+    image.setOrigin(0, 0);
+    image.setAlpha(0.6);
+    image.setDepth(500);
+    this.blueprintPreviewImages[index] = image;
+    return image;
+  }
+
+  /**
+   * Ghost preview of the WHOLE relative tile-set anchored at the cursor's
+   * tile, following updateLinePreview's exact green/red-per-tile
+   * (getPlacementRejection) plus running-cost-tag pattern, just over a 2D
+   * offset set instead of a 1D line run.
+   */
+  private updateBlueprintPastePreview(pointer: Phaser.Input.Pointer): void {
+    if (this.blueprintPasteId === null) {
+      return;
+    }
+    const blueprint = getBlueprintById(this.blueprintPasteId);
+    if (!blueprint) {
+      this.cancelBlueprintPaste();
+      return;
+    }
+
+    const { tileX: anchorTileX, tileY: anchorTileY } = this.pointerToTile(pointer);
+
+    let validCount = 0;
+    let totalMoney = 0;
+    const totalMaterials: Partial<Record<ResourceKey, number>> = {};
+
+    blueprint.tiles.forEach((tile, index) => {
+      const tileX = anchorTileX + tile.dxTile;
+      const tileY = anchorTileY + tile.dyTile;
+      const rejection = getPlacementRejection(tileX, tileY, tile.type);
+      const image = this.getOrCreateBlueprintPreviewImage(index, tile.type);
+      image.setPosition(tileX * TILE_SIZE, tileY * TILE_SIZE);
+      image.setVisible(true);
+      image.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
+
+      if (rejection === null) {
+        validCount++;
+        const definition = BUILDING_DEFINITIONS[tile.type];
+        totalMoney += definition.cost;
+        if (definition.materials) {
+          for (const [key, amount] of Object.entries(definition.materials) as [ResourceKey, number][]) {
+            totalMaterials[key] = (totalMaterials[key] ?? 0) + amount;
+          }
+        }
+      }
+    });
+
+    for (let index = blueprint.tiles.length; index < this.blueprintPreviewImages.length; index++) {
+      this.blueprintPreviewImages[index].setVisible(false);
+    }
+
+    const costLabel =
+      Object.keys(totalMaterials).length > 0
+        ? `$${totalMoney} + ${formatResourceMap(totalMaterials)}`
+        : `$${totalMoney}`;
+    this.blueprintCostText.setText(`${blueprint.name}: ${validCount}/${blueprint.tiles.length} - ${costLabel}`);
+    this.blueprintCostText.setPosition(anchorTileX * TILE_SIZE, (anchorTileY - 1) * TILE_SIZE - 4);
+    this.blueprintCostText.setVisible(true);
+    this.placementHintText.setVisible(false);
+    this.scene.worldVisualsSystem.clearHarvestRing();
+  }
+
+  /**
+   * Commits every tile of the blueprint IN ITS OWN STORED (row-major
+   * capture) ORDER via the shared placeBuildingAt primitive, one call per
+   * tile - matching commitLinePlacement's exact established semantic: each
+   * call re-checks getPlacementRejection/canPlaceBuilding against whatever
+   * money/materials remain AT THAT POINT, so a paste that outruns the
+   * player's funds simply stops placing partway through rather than
+   * overspending or aborting the whole stamp. Paste mode stays armed after a
+   * commit (unlike single-tile placement's shift-repeat default) so stamping
+   * the same cluster repeatedly is the common case, not the exception -
+   * Escape/selecting a building/demolish mode/a fresh pick from the picker
+   * all still cancel it via beginBlueprintPaste/cancelBlueprintPaste.
+   */
+  private commitBlueprintPaste(pointer: Phaser.Input.Pointer): void {
+    if (this.blueprintPasteId === null) {
+      return;
+    }
+    const blueprint = getBlueprintById(this.blueprintPasteId);
+    if (!blueprint) {
+      this.cancelBlueprintPaste();
+      return;
+    }
+
+    const { tileX: anchorTileX, tileY: anchorTileY } = this.pointerToTile(pointer);
+
+    let placedCount = 0;
+    for (const tile of blueprint.tiles) {
+      if (this.placeBuildingAtType(anchorTileX + tile.dxTile, anchorTileY + tile.dyTile, tile.type)) {
+        placedCount++;
+      }
+    }
+
+    if (placedCount > 0) {
+      playPlacementSound();
+    }
+
+    this.updateBlueprintPastePreview(pointer);
+  }
+
   setupBuildingSelection(): void {
     this.scene.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       const wasMinimapClick = this.scene.minimapSystem.minimapPointerActive;
@@ -853,7 +1212,11 @@ export class InputSystem {
         return;
       }
 
-      if (this.scene.selectedType !== null) {
+      // Phase 88: a Copy-mode drag-release or a Paste-mode click is handled
+      // entirely by setupBlueprints' own pointerup listener - this handler
+      // must not also read the same release as a building select/deselect
+      // click underneath it.
+      if (this.scene.selectedType !== null || this.blueprintCopyMode || this.blueprintPasteId !== null) {
         return;
       }
 
@@ -1148,13 +1511,23 @@ export class InputSystem {
    * play the placement sound itself, since a multi-tile line plays it once
    * for the whole line instead of once per tile (see tryPlaceAt/
    * commitLinePlacement, the two callers).
+   *
+   * Phase 88: unchanged signature/behavior - still resolves the type from
+   * `this.scene.selectedType`, exactly as before. Its body now delegates to
+   * placeBuildingAtType (a plain sibling taking an explicit type) so
+   * commitBlueprintPaste can place tiles of a blueprint's own recorded
+   * per-tile type without a selectedType to read from.
    */
   private placeBuildingAt(tileX: number, tileY: number): boolean {
     if (this.scene.selectedType === null) {
       return false;
     }
+    return this.placeBuildingAtType(tileX, tileY, this.scene.selectedType);
+  }
 
-    const building = placeBuilding(tileX, tileY, this.scene.selectedType);
+  /** Phase 88: the actual placement primitive, shared by placeBuildingAt (reads this.scene.selectedType) and commitBlueprintPaste (reads each blueprint tile's own stored type). Same return-false-on-rejection, no-sound-here contract as placeBuildingAt. */
+  private placeBuildingAtType(tileX: number, tileY: number, type: BuildingType): boolean {
+    const building = placeBuilding(tileX, tileY, type);
     if (!building) {
       return false;
     }
@@ -1410,7 +1783,15 @@ export class InputSystem {
         return;
       }
 
-      if (this.scene.selectedType !== null || this.scene.minimapSystem.isPointerInMinimap(pointer)) {
+      // Phase 88: Copy/Paste mode already fully handled this release in
+      // setupBlueprints' own (earlier-registered) pointerup listener - must
+      // not also be read as a unit selection/box-select/move-order here.
+      if (
+        this.scene.selectedType !== null ||
+        this.blueprintCopyMode ||
+        this.blueprintPasteId !== null ||
+        this.scene.minimapSystem.isPointerInMinimap(pointer)
+      ) {
         return;
       }
 
@@ -1850,6 +2231,16 @@ export class InputSystem {
       // Backspace, C, V, E, H/Slash) - none use KeyG.
       if (event.code === 'KeyG') {
         this.toggleAllGates();
+        event.preventDefault();
+      }
+
+      // Phase 88: 'B' ("blueprint") toggles Copy mode. Confirmed unbound
+      // before adding: grepped setupHotkeys/setupKeyboardCamera for every
+      // existing key binding (WASD/arrows via the separate cameraKeys record,
+      // Shift, digit 1-9, Space, Delete/Backspace, C, V, E, G, H/Slash) - none
+      // use KeyB.
+      if (event.code === 'KeyB') {
+        this.toggleBlueprintCopyMode();
         event.preventDefault();
       }
     });

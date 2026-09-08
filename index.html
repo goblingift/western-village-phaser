@@ -61,6 +61,7 @@
       #help-panel,
       #save-load-panel,
       #prestige-panel,
+      #blueprint-panel,
       #game-over-panel,
       #difficulty-select-panel {
         touch-action: pan-y;
@@ -205,6 +206,11 @@
          gate-controls follows the audio group in the row, so it must not
          re-claim speed-group's margin-left:auto either. */
       #building-bar .gate-controls {
+        margin-left: 8px;
+      }
+      /* Phase 88: same margin-left override reasoning as .gate-controls above -
+         blueprint-controls follows it in the row. */
+      #building-bar .blueprint-controls {
         margin-left: 8px;
       }
       #building-bar .volume {
@@ -978,30 +984,41 @@
       #save-load-panel h2 {
         margin-top: 0;
       }
-      #save-load-panel .save-load-table {
+      /* Phase 88: #blueprint-panel shares every one of these .save-load-*
+         table/row/action classes verbatim (see BlueprintManageOverlay's own
+         doc comment on why it reuses SaveLoadOverlay's exact markup shape),
+         so each rule below is scoped to both panel ids rather than
+         duplicated. */
+      #save-load-panel .save-load-table,
+      #blueprint-panel .save-load-table {
         width: 100%;
         border-collapse: collapse;
       }
-      #save-load-panel .save-load-row td {
+      #save-load-panel .save-load-row td,
+      #blueprint-panel .save-load-row td {
         padding: 10px 6px;
         vertical-align: top;
         border-bottom: 1px solid #ffffff14;
         line-height: 1.5;
       }
-      #save-load-panel .save-load-empty {
+      #save-load-panel .save-load-empty,
+      #blueprint-panel .save-load-empty {
         color: #8d7f6e;
       }
-      #save-load-panel .save-load-actions-cell {
+      #save-load-panel .save-load-actions-cell,
+      #blueprint-panel .save-load-actions-cell {
         white-space: nowrap;
         text-align: right;
       }
-      #save-load-panel .save-load-actions {
+      #save-load-panel .save-load-actions,
+      #blueprint-panel .save-load-actions {
         margin-top: 14px;
         display: flex;
         gap: 8px;
         justify-content: flex-end;
       }
-      #save-load-panel button {
+      #save-load-panel button,
+      #blueprint-panel button {
         background: #4a3524;
         color: #f2e6d8;
         border: 1px solid #8d6e4a;
@@ -1011,6 +1028,42 @@
         cursor: pointer;
       }
       #save-load-panel button.save-load-delete {
+        background: #6b2b2b;
+        border-color: #a33;
+      }
+      /* Phase 88: Blueprint picker/manage modal. Reuses the .save-load-*
+         classes verbatim (same table-of-named-slots-with-per-row-actions
+         shape as Save/Load) so no new base styling is needed beyond the
+         panel's own id selector for the fixed-backdrop/sizing rules. */
+      #blueprint-overlay {
+        position: fixed;
+        inset: 0;
+        background: #000000b3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+      }
+      #blueprint-overlay[hidden] {
+        display: none;
+      }
+      #blueprint-panel {
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 8px;
+        padding: 20px 26px;
+        width: 620px;
+        max-width: 92vw;
+        max-height: 90vh;
+        overflow-y: auto;
+        font-family: sans-serif;
+        font-size: 12px;
+      }
+      #blueprint-panel h2 {
+        margin-top: 0;
+      }
+      #blueprint-panel button.blueprint-delete {
         background: #6b2b2b;
         border-color: #a33;
       }
@@ -1405,7 +1458,8 @@
         #game-over-panel button,
         #help-panel button,
         #save-load-panel button,
-        #prestige-panel button {
+        #prestige-panel button,
+        #blueprint-panel button {
           min-height: 44px;
           min-width: 44px;
           padding: 12px 16px;
@@ -1429,8 +1483,10 @@
         /* Phase 65: Save/Load rows put Save-over/Load/Delete side by side in a
            narrow table cell - keep them stacked block targets on touch so
            each still gets its full 44px tall tap area instead of three
-           squeezed-together inline buttons. */
-        #save-load-panel .save-load-actions-cell button {
+           squeezed-together inline buttons. Phase 88: Blueprint rows share
+           the identical Paste/Rename/Delete-in-one-cell shape. */
+        #save-load-panel .save-load-actions-cell button,
+        #blueprint-panel .save-load-actions-cell button {
           display: block;
           width: 100%;
           margin: 6px 0 0;

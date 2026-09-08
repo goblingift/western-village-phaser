@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { VIEWPORT_HEIGHT } from './config/constants';
 import { gameConfig } from './config/gameConfig';
+import { BlueprintManageOverlay } from './ui/BlueprintManageOverlay';
 import { BuildingBar } from './ui/BuildingBar';
 import { BuildingInfoPanel } from './ui/BuildingInfoPanel';
 import { DifficultySelectOverlay } from './ui/DifficultySelectOverlay';
@@ -33,6 +34,7 @@ if (appContainer && stageContainer) {
   new HelpOverlay(appContainer);
   new SaveLoadOverlay(appContainer);
   new PrestigeOverlay(appContainer);
+  new BlueprintManageOverlay(appContainer);
   new GameOverOverlay(appContainer);
   // Phase 39: shown last so it's on top for the very first run; MainScene
   // itself starts paused (see MainScene.pauseForPreGameSelection) until this

@@ -568,6 +568,7 @@ export class MainScene extends Phaser.Scene {
     this.setupSpeedControl();
     this.minimapSystem.setup();
     this.inputSystem.setupBuildingPlacement();
+    this.inputSystem.setupBlueprints();
     this.inputSystem.setupDemolishMode();
     this.setupBuildingRemoval();
     this.inputSystem.setupBuildingSelection();

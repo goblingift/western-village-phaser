@@ -179,6 +179,36 @@ export interface GameEventMap {
    * figure of its own.
    */
   'town-established': (payload: { legacyEarned: number }) => void;
+  /**
+   * Phase 88: opens/closes the Blueprint picker/manage modal (paste-selection
+   * + rename/delete). Emitted by BuildingBar's "Blueprints" button;
+   * BlueprintManageOverlay owns its own shown/hidden state and is the only
+   * listener, exactly like 'toggle-help-overlay'/'toggle-save-load-overlay'.
+   */
+  'toggle-blueprint-overlay': () => void;
+  /**
+   * Phase 88: toggles Blueprint Copy mode. Emitted by BuildingBar's "Copy"
+   * button; InputSystem is the sole listener (its own toggleBlueprintCopyMode,
+   * also bound to the 'B' hotkey) and re-emits 'blueprint-copy-mode-changed'
+   * once the mode actually flips, which is what drives the button's active
+   * state - the same "UI emits a bare toggle, the owning system is the single
+   * source of truth for the resulting state" shape 'demolish-mode-changed'
+   * already uses between BuildingBar and InputSystem's demolish mode.
+   */
+  'toggle-blueprint-copy-mode': () => void;
+  /**
+   * Phase 88: fired by InputSystem whenever Copy mode is entered/exited (the
+   * 'B' hotkey or BuildingBar's Copy button), so BuildingBar can toggle the
+   * button's active state the same way 'demolish-mode-changed' drives the
+   * Bulldoze button.
+   */
+  'blueprint-copy-mode-changed': (active: boolean) => void;
+  /**
+   * Phase 88: fired by BuildingManageOverlay's picker when a saved blueprint
+   * is chosen for pasting (or `null` to cancel an in-progress paste);
+   * InputSystem is the sole listener and enters/exits Paste mode accordingly.
+   */
+  'blueprint-paste-selected': (blueprintId: string | null) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

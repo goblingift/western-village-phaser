@@ -41,6 +41,8 @@ export class BuildingBar {
   private panels = new Map<BuildingCategory, HTMLDivElement>();
   private speedButtons: HTMLButtonElement[] = [];
   private demolishButton: HTMLButtonElement;
+  /** Phase 88: mirrors demolishButton's own active-state toggle, just driven by 'blueprint-copy-mode-changed' instead of 'demolish-mode-changed'. */
+  private blueprintCopyButton!: HTMLButtonElement;
   private muteButton!: HTMLButtonElement;
   private volumeSlider!: HTMLInputElement;
   private musicVolumeSlider!: HTMLInputElement;
@@ -77,6 +79,7 @@ export class BuildingBar {
     topRow.appendChild(this.createSpeedControls());
     topRow.appendChild(this.createAudioControls());
     topRow.appendChild(this.createGateControls());
+    topRow.appendChild(this.createBlueprintControls());
     topRow.appendChild(this.createStatsButton());
     topRow.appendChild(this.createHelpButton());
     topRow.appendChild(this.createSaveLoadButton());
@@ -300,6 +303,53 @@ export class BuildingBar {
     wrapper.appendChild(closeButton);
 
     return wrapper;
+  }
+
+  /**
+   * Phase 88: Blueprint Copy-Paste. "Copy" toggles InputSystem's Copy mode
+   * (drag a rectangle over placed buildings to capture them) - mirrors the
+   * Bulldoze button's own active-state toggle (`demolish-mode-changed`),
+   * just for `blueprint-copy-mode-changed` instead, since the two modes are
+   * exclusive but otherwise share nothing button-side. "Blueprints" opens the
+   * combined picker/rename/delete modal (BlueprintManageOverlay), which also
+   * doubles as the "choose what to paste" UI per the phase's own scoping
+   * note that a separate in-bar dropdown isn't required.
+   */
+  private createBlueprintControls(): HTMLDivElement {
+    const group = document.createElement('div');
+    group.className = 'speed-group blueprint-controls';
+
+    this.blueprintCopyButton = document.createElement('button');
+    this.blueprintCopyButton.className = 'speed';
+    this.blueprintCopyButton.textContent = 'Copy';
+    this.blueprintCopyButton.title = 'Blueprint Copy mode: drag a rectangle over buildings to capture them (B)';
+    this.blueprintCopyButton.addEventListener('click', () => this.toggleBlueprintCopyMode());
+    group.appendChild(this.blueprintCopyButton);
+
+    const manageButton = document.createElement('button');
+    manageButton.className = 'speed';
+    manageButton.textContent = 'Blueprints';
+    manageButton.title = 'Paste a saved blueprint, or rename/delete one';
+    manageButton.addEventListener('click', () => gameEvents.emit('toggle-blueprint-overlay'));
+    group.appendChild(manageButton);
+
+    gameEvents.on('blueprint-copy-mode-changed', (active: boolean) => {
+      this.blueprintCopyButton.classList.toggle('active', active);
+    });
+
+    return group;
+  }
+
+  /**
+   * Copy mode has no local boolean of its own here - InputSystem is the
+   * single source of truth (mirroring how demolishMode's local field only
+   * ever mirrors 'demolish-mode-changed', never drives the toggle itself).
+   * A bare emit is enough since InputSystem's own toggleBlueprintCopyMode
+   * (triggered by the 'B' hotkey too) is what actually flips the mode and
+   * re-emits the event this button listens for.
+   */
+  private toggleBlueprintCopyMode(): void {
+    gameEvents.emit('toggle-blueprint-copy-mode');
   }
 
   private createStatsButton(): HTMLButtonElement {
