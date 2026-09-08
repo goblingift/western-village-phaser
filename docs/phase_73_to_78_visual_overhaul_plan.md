@@ -1,6 +1,6 @@
 # Visual Overhaul: Procedural Pixel Art → AI-Generated Spritesheet Assets
 
-**Status:** PLAN — all open design questions resolved (§6). Awaiting final go-ahead to begin implementation. No code written.
+**Status:** PIPELINE MIGRATION COMPLETE (Phases 73-78 all shipped, 2026-09-08). Every code path now loads real image files from `public/art/`, verifiable via `npm run verify:art`. **All shipped art is PLACEHOLDER** (flat colors, no AI image-generation tool was available in the implementation environment) — the remaining work is producing genuine AI-generated artwork per §2's art-direction spec and dropping it into `public/art/` at the exact file paths/frame names/dimensions this pipeline expects. No further code changes should be needed to complete the visual upgrade once real art exists.
 **Phases:** 73–78 (continues from Phase 72, the highest phase referenced in `src/`).
 **Scope:** Replace the runtime-procedural pixel-art system in `src/scenes/BootScene.ts` with real, more-detailed image assets loaded through Phaser's normal texture pipeline. Rendering quality only — no gameplay, scale, camera, or tile-logic change.
 

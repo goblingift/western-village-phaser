@@ -148,7 +148,18 @@ const ASSET_CHECKS = [
       '6 accent frames packed side-by-side: WellCrank 16x4, WarehouseDoor 24x24, ' +
       'SupermarketAwning 64x8, ChickenDoor 16x12, HouseWindowLight 12x12, Campfire 12x12',
   },
-  // Phase 78: append resource-icons-atlas.png
+  // Phase 78: resource icons (HUD polish). 15 frames (one per ResourceKey,
+  // mirrors src/config/buildingConfig.ts's ResourceKey union) packed
+  // side-by-side, each 12x12px (RESOURCE_ICON_SIZE - a HUD-chrome size
+  // independent of Phase 75/76's 12->18 small-unit-sprite bump). Per-frame
+  // name/size correctness is verified separately by
+  // tools/verify-resource-icon-frames.mjs.
+  {
+    file: 'public/art/resource-icons-atlas.png',
+    expectedWidth: 180,
+    expectedHeight: 12,
+    note: '15 resource icon frames x 12x12px each (one per ResourceKey)',
+  },
 ];
 
 function main() {
