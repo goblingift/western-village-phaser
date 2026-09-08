@@ -67,7 +67,17 @@ import {
   WANDERING_SETTLERS_MONEY_MAX,
   ROLLING_OBJECTIVE_SLOT_COUNT,
 } from '../config/constants';
-import { OBJECTIVE_DEFINITIONS, OBJECTIVE_DEFINITIONS_BY_ID, ObjectiveSnapshot, formatObjectiveReward } from '../config/objectives';
+import {
+  OBJECTIVE_DEFINITIONS,
+  OBJECTIVE_DEFINITIONS_BY_ID,
+  OBJECTIVE_TEMPLATES,
+  ObjectiveDefinition,
+  ObjectiveSnapshot,
+  ObjectiveTemplateId,
+  ObjectiveTemplateParams,
+  formatObjectiveReward,
+  generateObjectiveFromTemplate,
+} from '../config/objectives';
 import {
   AnimalKind,
   BRAWLER_TRAIN_MATERIALS,
@@ -704,6 +714,80 @@ let objectiveQueue: string[] = [];
 const completedObjectiveIds = new Set<string>();
 
 /**
+ * Phase 81: Procedural Endless Objectives. Once the static objectiveQueue
+ * (seeded from the 8 fixed OBJECTIVE_DEFINITIONS) runs dry - which it always
+ * eventually does in Endless mode - refillActiveObjectives() generates a new
+ * ObjectiveDefinition from a template instead of leaving the slot empty
+ * forever. A generated definition's getProgress is a live closure, so it
+ * can't be persisted directly (see GeneratedObjectiveRecord below); it's kept
+ * here, in a runtime-only Map, and resolved through resolveObjectiveDefinition
+ * rather than OBJECTIVE_DEFINITIONS_BY_ID directly.
+ */
+const generatedObjectiveDefinitions = new Map<string, ObjectiveDefinition>();
+
+/**
+ * Everything needed to rebuild one generated ObjectiveDefinition later - the
+ * template id + the params picked at generation time + the difficulty index
+ * used to scale it + the per-run sequence number baked into its id (so a
+ * rebuilt definition's id is byte-for-byte identical to the original, not
+ * just its target/reward). This, not the ObjectiveDefinition itself, is what
+ * gets persisted (Decision 6) - see serializeObjectivesState/
+ * restoreObjectivesState below.
+ */
+interface GeneratedObjectiveRecord {
+  id: string;
+  templateId: ObjectiveTemplateId;
+  params: ObjectiveTemplateParams;
+  difficultyIndex: number;
+  generationSeq: number;
+}
+/** Keyed by generated id, so a currently-active OR still-queued generated objective's record can be looked up/persisted/rebuilt uniformly. */
+const generatedObjectiveRecords = new Map<string, GeneratedObjectiveRecord>();
+/** Monotonically increasing per-run counter guaranteeing a fresh generated id every call (Decision 1's "guaranteed-unique id" requirement) - never reset except by a full resetGame. */
+let objectiveGenerationCounter = 0;
+
+/**
+ * The single resolver every objective-id lookup MUST go through (Decision 2).
+ * Checks the runtime generated-objective map first, falls back to the 8
+ * static hand-authored definitions second. Both runObjectivesCheck (progress/
+ * completion) and getActiveObjectives (UI display) read exclusively through
+ * this - a lookup that bypassed it for a generated id would silently stall
+ * that objective forever (runObjectivesCheck) or show the raw id string
+ * instead of a description (getActiveObjectives).
+ */
+function resolveObjectiveDefinition(id: string): ObjectiveDefinition | undefined {
+  return generatedObjectiveDefinitions.get(id) ?? OBJECTIVE_DEFINITIONS_BY_ID.get(id);
+}
+
+/**
+ * Picks one currently-available template (Decision 5: filtered against the
+ * live snapshot so e.g. a "Ship Liquor" objective is never generated for a
+ * town with no Liquor Still) at random, generates a concrete definition off
+ * it via the shared template-building path, registers it into both runtime
+ * maps, and returns its id. OBJECTIVE_TEMPLATES always includes at least one
+ * universally-available template (net-worth), so this can never fail to
+ * produce something.
+ */
+function generateNextObjectiveId(snapshot: ObjectiveSnapshot, difficultyIndex: number): string {
+  const available = OBJECTIVE_TEMPLATES.filter((template) => template.isAvailable(snapshot));
+  const pool = available.length > 0 ? available : OBJECTIVE_TEMPLATES;
+  const template = pool[Math.floor(Math.random() * pool.length)];
+  const params = template.pickParams(snapshot);
+  const generationSeq = ++objectiveGenerationCounter;
+  const definition = generateObjectiveFromTemplate(template.templateId, params, difficultyIndex, generationSeq);
+
+  generatedObjectiveDefinitions.set(definition.id, definition);
+  generatedObjectiveRecords.set(definition.id, {
+    id: definition.id,
+    templateId: template.templateId,
+    params,
+    difficultyIndex,
+    generationSeq,
+  });
+  return definition.id;
+}
+
+/**
  * Run-lifetime total of each resource ever sold across Supermarket/Saloon/
  * Trading Post (Phases 14/27/51) - unlike the resource pool itself, this
  * never decrements, so a sale-driven objective ("Ship 50 Clothes") can't be
@@ -743,15 +827,31 @@ function initObjectiveQueue(): void {
   objectiveQueue = OBJECTIVE_DEFINITIONS.map((definition) => definition.id);
   activeObjectiveStates = [];
   completedObjectiveIds.clear();
+  generatedObjectiveDefinitions.clear();
+  generatedObjectiveRecords.clear();
+  objectiveGenerationCounter = 0;
   refillActiveObjectives();
 }
 
+/**
+ * Fills any empty rolling slot first from the static queue (unchanged
+ * behavior), then, once that's exhausted, generates a fresh objective from a
+ * template (Decision 3: lazily, one at a time, exactly when a slot actually
+ * needs filling - never pre-generated in bulk). Decision 4: the generator's
+ * difficulty index is the current completed-objective count, so objectives
+ * generated later in a long run scale up.
+ */
 function refillActiveObjectives(): void {
-  while (activeObjectiveStates.length < ROLLING_OBJECTIVE_SLOT_COUNT && objectiveQueue.length > 0) {
-    const id = objectiveQueue.shift();
-    if (id) {
-      activeObjectiveStates.push({ id, progress: 0 });
+  while (activeObjectiveStates.length < ROLLING_OBJECTIVE_SLOT_COUNT) {
+    const queuedId = objectiveQueue.shift();
+    if (queuedId) {
+      activeObjectiveStates.push({ id: queuedId, progress: 0 });
+      continue;
     }
+    const snapshot = buildObjectiveSnapshot();
+    const difficultyIndex = completedObjectiveIds.size;
+    const generatedId = generateNextObjectiveId(snapshot, difficultyIndex);
+    activeObjectiveStates.push({ id: generatedId, progress: 0 });
   }
 }
 
@@ -763,6 +863,7 @@ function buildObjectiveSnapshot(): ObjectiveSnapshot {
     watchtowerCount: placedBuildings.filter((building) => building.type === BuildingType.Watchtower).length,
     totalUnitsTrained,
     nightsSurvivedCleanCount,
+    buildingsEverBuiltByType: { ...buildingsEverBuiltByType },
   };
 }
 
@@ -786,7 +887,7 @@ function runObjectivesCheck(): void {
   let materialsGranted = false;
 
   for (const state of activeObjectiveStates) {
-    const definition = OBJECTIVE_DEFINITIONS_BY_ID.get(state.id);
+    const definition = resolveObjectiveDefinition(state.id);
     if (!definition) {
       continue;
     }
@@ -813,6 +914,12 @@ function runObjectivesCheck(): void {
       'info',
       elapsedSeconds,
     );
+    // A completed generated objective is done for good - drop its runtime
+    // definition/record so the generated-objective maps don't grow unbounded
+    // over a very long Endless run (the static definitions have no
+    // equivalent cleanup need, since they're a fixed 8-entry table).
+    generatedObjectiveDefinitions.delete(definition.id);
+    generatedObjectiveRecords.delete(definition.id);
   }
 
   activeObjectiveStates = stillActive;
@@ -834,7 +941,7 @@ export interface ObjectiveView {
 /** UI-ready view of the current rolling objective set, for ObjectivesPanel. */
 export function getActiveObjectives(): ObjectiveView[] {
   return activeObjectiveStates.map((state) => {
-    const definition = OBJECTIVE_DEFINITIONS_BY_ID.get(state.id);
+    const definition = resolveObjectiveDefinition(state.id);
     return {
       id: state.id,
       description: definition?.description ?? state.id,
@@ -850,10 +957,31 @@ export function getCompletedObjectiveCount(): number {
 }
 
 /**
+ * Phase 81: the persisted shape of one generated objective - template id +
+ * params + difficulty index + the generation sequence baked into its id
+ * (Decision 6). NOT the ObjectiveDefinition itself (its getProgress is a
+ * closure that can't survive JSON.stringify) - restoreObjectivesState below
+ * feeds this straight back into generateObjectiveFromTemplate to rebuild a
+ * byte-for-byte-equivalent definition, including a working getProgress.
+ */
+export interface GeneratedObjectiveSaveEntry {
+  id: string;
+  templateId: ObjectiveTemplateId;
+  params: ObjectiveTemplateParams;
+  difficultyIndex: number;
+  generationSeq: number;
+}
+
+/**
  * Phase 56 persistence payload (Phase 52's save/load). Optional on the save
  * type itself (see persistence.ts) so a pre-Phase-56 save still loads fine -
  * resetGame's own initObjectiveQueue already seeded a fresh rolling set, and
  * this simply overwrites it when the field is present.
+ *
+ * Phase 81: `generatedObjectives` is optional on THIS interface too - an
+ * ObjectiveSaveState produced before this phase shipped has no such field at
+ * all (only the 8 static objectives existed then), and restoreObjectivesState
+ * below must treat that as "no generated objectives were active", not throw.
  */
 export interface ObjectiveSaveState {
   activeObjectiveStates: { id: string; progress: number }[];
@@ -862,9 +990,25 @@ export interface ObjectiveSaveState {
   cumulativeResourcesSold: Partial<Record<ResourceKey, number>>;
   totalUnitsTrained: number;
   nightsSurvivedCleanCount: number;
+  generatedObjectives?: GeneratedObjectiveSaveEntry[];
+  objectiveGenerationCounter?: number;
 }
 
 export function serializeObjectivesState(): ObjectiveSaveState {
+  // Every currently-ACTIVE objective id that resolves through the generated
+  // map (rather than the static OBJECTIVE_DEFINITIONS_BY_ID) needs its
+  // record persisted - objectiveQueue itself never holds generated ids (see
+  // refillActiveObjectives: a generated objective is created and pushed
+  // straight into activeObjectiveStates in the same call, never queued), so
+  // scanning activeObjectiveStates alone is sufficient.
+  const generatedObjectives: GeneratedObjectiveSaveEntry[] = [];
+  for (const state of activeObjectiveStates) {
+    const record = generatedObjectiveRecords.get(state.id);
+    if (record) {
+      generatedObjectives.push({ ...record, params: { ...record.params } });
+    }
+  }
+
   return {
     activeObjectiveStates: activeObjectiveStates.map((state) => ({ ...state })),
     objectiveQueue: [...objectiveQueue],
@@ -872,6 +1016,8 @@ export function serializeObjectivesState(): ObjectiveSaveState {
     cumulativeResourcesSold: { ...cumulativeResourcesSold },
     totalUnitsTrained,
     nightsSurvivedCleanCount,
+    generatedObjectives,
+    objectiveGenerationCounter,
   };
 }
 
@@ -885,6 +1031,24 @@ export function restoreObjectivesState(state: ObjectiveSaveState): void {
   cumulativeResourcesSold = { ...state.cumulativeResourcesSold };
   totalUnitsTrained = state.totalUnitsTrained;
   nightsSurvivedCleanCount = state.nightsSurvivedCleanCount;
+
+  // Phase 81: rebuild the runtime generated-objective map from the persisted
+  // template id + params + difficulty index for each entry - an old save
+  // (predating this phase) simply has `generatedObjectives` undefined, which
+  // degrades to "no generated objectives were active" rather than crashing.
+  generatedObjectiveDefinitions.clear();
+  generatedObjectiveRecords.clear();
+  for (const entry of state.generatedObjectives ?? []) {
+    const definition = generateObjectiveFromTemplate(
+      entry.templateId,
+      entry.params,
+      entry.difficultyIndex,
+      entry.generationSeq,
+    );
+    generatedObjectiveDefinitions.set(definition.id, definition);
+    generatedObjectiveRecords.set(definition.id, { ...entry, params: { ...entry.params } });
+  }
+  objectiveGenerationCounter = state.objectiveGenerationCounter ?? objectiveGenerationCounter;
 }
 
 export function isWithinBounds(tileX: number, tileY: number, type: BuildingType): boolean {
