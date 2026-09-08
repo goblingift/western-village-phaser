@@ -59,8 +59,22 @@ export const WILDLIFE_DEFINITIONS: Record<WildlifeKind, WildlifeDefinition> = {
 /** Distinct asset class again (small hostile creatures, unrelated to any building footprint or raid faction). */
 export const WILDLIFE_ATLAS_KEY = 'wildlife-atlas';
 
-/** Same size class as animal/villager/raider sprites so every small unit reads consistently at the same camera zoom. */
-export const WILDLIFE_SPRITE_SIZE = 12;
+/**
+ * Same size class as animal/villager/raider sprites so every small unit reads
+ * consistently at the same camera zoom.
+ *
+ * Phase 76 (visual overhaul): raised 12 -> 18 to match Phase 75's
+ * ANIMAL_SPRITE_SIZE/RAIDER_SPRITE_SIZE bump - this was deliberately deferred
+ * from Phase 75 (an independent literal, not an alias) so it ships alongside
+ * the rest of the hostile-unit art (raiders, raider camps) in one phase. Like
+ * ANIMAL_SPRITE_SIZE, this is a texture-generation/loading size only -
+ * wildlife sprites are placed centred (`this.add.image`) and never
+ * `setDisplaySize`d, so raising this constant alone is sufficient; no
+ * placement-math follow-on site exists for wildlife the way
+ * `getAnimalSlotPosition`'s ANIMAL_SLOT_STEP needed touching for animals in
+ * Phase 75 (wildlife doesn't sit in a per-building slot grid).
+ */
+export const WILDLIFE_SPRITE_SIZE = 18;
 
 export function wildlifeTextureKey(kind: WildlifeKind): string {
   return `wildlife-${kind}`;

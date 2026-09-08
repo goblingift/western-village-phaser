@@ -96,7 +96,31 @@ const ASSET_CHECKS = [
     expectedHeight: 18,
     note: 'single "villager" frame, 18x18px',
   },
-  // Phase 76: append raiders-atlas.png / raider-camps-atlas.png / wildlife-atlas.png
+  // Phase 76: raiders, raider camps, wildlife. Raiders/wildlife are 3-frame
+  // uniform-grid strips at 18x18 each (WILDLIFE_SPRITE_SIZE raised 12->18
+  // this phase to match RAIDER_SPRITE_SIZE, itself an alias of Phase 75's
+  // ANIMAL_SPRITE_SIZE); raider camps are a 3-frame strip at 24x24 each
+  // (RAIDER_CAMP_SPRITE_SIZE, an independent literal this phase does not
+  // touch). Per-frame name/size correctness is verified separately by
+  // tools/verify-raider-frames.mjs.
+  {
+    file: 'public/art/raiders-atlas.png',
+    expectedWidth: 54,
+    expectedHeight: 18,
+    note: '3 raider frames (Outlaws, Rustlers, Coyotes) x 18x18px each',
+  },
+  {
+    file: 'public/art/raider-camps-atlas.png',
+    expectedWidth: 72,
+    expectedHeight: 24,
+    note: '3 raider camp frames (Outlaws, Rustlers, Coyotes) x 24x24px each',
+  },
+  {
+    file: 'public/art/wildlife-atlas.png',
+    expectedWidth: 54,
+    expectedHeight: 18,
+    note: '3 wildlife frames (Snake, Coyote, MountainLion) x 18x18px each',
+  },
   // Phase 77: append vegetation-atlas.png / carts-atlas.png / accents-atlas.png
   // Phase 78: append resource-icons-atlas.png
 ];

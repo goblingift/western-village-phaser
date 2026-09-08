@@ -1,0 +1,75 @@
+{
+  "frames": {
+    "raider-Outlaws": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "sourceSize": {
+        "w": 18,
+        "h": 18
+      }
+    },
+    "raider-Rustlers": {
+      "frame": {
+        "x": 18,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "sourceSize": {
+        "w": 18,
+        "h": 18
+      }
+    },
+    "raider-Coyotes": {
+      "frame": {
+        "x": 36,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 18
+      },
+      "sourceSize": {
+        "w": 18,
+        "h": 18
+      }
+    }
+  },
+  "meta": {
+    "app": "western-village-phaser tools/generate-placeholder-raiders.mjs",
+    "version": "1.0",
+    "image": "raiders-atlas.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 54,
+      "h": 18
+    },
+    "scale": "1"
+  }
+}

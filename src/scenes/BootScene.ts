@@ -4,7 +4,6 @@ import {
   ACCENTS_ATLAS_KEY,
   AccentKind,
   ANIMALS_ATLAS_KEY,
-  ANIMAL_SPRITE_SIZE,
   BRAWLERS_ATLAS_KEY,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
@@ -18,17 +17,12 @@ import {
   MOUNTED_COWBOYS_ATLAS_KEY,
   RAIDERS_ATLAS_KEY,
   RAIDER_CAMPS_ATLAS_KEY,
-  RAIDER_CAMP_SPRITE_SIZE,
-  RAIDER_SPRITE_SIZE,
   RESOURCE_ICONS_ATLAS_KEY,
   RESOURCE_ICON_SIZE,
-  RaiderFaction,
   ResourceKey,
   VILLAGERS_ATLAS_KEY,
   accentTextureKey,
   buildingTextureKey,
-  raiderCampTextureKey,
-  raiderTextureKey,
   resourceIconTextureKey,
 } from '../config/buildingConfig';
 import {
@@ -36,12 +30,7 @@ import {
   VegetationKind,
   vegetationTextureKey,
 } from '../config/vegetationConfig';
-import {
-  WILDLIFE_ATLAS_KEY,
-  WILDLIFE_SPRITE_SIZE,
-  WildlifeKind,
-  wildlifeTextureKey,
-} from '../config/wildlifeConfig';
+import { WILDLIFE_ATLAS_KEY } from '../config/wildlifeConfig';
 import { setBuildingIcons } from '../ui/buildingIcons';
 
 export const TILESET_KEY = 'tiles-atlas';
@@ -57,22 +46,13 @@ const PIXEL_GRID = 8;
 const PIXEL_SIZE = TILE_SIZE / PIXEL_GRID;
 
 /**
- * Animal critters are drawn on their own, much coarser logical grid (6x6)
- * scaled down to ANIMAL_SPRITE_SIZE on screen, so they read as small static
- * props next to a building rather than tile-sized sprites.
+ * Small-sprite logical grid (6x6), originally shared by every small-unit
+ * procedural generator (animals, raiders, wildlife, etc.). Phases 74-76
+ * migrated those categories to loaded PNG atlases one by one; the only
+ * remaining consumer is generateResourceIconAtlas (Phase 78's scope), which
+ * still draws its 12px HUD glyphs on this same coarse grid.
  */
 const ANIMAL_PIXEL_GRID = 6;
-const ANIMAL_PIXEL_SIZE = ANIMAL_SPRITE_SIZE / ANIMAL_PIXEL_GRID;
-
-/**
- * Phase 57: Raider Camps are drawn on their own coarser-than-tile-but-finer-
- * than-critter 8x8 grid, scaled up to RAIDER_CAMP_SPRITE_SIZE - bigger and
- * more detailed than the 6x6 small-unit grid above, since a camp needs to
- * read as a standing structure (tents + campfire) rather than a single
- * creature.
- */
-const CAMP_PIXEL_GRID = 8;
-const CAMP_PIXEL_SIZE = RAIDER_CAMP_SPRITE_SIZE / CAMP_PIXEL_GRID;
 
 type PixelPalette = Record<string, number>;
 
@@ -297,106 +277,19 @@ const CART_SPRITE: PixelSprite = {
 };
 
 /**
- * Phase 23 Outlaw: a near-black hat and a kerchief mask (M) drawn straight
- * across the face row - no visible skin tone at all - reads as a masked
- * bandit and keeps this raider's palette clearly darker/more muted than the
- * friendly Cowboy's warm browns. G is the same holstered-gun hint as Cowboy.
+ * Phase 76 (visual overhaul): the procedural Outlaw/Rustler/Coyote raider,
+ * Snake/Coyote/MountainLion wildlife, and per-faction Raider Camp PixelSprite
+ * definitions that used to live here are gone. These 3 hostile-unit sprite
+ * sets are now loaded from real PNG+JSON atlases (public/art/raiders-atlas.png/
+ * .json, public/art/wildlife-atlas.png/.json, public/art/raider-camps-atlas.png/
+ * .json - all currently PLACEHOLDERS pending real AI-generated art, see
+ * docs/phase_73_to_78_visual_overhaul_plan.md and public/art/README.md) via
+ * `this.load.atlas(...)` in `preload()`. Note the old wildlife Coyote pattern
+ * literally reused the raider Coyote pattern object
+ * (`WILDLIFE_SPRITES.Coyote = COYOTE_SPRITE`); the two are now genuinely
+ * separate, distinguishable placeholder frames (raider-Coyotes gets a bandana
+ * marker the ambient wildlife-Coyote does not) per the plan's §5f resolution.
  */
-const OUTLAW_SPRITE: PixelSprite = {
-  palette: { H: 0x212121, M: 0x37474f, V: 0x3e2723, L: 0x1c1c1c, G: 0x000000 },
-  pattern: ['HHHHHH', 'MMMMMM', 'VVVVVV', 'VVVVVG', '.L..L.', '.L..L.'],
-};
-
-/**
- * Phase 23 Rustler: unmasked (F, visible face) unlike the Outlaw, and a rope
- * coil (R) at the hip instead of a gun - a cattle thief's tool, not a
- * gunslinger's. Olive/tan palette keeps it distinct from both Outlaw and Cowboy.
- */
-const RUSTLER_SPRITE: PixelSprite = {
-  palette: { H: 0x6d5a3a, F: 0xd9a066, V: 0x5b5a3c, L: 0x3e3a28, R: 0x9c7b52 },
-  pattern: ['HHHHHH', '.FFFF.', 'VVVVVV', 'VVVVRR', '.L..L.', '.L..L.'],
-};
-
-/**
- * Phase 23 Coyote: a low four-legged canine silhouette, deliberately
- * non-humanoid unlike the other two raiders - pointed ears (E) top corners,
- * a tan body block, a dark tail tip (T) trailing off one side, and four
- * separate leg pixels on the bottom row instead of the two-legged human gait.
- */
-const COYOTE_SPRITE: PixelSprite = {
-  palette: { E: 0x6d5a42, B: 0xbfa980, T: 0x6d5a42, L: 0x4e3f2c },
-  pattern: ['E....E', 'BBBBBB', 'BBBBBB', 'BBBBBT', 'L.LL.L', '......'],
-};
-
-const RAIDER_SPRITES: Record<RaiderFaction, PixelSprite> = {
-  [RaiderFaction.Outlaws]: OUTLAW_SPRITE,
-  [RaiderFaction.Rustlers]: RUSTLER_SPRITE,
-  [RaiderFaction.Coyotes]: COYOTE_SPRITE,
-};
-
-/**
- * Phase 71: Hostile Wildlife. Three small silhouettes on the same
- * ANIMAL_PIXEL_GRID/ANIMAL_PIXEL_SIZE the raiders/animals/villagers already
- * share, so all small units read consistently at the same camera zoom. Snake
- * is a wide/short low-profile silhouette (distinct from Coyote's four-legged
- * canine shape reused almost verbatim in spirit, but a separate sprite),
- * Mountain Lion is a bulkier tan cat silhouette with a longer tail.
- */
-const SNAKE_SPRITE: PixelSprite = {
-  palette: { S: 0x556b2f, E: 0xd4c840 },
-  pattern: ['......', '......', '.SSSS.', 'SSSSSS', '......', '......'],
-};
-
-const MOUNTAIN_LION_SPRITE: PixelSprite = {
-  palette: { B: 0xc9a86a, D: 0x8a6d3f, T: 0xc9a86a },
-  pattern: ['......', 'BBBBBT', 'BBBBBT', 'BBBBB.', 'D.DD.D', '......'],
-};
-
-const WILDLIFE_SPRITES: Record<WildlifeKind, PixelSprite> = {
-  Snake: SNAKE_SPRITE,
-  Coyote: COYOTE_SPRITE,
-  MountainLion: MOUNTAIN_LION_SPRITE,
-};
-
-/**
- * Phase 57 Raider Camp: a two-peaked tent silhouette over a small campfire
- * (flame/ember/log palette shared across all three factions - fire looks
- * like fire regardless of who lit it), with only the tent canvas color (C)
- * varying per faction, mirroring how the three raider units above mostly
- * differ by silhouette/palette rather than a wildly different composition.
- */
-const CAMP_FLAME_PALETTE: PixelPalette = { F: 0xff7043, O: 0xffca28, W: 0x5d4037 };
-const CAMP_PATTERN: string[] = [
-  '..C...C.',
-  '.CCC.CC.',
-  'CCCCCCCC',
-  'CCCCCCCC',
-  '........',
-  '...FO...',
-  '..FOOF..',
-  '.WWWWWW.',
-];
-
-const OUTLAW_CAMP_SPRITE: PixelSprite = {
-  palette: { C: 0x37474f, ...CAMP_FLAME_PALETTE },
-  pattern: CAMP_PATTERN,
-};
-
-const RUSTLER_CAMP_SPRITE: PixelSprite = {
-  palette: { C: 0x6d5a3a, ...CAMP_FLAME_PALETTE },
-  pattern: CAMP_PATTERN,
-};
-
-const COYOTE_CAMP_SPRITE: PixelSprite = {
-  palette: { C: 0xbfa980, ...CAMP_FLAME_PALETTE },
-  pattern: CAMP_PATTERN,
-};
-
-const RAIDER_CAMP_SPRITES: Record<RaiderFaction, PixelSprite> = {
-  [RaiderFaction.Outlaws]: OUTLAW_CAMP_SPRITE,
-  [RaiderFaction.Rustlers]: RUSTLER_CAMP_SPRITE,
-  [RaiderFaction.Coyotes]: COYOTE_CAMP_SPRITE,
-};
 
 function drawPixelSprite(
   graphics: Phaser.GameObjects.Graphics,
@@ -481,13 +374,29 @@ export class BootScene extends Phaser.Scene {
     this.load.atlas(DYNAMITERS_ATLAS_KEY, 'art/dynamiters-atlas.png', 'art/dynamiters-atlas.json');
     this.load.atlas(VILLAGERS_ATLAS_KEY, 'art/villagers-atlas.png', 'art/villagers-atlas.json');
 
-    // Still 100% procedural (Phases 76-78 haven't landed yet) - see
+    // Phase 76 (visual overhaul, raiders/raider camps/wildlife): these 3
+    // atlases are now real loaded PNG+JSON pairs rather than runtime-
+    // generated canvas textures, mirroring Phase 75's unit-atlas swap above -
+    // frame names/sizes are the contract (verified by
+    // `node tools/verify-raider-frames.mjs`), so every consuming call site in
+    // MainScene.ts (spawnRaider, spawnWildlifeCreature, spawnInitialRaiderCamps)
+    // needs zero changes. Raiders/wildlife load at 18x18 (WILDLIFE_SPRITE_SIZE
+    // raised 12->18 this phase to match Phase 75's player-unit size); raider
+    // camps stay 24x24 (RAIDER_CAMP_SPRITE_SIZE, an independent literal this
+    // phase does not touch). See public/art/README.md: all 3 files are
+    // currently PLACEHOLDERS, not final art.
+    this.load.atlas(RAIDERS_ATLAS_KEY, 'art/raiders-atlas.png', 'art/raiders-atlas.json');
+    this.load.atlas(
+      RAIDER_CAMPS_ATLAS_KEY,
+      'art/raider-camps-atlas.png',
+      'art/raider-camps-atlas.json',
+    );
+    this.load.atlas(WILDLIFE_ATLAS_KEY, 'art/wildlife-atlas.png', 'art/wildlife-atlas.json');
+
+    // Still 100% procedural (Phases 77-78 haven't landed yet) - see
     // docs/phase_73_to_78_visual_overhaul_plan.md.
     this.generateAccentAtlas();
     this.generateCartAtlas();
-    this.generateRaiderAtlas();
-    this.generateRaiderCampAtlas();
-    this.generateWildlifeAtlas();
     this.generateVegetationAtlas();
     this.generateResourceIconAtlas();
   }
@@ -619,11 +528,11 @@ export class BootScene extends Phaser.Scene {
    * reads wider than tall, same as a mounted rider does.
    *
    * Phase 75 note: CART_SPRITE_WIDTH/HEIGHT (14x10) are independent literals,
-   * NOT derived from ANIMAL_SPRITE_SIZE, so - same reasoning as
-   * generateWildlifeAtlas above - this generator computes its own pixel size
-   * from its own pattern's column count (7) rather than reusing the shared
-   * ANIMAL_PIXEL_SIZE, which changed under it when Phase 75 raised
-   * ANIMAL_SPRITE_SIZE 12->18.
+   * NOT derived from ANIMAL_SPRITE_SIZE, so this generator computes its own
+   * pixel size from its own pattern's column count (7) rather than assuming
+   * any shared small-unit pixel size - the same reasoning the now-removed
+   * (Phase 76) generateWildlifeAtlas used to document for its own
+   * WILDLIFE_SPRITE_SIZE-derived pixel size.
    */
   private generateCartAtlas(): void {
     const cartPixelSize = CART_SPRITE_WIDTH / CART_SPRITE.pattern[0].length;
@@ -674,84 +583,12 @@ export class BootScene extends Phaser.Scene {
     });
   }
 
-  /** Multi-frame atlas (one look per faction), same uniform-grid layout as generateAnimalAtlas. */
-  private generateRaiderAtlas(): void {
-    const factions = Object.keys(RAIDER_SPRITES) as RaiderFaction[];
-
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    factions.forEach((faction, index) => {
-      drawPixelSprite(graphics, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITES[faction], ANIMAL_PIXEL_SIZE);
-    });
-
-    graphics.generateTexture(RAIDERS_ATLAS_KEY, factions.length * RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(RAIDERS_ATLAS_KEY);
-    factions.forEach((faction, index) => {
-      texture.add(raiderTextureKey(faction), 0, index * RAIDER_SPRITE_SIZE, 0, RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE);
-    });
-  }
-
   /**
-   * Phase 71: three-frame atlas (one per WildlifeKind), same uniform-grid
-   * layout technique as generateRaiderAtlas but on WILDLIFE_SPRITE_SIZE's own
-   * frame.
-   *
-   * Phase 75 note: deliberately does NOT reuse the shared ANIMAL_PIXEL_SIZE
-   * constant here (unlike generateRaiderAtlas, where RAIDER_SPRITE_SIZE is
-   * itself an alias of ANIMAL_SPRITE_SIZE and so the two always agree).
-   * WILDLIFE_SPRITE_SIZE is its own independent literal (wildlifeConfig.ts,
-   * left at 12px - Phase 76's scope, not this phase's), so after Phase 75
-   * raised ANIMAL_SPRITE_SIZE 12->18, ANIMAL_PIXEL_SIZE (18/6=3) would no
-   * longer match WILDLIFE_SPRITE_SIZE's still-12px frame (each 6-col pattern
-   * would paint 18px wide into a 12px-wide slot). This local
-   * wildlifePixelSize keeps this generator correctly self-sized regardless of
-   * what ANIMAL_SPRITE_SIZE does.
+   * Phase 76 (visual overhaul): generateRaiderAtlas / generateWildlifeAtlas /
+   * generateRaiderCampAtlas used to live here (procedural canvas-texture
+   * generators for RAIDERS_ATLAS_KEY / WILDLIFE_ATLAS_KEY /
+   * RAIDER_CAMPS_ATLAS_KEY). All three are now real loaded PNG+JSON atlases
+   * (see preload()) - see public/art/README.md for the current PLACEHOLDER
+   * status of each.
    */
-  private generateWildlifeAtlas(): void {
-    const kinds = Object.keys(WILDLIFE_SPRITES) as WildlifeKind[];
-    const wildlifePixelSize = WILDLIFE_SPRITE_SIZE / ANIMAL_PIXEL_GRID;
-
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    kinds.forEach((kind, index) => {
-      drawPixelSprite(graphics, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITES[kind], wildlifePixelSize);
-    });
-
-    graphics.generateTexture(WILDLIFE_ATLAS_KEY, kinds.length * WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(WILDLIFE_ATLAS_KEY);
-    kinds.forEach((kind, index) => {
-      texture.add(wildlifeTextureKey(kind), 0, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE);
-    });
-  }
-
-  /** Multi-frame atlas (one per faction), same layout technique as generateRaiderAtlas but on the larger RAIDER_CAMP_SPRITE_SIZE frame/pixel grid. */
-  private generateRaiderCampAtlas(): void {
-    const factions = Object.keys(RAIDER_CAMP_SPRITES) as RaiderFaction[];
-
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    factions.forEach((faction, index) => {
-      drawPixelSprite(graphics, index * RAIDER_CAMP_SPRITE_SIZE, 0, RAIDER_CAMP_SPRITES[faction], CAMP_PIXEL_SIZE);
-    });
-
-    graphics.generateTexture(
-      RAIDER_CAMPS_ATLAS_KEY,
-      factions.length * RAIDER_CAMP_SPRITE_SIZE,
-      RAIDER_CAMP_SPRITE_SIZE,
-    );
-    graphics.destroy();
-
-    const texture = this.textures.get(RAIDER_CAMPS_ATLAS_KEY);
-    factions.forEach((faction, index) => {
-      texture.add(
-        raiderCampTextureKey(faction),
-        0,
-        index * RAIDER_CAMP_SPRITE_SIZE,
-        0,
-        RAIDER_CAMP_SPRITE_SIZE,
-        RAIDER_CAMP_SPRITE_SIZE,
-      );
-    });
-  }
 }
