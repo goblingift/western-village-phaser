@@ -121,7 +121,33 @@ const ASSET_CHECKS = [
     expectedHeight: 18,
     note: '3 wildlife frames (Snake, Coyote, MountainLion) x 18x18px each',
   },
-  // Phase 77: append vegetation-atlas.png / carts-atlas.png / accents-atlas.png
+  // Phase 77: vegetation, carts, accents. vegetation-atlas is a uniform 2-frame
+  // strip at TILE_SIZE (32x32, unaffected by Phase 75's 12->18 small-unit
+  // bump); carts-atlas is a single non-square 14x10 frame (CART_SPRITE_WIDTH/
+  // HEIGHT, independent literals); accents-atlas packs 6 frames of differing
+  // sizes side-by-side (16+24+64+16+12+12 = 144 wide, tallest frame 24 high).
+  // Per-frame name/size correctness (not just whole-file dimensions) is
+  // verified separately by tools/verify-world-frames.mjs.
+  {
+    file: 'public/art/vegetation-atlas.png',
+    expectedWidth: 64,
+    expectedHeight: 32,
+    note: '2 vegetation frames (Tree, Cactus) x 32x32px each',
+  },
+  {
+    file: 'public/art/carts-atlas.png',
+    expectedWidth: 14,
+    expectedHeight: 10,
+    note: 'single "goods-cart" frame, 14x10px (non-square)',
+  },
+  {
+    file: 'public/art/accents-atlas.png',
+    expectedWidth: 144,
+    expectedHeight: 24,
+    note:
+      '6 accent frames packed side-by-side: WellCrank 16x4, WarehouseDoor 24x24, ' +
+      'SupermarketAwning 64x8, ChickenDoor 16x12, HouseWindowLight 12x12, Campfire 12x12',
+  },
   // Phase 78: append resource-icons-atlas.png
 ];
 

@@ -1,0 +1,35 @@
+{
+  "frames": {
+    "goods-cart": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 14,
+        "h": 10
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 14,
+        "h": 10
+      },
+      "sourceSize": {
+        "w": 14,
+        "h": 10
+      }
+    }
+  },
+  "meta": {
+    "app": "western-village-phaser tools/generate-placeholder-world.mjs",
+    "version": "1.0",
+    "image": "carts-atlas.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 14,
+      "h": 10
+    },
+    "scale": "1"
+  }
+}

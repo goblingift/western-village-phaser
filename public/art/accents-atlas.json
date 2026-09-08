@@ -1,0 +1,135 @@
+{
+  "frames": {
+    "accent-WellCrank": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 4
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 4
+      },
+      "sourceSize": {
+        "w": 16,
+        "h": 4
+      }
+    },
+    "accent-WarehouseDoor": {
+      "frame": {
+        "x": 16,
+        "y": 0,
+        "w": 24,
+        "h": 24
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 24
+      },
+      "sourceSize": {
+        "w": 24,
+        "h": 24
+      }
+    },
+    "accent-SupermarketAwning": {
+      "frame": {
+        "x": 40,
+        "y": 0,
+        "w": 64,
+        "h": 8
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 8
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 8
+      }
+    },
+    "accent-ChickenDoor": {
+      "frame": {
+        "x": 104,
+        "y": 0,
+        "w": 16,
+        "h": 12
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 12
+      },
+      "sourceSize": {
+        "w": 16,
+        "h": 12
+      }
+    },
+    "accent-HouseWindowLight": {
+      "frame": {
+        "x": 120,
+        "y": 0,
+        "w": 12,
+        "h": 12
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 12
+      },
+      "sourceSize": {
+        "w": 12,
+        "h": 12
+      }
+    },
+    "accent-Campfire": {
+      "frame": {
+        "x": 132,
+        "y": 0,
+        "w": 12,
+        "h": 12
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 12
+      },
+      "sourceSize": {
+        "w": 12,
+        "h": 12
+      }
+    }
+  },
+  "meta": {
+    "app": "western-village-phaser tools/generate-placeholder-world.mjs",
+    "version": "1.0",
+    "image": "accents-atlas.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 144,
+      "h": 24
+    },
+    "scale": "1"
+  }
+}
