@@ -37,7 +37,11 @@ const ASSET_CHECKS = [
     file: 'public/art/tiles-atlas.png',
     expectedWidth: 160,
     expectedHeight: 32,
-    note: '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 32x32px each',
+    note:
+      '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 32x32px each. Loaded via ' +
+      'this.load.image() for Tilemap.addTilesetImage(), not this.load.atlas() - see ' +
+      "BootScene.ts's preload() comment. Its companion tiles-atlas.json (Phase 79) is " +
+      'documentation/tooling-only and is checked separately by verify-tileset-frames.mjs.',
   },
   // Phase 74: 34 building base frames (11 x 32x32 1x1 + 23 x 64x64 2x2, all
   // packed side-by-side in one row) + 3 appended 32x32 variant frames

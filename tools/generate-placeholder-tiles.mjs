@@ -10,6 +10,19 @@
 // 160x32 5-frame strip (Dirt/Gravel/Sand/Water/Rock, in that exact order)
 // before this overhaul is considered visually complete.
 //
+// Phase 79: also writes a companion public/art/tiles-atlas.json (JSONHash
+// format, frame names `tile-Dirt`..`tile-Rock`), purely for documentation/
+// tooling consistency with the other 13 atlas categories. This JSON is NOT
+// what BootScene.ts actually loads for tilemap purposes - Phaser's
+// Tilemap.addTilesetImage() needs a texture it can slice into a uniform grid
+// by numeric tile index, so the real load call stays a plain
+// `this.load.image(TILESET_KEY, 'art/tiles-atlas.png')` (see BootScene.ts's
+// preload() comment for the full investigation/reasoning). This JSON exists
+// so the terrain tileset is verifiable/inspectable the same way every other
+// atlas is (tools/verify-asset-dimensions.mjs checks its frame table), and so
+// a human editing the PNG in a packer tool has an accurate frame map to work
+// from - it is deliberately never passed to `this.load.atlas()`.
+//
 // Usage: node tools/generate-placeholder-tiles.mjs
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -79,6 +92,38 @@ mkdirSync(outDir, { recursive: true });
 const outPath = join(outDir, 'tiles-atlas.png');
 writeFileSync(outPath, png);
 
+// Companion JSONHash atlas JSON - documentation/tooling only, see the file
+// doc comment above. Frame names are `tile-<TileType>` to disambiguate from
+// buildings-atlas.json's `building-<Type>` convention and every other
+// category's `<category>-<Name>` naming.
+const frames = {};
+TILES.forEach((tile, index) => {
+  const x = index * TILE_SIZE;
+  frames[`tile-${tile.name}`] = {
+    frame: { x, y: 0, w: TILE_SIZE, h: TILE_SIZE },
+    rotated: false,
+    trimmed: false,
+    spriteSourceSize: { x: 0, y: 0, w: TILE_SIZE, h: TILE_SIZE },
+    sourceSize: { w: TILE_SIZE, h: TILE_SIZE },
+  };
+});
+
+const atlasJson = {
+  frames,
+  meta: {
+    app: 'western-village-phaser tools/generate-placeholder-tiles.mjs',
+    version: '1.0',
+    image: 'tiles-atlas.png',
+    format: 'RGBA8888',
+    size: { w: width, h: height },
+    scale: '1',
+  },
+};
+
+const jsonPath = join(outDir, 'tiles-atlas.json');
+writeFileSync(jsonPath, JSON.stringify(atlasJson, null, 2));
+
 console.log(`Wrote placeholder tileset: ${outPath} (${width}x${height}px, ${TILES.length} frames)`);
+console.log(`Wrote companion atlas JSON (docs/tooling only, not used for tilemap loading): ${jsonPath}`);
 console.log('Frame order: ' + TILES.map((t) => t.name).join(', '));
 console.log('REMINDER: this is a PLACEHOLDER. Replace with real AI-generated art before shipping.');

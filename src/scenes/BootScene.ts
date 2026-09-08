@@ -49,11 +49,27 @@ export class BootScene extends Phaser.Scene {
     this.createLoadingBar();
 
     // TILESET_KEY is load-bearing (MainScene's `map.addTilesetImage('tiles',
-    // TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0)` call). A plain `load.image` is
-    // sufficient (not `load.spritesheet`): Phaser's Tileset computes its 5
-    // per-tile texture-coordinate rects directly from the raw source image's
-    // pixel dimensions and the tileWidth/tileHeight passed to
-    // addTilesetImage, independent of Phaser's own named-frame system.
+    // TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0)` call). Phase 79 investigated
+    // switching this to `this.load.atlas()` for pipeline consistency with the
+    // other 13 categories, and deliberately did NOT: `Tileset.setImage()`
+    // (phaser/src/tilemaps/Tileset.js) slices its texture into a uniform grid
+    // using `texture.getFrameBounds()`, which is computed from Phaser's
+    // internal `__BASE` frame (every Texture's implicit "whole source image"
+    // frame, added identically by `load.image`/`load.spritesheet`/
+    // `load.atlas`'s parsers - confirmed by reading
+    // node_modules/phaser/src/textures/parsers/{SpriteSheet,JSONHash}.js) -
+    // NOT by re-deriving a grid from tileWidth/tileHeight the way one might
+    // assume. This makes a plain `load.image` provably sufficient (there is
+    // no separate index-based numbering step it's missing out on) and means
+    // `load.atlas`'s named JSON frames would sit alongside `__BASE` unused by
+    // this call - a strictly larger, unnecessary payload for the exact same
+    // runtime behavior. A real `load.atlas()` risk case (frames packed at
+    // irregular, non-edge-to-edge, or larger-than-__BASE positions) does not
+    // apply here since our 5 tiles are packed edge-to-edge with no gaps and
+    // never exceed the source image. Kept as a plain `load.image` call; a
+    // companion public/art/tiles-atlas.json exists for documentation/tooling
+    // parity only (see tools/generate-placeholder-tiles.mjs's doc comment and
+    // docs/ASSET_GENERATION_CHECKLIST.md §3) and is never passed to Phaser.
     this.load.image(TILESET_KEY, 'art/tiles-atlas.png');
 
     // Buildings: 34-building + 3-variant atlas (House tier2/tier3, WoodenGate

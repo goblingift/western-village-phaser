@@ -1,5 +1,5 @@
 // Phase 78 (final phase of the visual overhaul): the one consolidated "verify
-// everything" command for the whole art pipeline. Runs all 6 verification
+// everything" command for the whole art pipeline. Runs all 7 verification
 // scripts in this directory in sequence:
 //   1. verify-asset-dimensions.mjs      (whole-PNG-file dimension sanity, every atlas)
 //   2. verify-building-frames.mjs       (per-frame name/size, buildings-atlas)
@@ -7,6 +7,8 @@
 //   4. verify-raider-frames.mjs         (per-frame name/size, raiders/camps/wildlife)
 //   5. verify-world-frames.mjs          (per-frame name/size, vegetation/carts/accents)
 //   6. verify-resource-icon-frames.mjs  (per-frame name/size, resource icons)
+//   7. verify-tileset-frames.mjs        (per-frame name/size/offset, terrain tileset's
+//                                         documentation-only companion JSON - Phase 79)
 //
 // Deliberately a thin sequential runner (spawn each script as its own Node
 // child process, exactly as `node tools/verify-X.mjs` would run it standalone)
@@ -33,6 +35,7 @@ const CHECKS = [
   'verify-raider-frames.mjs',
   'verify-world-frames.mjs',
   'verify-resource-icon-frames.mjs',
+  'verify-tileset-frames.mjs',
 ];
 
 function main() {
