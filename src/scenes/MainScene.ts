@@ -16,6 +16,8 @@ import {
   COWBOY_MAX_HP,
   COWBOY_MAX_PER_BARRACKS,
   COWBOY_RANGE_TILES,
+  CULL_MARGIN_PX,
+  CULL_THROTTLE_MS,
   DAY_PHASE_SECONDS,
   DROUGHT_DURATION_MAX_SECONDS,
   DROUGHT_DURATION_MIN_SECONDS,
@@ -1059,6 +1061,8 @@ export class MainScene extends Phaser.Scene {
   /** Phase 45: live unit/raider dots + damage flashes/off-screen pings - separate from minimapGraphics since this one redraws continuously instead of only on placement events. */
   private minimapCombatGraphics!: Phaser.GameObjects.Graphics;
   private lastMinimapCombatRedraw = 0;
+  /** Phase 82: Viewport Culling - throttle timestamp for updateViewportCulling, following redrawMinimapCombatThrottled's exact pattern. */
+  private lastCullUpdate = 0;
   private minimapBuildingFlashes = new Map<string, MinimapBuildingFlash>();
   private offscreenThreats = new Map<string, OffscreenThreat>();
   /** Phase 48: chain-view map overlay - which resource (if any) ResourceHudPanel currently has selected, and a single shared Graphics redrawn on selection/placement changes (same pattern as connectionGraphics). */
@@ -1142,6 +1146,11 @@ export class MainScene extends Phaser.Scene {
     // while the camera and buildings are untouched - so this is the one
     // minimap redraw driven straight from update(), throttled the same way.
     this.redrawMinimapCombatThrottled(time);
+    // Phase 82: buildings/vegetation/villagers drift in and out of view via
+    // camera pan/zoom every frame (not just on placement events), so this
+    // needs the same continuous-but-throttled treatment as the minimap combat
+    // redraw above.
+    this.updateViewportCullingThrottled(time);
   }
 
   /**
@@ -1972,6 +1981,19 @@ export class MainScene extends Phaser.Scene {
 
     gameEvents.on('building-placed', () => this.redrawMinimap());
     gameEvents.on('game-reset', () => this.redrawMinimap());
+
+    // Phase 82: viewport culling for newly created sprites is deliberately
+    // NOT wired as a 'building-placed'/'game-loaded'/'game-reset' listener
+    // here. gameState.placeBuilding emits 'building-placed' BEFORE
+    // placeBuildingAt calls createVisualForBuilding (see that method's own
+    // "connections-updated already fired before this building's visual
+    // existed" comment for the identical, pre-existing ordering quirk), and
+    // Phaser fires listeners in registration order, so this method
+    // (setupMinimap, called early in create()) would in any case run before
+    // setupSaveLoad/setupGameReset's own rebuild listeners. Instead,
+    // updateViewportCulling() is called directly, right after the relevant
+    // sprites actually exist, from placeBuildingAt, setupSaveLoad's
+    // 'game-loaded' handler, and setupGameReset's 'game-reset' handler.
   }
 
   private redrawMinimap(): void {
@@ -2209,6 +2231,77 @@ export class MainScene extends Phaser.Scene {
   private isWorldPointInViewport(worldX: number, worldY: number): boolean {
     const view = this.cameras.main.worldView;
     return worldX >= view.x && worldX <= view.right && worldY >= view.y && worldY <= view.bottom;
+  }
+
+  /**
+   * Phase 82: Viewport Culling. Throttled to CULL_THROTTLE_MS (same value/
+   * pattern as MINIMAP_VIEWPORT_THROTTLE_MS's own throttle-and-redraw pair)
+   * since it needs to react to continuous camera pan/zoom, not just discrete
+   * placement/load/reset events - those events instead call
+   * updateViewportCulling directly (unthrottled) so a freshly created sprite
+   * is never left in the wrong visibility state for up to a throttle window.
+   */
+  private updateViewportCullingThrottled(now: number): void {
+    if (now - this.lastCullUpdate < CULL_THROTTLE_MS) {
+      return;
+    }
+    this.lastCullUpdate = now;
+    this.updateViewportCulling();
+  }
+
+  /**
+   * Sets .setVisible() on every building/animal/accent sprite, vegetation
+   * sprite and villager sprite based on whether it intersects the camera's
+   * current worldView (already zoom-aware - see redrawMinimapViewport's own
+   * comment on this), expanded by CULL_MARGIN_PX on every side so a sprite
+   * doesn't visibly pop in/out right at the screen edge during a pan, and so
+   * a multi-tile building anchored at its top-left origin isn't hidden while
+   * a corner of it is still genuinely on-screen.
+   *
+   * Purely a render-cost cut: every one of these sprites keeps existing,
+   * keeps its tweens running (a known, accepted limitation - see CLAUDE.md),
+   * and keeps being read by every other system exactly as before. Nothing
+   * outside this method and its throttled wrapper may ever read `.visible`
+   * off any of these three collections as a game-logic signal.
+   */
+  private updateViewportCulling(): void {
+    const view = this.cameras.main.worldView;
+    const left = view.x - CULL_MARGIN_PX;
+    const top = view.y - CULL_MARGIN_PX;
+    const right = view.right + CULL_MARGIN_PX;
+    const bottom = view.bottom + CULL_MARGIN_PX;
+
+    for (const visual of this.buildingVisuals.values()) {
+      const { width, height } = BUILDING_DEFINITIONS[visual.building.type].size;
+      const buildingLeft = visual.building.tileX * TILE_SIZE;
+      const buildingTop = visual.building.tileY * TILE_SIZE;
+      const buildingRight = buildingLeft + width * TILE_SIZE;
+      const buildingBottom = buildingTop + height * TILE_SIZE;
+      const isVisible =
+        buildingRight >= left && buildingLeft <= right && buildingBottom >= top && buildingTop <= bottom;
+
+      visual.image.setVisible(isVisible);
+      for (const animalImage of visual.animalImages) {
+        animalImage.setVisible(isVisible);
+      }
+      for (const accentObject of visual.accentObjects) {
+        // accentObjects mixes Image and Arc (House's smoke puffs) - both
+        // implement Phaser's Visible component (setVisible), unlike the bare
+        // GameObject base type the array is declared as.
+        (accentObject as unknown as Phaser.GameObjects.Components.Visible).setVisible(isVisible);
+      }
+    }
+
+    for (const image of this.vegetationImages.values()) {
+      const isVisible = image.x >= left && image.x <= right && image.y >= top && image.y <= bottom;
+      image.setVisible(isVisible);
+    }
+
+    for (const villager of this.villagers) {
+      const isVisible =
+        villager.image.x >= left && villager.image.x <= right && villager.image.y >= top && villager.image.y <= bottom;
+      villager.image.setVisible(isVisible);
+    }
   }
 
   /**
@@ -2878,6 +2971,10 @@ export class MainScene extends Phaser.Scene {
     // one path that DOES need to spawn units up front (a restored Barracks
     // can already have a nonzero cowboyCount).
     this.createVisualForBuilding(building);
+    // Phase 82: cull immediately so a building placed off-screen (e.g. the
+    // far end of a drag-placed Road/Fence line) starts in the correct
+    // visibility state rather than waiting for the next throttled tick.
+    this.updateViewportCulling();
     return true;
   }
 
@@ -5306,6 +5403,12 @@ export class MainScene extends Phaser.Scene {
       this.resetWorldEventState();
       this.resetWildlifeState();
       this.lastAutosaveDayNumber = -1;
+
+      // Phase 82: buildingVisuals is empty and vegetation/villagers were just
+      // rebuilt above - re-run the cull pass immediately so a fresh run
+      // starts with every new sprite in the correct visibility state rather
+      // than waiting for the next throttled update() tick.
+      this.updateViewportCulling();
     });
   }
 
@@ -5335,6 +5438,10 @@ export class MainScene extends Phaser.Scene {
       this.initialCampsSpawned = getDayNumber() >= RAIDER_CAMP_SPAWN_DAY;
       this.redrawMinimap();
       this.suppressNextAutosaveCheck = true;
+      // Phase 82: every restored building/vegetation/villager sprite now
+      // exists (redrawAllVegetation/restoreBuildingVisual above) - cull them
+      // immediately rather than waiting for the next throttled update() tick.
+      this.updateViewportCulling();
     });
 
     gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {

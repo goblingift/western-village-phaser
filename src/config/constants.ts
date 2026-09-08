@@ -548,3 +548,17 @@ export const BROTHEL_MAX_LADIES = 4;
 export const BROTHEL_SERVICE_RADIUS_TILES = 6;
 export const BROTHEL_INCOME_PER_LADY_PER_HOUSE = 0.4;
 export const BROTHEL_HOUSES_PER_LADY = 3;
+
+/**
+ * Phase 82: Viewport Culling. Buildings/vegetation/villagers outside the
+ * camera's current worldView (expanded by this margin) are set invisible via
+ * setVisible(false) rather than destroyed - purely a render-cost cut, never a
+ * gameplay-logic signal. The margin is a few tiles (TILE_SIZE * 3 = 96px) so a
+ * sprite doesn't visibly pop in/out right at the screen edge during a pan, and
+ * so a multi-tile building anchored at its top-left origin (e.g. a 2x2, 64px
+ * wide/tall) isn't hidden while a corner of it is still genuinely on-screen.
+ * CULL_THROTTLE_MS matches MINIMAP_VIEWPORT_THROTTLE_MS's existing convention
+ * for a per-frame-but-throttled pass.
+ */
+export const CULL_MARGIN_PX = 96;
+export const CULL_THROTTLE_MS = 50;
