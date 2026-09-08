@@ -35,6 +35,7 @@ import {
   DYNAMITER_TRAIN_TICKS,
   ENCLOSURE_RECOMPUTE_RADIUS_TILES,
   ENDLESS_THREAT_RAMP_CYCLES,
+  ESCALATION_NET_WORTH_PER_TIER,
   GAME_DURATION_SECONDS,
   GRANARY_STORAGE_BONUS,
   GRAVEL_MAX_DISTANCE_TILES,
@@ -3352,6 +3353,46 @@ export function getThreatLevel(): number {
 
   const wealthFraction = Math.min(1, computeNetWorth().total / THREAT_NET_WORTH_FULL);
   return Math.min(1, elapsedFraction * 0.5 + wealthFraction * 0.5);
+}
+
+/**
+ * Phase 80: Uncapped Threat / Infinite Escalation. getThreatLevel() above is
+ * left completely unchanged - it stays a clamped 0..1 value forever, and
+ * three existing MainScene call sites (the raid-interval squeeze, the
+ * Outlaw-bias threshold, the wave-size/HP lerp) keep reading it exactly as
+ * before. This is a second, deliberately UNBOUNDED value that only starts
+ * moving once getThreatLevel() would otherwise be pinned at its ceiling:
+ *
+ *  - Tier 0 covers every state where today's blend (elapsedFraction * 0.5 +
+ *    wealthFraction * 0.5) has NOT yet saturated at 1 - i.e. wherever
+ *    getThreatLevel() itself would already be less than 1, this returns 0
+ *    and reproduces today's behavior exactly (verified: elapsedFraction as
+ *    computed by getThreatLevel can only equal 1 in fixed mode once elapsed
+ *    time reaches the full scaled run length; in endless mode the asymptotic
+ *    cycles/(cycles+RAMP) curve never actually reaches 1, so the elapsed half
+ *    alone can never saturate getThreatLevel in endless mode - only wealth
+ *    can, matching the phase brief's framing that net worth is what plateaus
+ *    threat in the now-default endless mode).
+ *  - Past that point, the tier climbs by 1 per ESCALATION_NET_WORTH_PER_TIER
+ *    of net worth beyond THREAT_NET_WORTH_FULL, floor-divided so it only
+ *    ticks over on whole multiples (never a fractional tier).
+ *  - raidEscalationMultiplier (the same DIFFICULTY_SETTINGS field
+ *    getThreatLevel already reads) speeds this up/slows it down exactly like
+ *    it does the time-based half of getThreatLevel - Hard reaches tier 1
+ *    sooner than Normal, Easy later - so a harder difficulty's late-game stays
+ *    harder rather than the two systems disagreeing once threat itself maxes
+ *    out.
+ */
+export function getEscalationTier(): number {
+  const netWorth = computeNetWorth().total;
+  const excessNetWorth = netWorth - THREAT_NET_WORTH_FULL;
+  if (excessNetWorth <= 0) {
+    return 0;
+  }
+
+  const raidEscalationMultiplier = DIFFICULTY_SETTINGS[currentDifficulty].raidEscalationMultiplier;
+  const scaledExcess = excessNetWorth * raidEscalationMultiplier;
+  return Math.floor(scaledExcess / ESCALATION_NET_WORTH_PER_TIER);
 }
 
 /**

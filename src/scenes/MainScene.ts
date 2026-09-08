@@ -29,6 +29,11 @@ import {
   DYNAMITER_SPLASH_DAMAGE,
   DYNAMITER_SPLASH_RADIUS_TILES,
   DYNAMITER_WALK_SPEED_PX_PER_SEC,
+  ELITE_RAIDER_DAMAGE_MULTIPLIER,
+  ELITE_RAIDER_FRACTION,
+  ELITE_RAIDER_HP_MULTIPLIER,
+  ELITE_RAIDER_MIN_TIER,
+  ELITE_RAIDER_TINT,
   GOLD_RUSH_DURATION_MAX_SECONDS,
   GOLD_RUSH_DURATION_MIN_SECONDS,
   MAP_HEIGHT_TILES,
@@ -53,13 +58,17 @@ import {
   RAIDER_CAMP_MAX_HP,
   RAIDER_CAMP_MIN_COUNT,
   RAIDER_CAMP_SPAWN_DAY,
+  RAID_ABSOLUTE_MAX_UNITS,
+  RAID_HP_PER_ESCALATION_TIER,
   RAID_MAX_HP_MULTIPLIER,
   RAID_MAX_INTERVAL_MS,
   RAID_MAX_INTERVAL_SQUEEZE,
   RAID_EARLIEST_ELAPSED_MS,
   RAID_MAX_UNITS_ESCALATED,
+  RAID_MIN_INTERVAL_FLOOR_MS,
   RAID_MIN_INTERVAL_MS,
   RAID_MIN_UNITS,
+  RAID_UNITS_PER_ESCALATION_TIER,
   RAID_WARNING_LEAD_MS,
   RAID_WAVE_TIMEOUT_MS,
   RAIDER_UNIT_ATTACK_RANGE_TILES,
@@ -195,6 +204,7 @@ import {
   getDayNumber,
   getDayPhase,
   getElapsedSeconds,
+  getEscalationTier,
   getChurchRadius,
   getEnclosureFor,
   getFenceLinks,
@@ -656,6 +666,10 @@ interface Raider {
   hp: number;
   /** Phase 40: RAIDER_DEFINITIONS.maxHp scaled by this wave's threat hpMultiplier at spawn time (see startRaid) - the HP bar needs the *scaled* cap, not the base table value, to read correctly on an escalated wave. */
   maxHp: number;
+  /** Phase 80: per-instance damage multiplier (1 for a normal raider, ELITE_RAIDER_DAMAGE_MULTIPLIER for an elite) applied on top of RAIDER_DEFINITIONS[faction].damage at the point of attack - never mutates the shared definitions table. */
+  damageMultiplier: number;
+  /** Phase 80: true for a raider rolled elite at spawn (escalation tier >= ELITE_RAIDER_MIN_TIER) - visually a setTint(ELITE_RAIDER_TINT) on the same base sprite, no new art. */
+  isElite: boolean;
   targetBuildingId: string | null;
   /** True once this raider's walk-to-target tween has completed; only then does it attack instead of moving. */
   arrived: boolean;
@@ -5524,7 +5538,14 @@ export class MainScene extends Phaser.Scene {
   private scheduleNextRaidCheck(): void {
     const threat = getThreatLevel();
     const squeeze = 1 - RAID_MAX_INTERVAL_SQUEEZE * threat;
-    const delay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS * squeeze, RAID_MAX_INTERVAL_MS * squeeze);
+    // getThreatLevel() is clamped 0..1 (untouched by Phase 80), so squeeze
+    // itself can never go below 1 - RAID_MAX_INTERVAL_SQUEEZE (0.5 today) and
+    // this Phaser.Math.Between call alone could never spam-fire. The explicit
+    // RAID_MIN_INTERVAL_FLOOR_MS clamp below is a second, independent
+    // guarantee against the escalation tier ever being wired into this
+    // formula in the future without someone re-deriving this safety proof.
+    const rawDelay = Phaser.Math.Between(RAID_MIN_INTERVAL_MS * squeeze, RAID_MAX_INTERVAL_MS * squeeze);
+    const delay = Math.max(RAID_MIN_INTERVAL_FLOOR_MS, rawDelay);
 
     // Only warn about a raid that will actually be allowed to happen. The
     // phase at fire time is predicted from elapsed seconds (a pure derivation
@@ -6120,28 +6141,39 @@ export class MainScene extends Phaser.Scene {
    * instead of pickRaidSpawnPoint()'s random edge point/pickRaidFaction()'s
    * random faction; with no camps on the map yet (or all destroyed), a raid
    * still spawns exactly as it always did, out of nowhere at a random edge.
+   *
+   * Phase 80: getThreatLevel()'s 0..1 blend (and therefore maxUnits/
+   * hpMultiplier's base formulas above) is completely unchanged. Once
+   * threat has saturated, getEscalationTier() adds a further per-tier bonus
+   * on top of both: wave size gets +RAID_UNITS_PER_ESCALATION_TIER per tier,
+   * hard-capped at RAID_ABSOLUTE_MAX_UNITS so the scene can never be flooded
+   * past what's renderable; HP gets +RAID_HP_PER_ESCALATION_TIER per tier
+   * with NO cap - this is the deliberate "true endless" difficulty lever, a
+   * sufficiently long run should keep getting harder forever.
    */
   private startRaid(): void {
     const camps = getRaiderCamps();
     const sourceCamp = camps.length > 0 ? camps[Phaser.Math.Between(0, camps.length - 1)] : null;
     const faction = sourceCamp ? sourceCamp.faction : this.pickRaidFaction();
     const threat = getThreatLevel();
+    const tier = getEscalationTier();
     const maxUnits = Math.round(
-      RAID_MIN_UNITS + (RAID_MAX_UNITS_ESCALATED - RAID_MIN_UNITS) * threat,
+      RAID_MIN_UNITS + (RAID_MAX_UNITS_ESCALATED - RAID_MIN_UNITS) * threat + tier * RAID_UNITS_PER_ESCALATION_TIER,
     );
-    const count = Phaser.Math.Between(RAID_MIN_UNITS, Math.max(RAID_MIN_UNITS, maxUnits));
-    const hpMultiplier = 1 + (RAID_MAX_HP_MULTIPLIER - 1) * threat;
+    const cappedMaxUnits = Math.min(RAID_ABSOLUTE_MAX_UNITS, Math.max(RAID_MIN_UNITS, maxUnits));
+    const count = Phaser.Math.Between(RAID_MIN_UNITS, cappedMaxUnits);
+    const hpMultiplier = 1 + (RAID_MAX_HP_MULTIPLIER - 1) * threat + tier * RAID_HP_PER_ESCALATION_TIER;
 
     this.raidActive = true;
     this.raidWarningTimer?.remove();
     this.raidWarningTimer = null;
-    this.showRaidNotice(faction, count, threat, sourceCamp !== null);
+    this.showRaidNotice(faction, count, threat, sourceCamp !== null, tier);
     // Phase 59: one tension stinger per wave, ducking the ambient music bus
     // briefly so it reads clearly - see audio/sound.ts's playRaidStinger.
     playRaidStinger();
     const origin = sourceCamp ? { x: sourceCamp.x, y: sourceCamp.y } : undefined;
     for (let i = 0; i < count; i++) {
-      this.spawnRaider(faction, hpMultiplier, origin);
+      this.spawnRaider(faction, hpMultiplier, origin, tier);
     }
 
     this.raidWaveTimer = this.time.delayedCall(RAID_WAVE_TIMEOUT_MS, () => this.endRaidWave());
@@ -6153,14 +6185,49 @@ export class MainScene extends Phaser.Scene {
    * persistent notification log, so a raid a player didn't catch live is
    * still visible afterward. No buildingId: a raid targets whichever building
    * each raider individually picks, not one fixed location.
+   *
+   * Phase 80: the threat-based label (Large/Organized/plain) is unchanged -
+   * it still tops out exactly as before at threat 1.0. escalationTier adds a
+   * further prefix once escalation has actually started, so a player can
+   * tell the difficulty is still climbing well past the point threat itself
+   * pins at max.
    */
-  private showRaidNotice(faction: RaiderFaction, count: number, threat: number, fromCamp = false): void {
-    const tier = threat >= 0.66 ? 'Large ' : threat >= 0.33 ? 'Organized ' : '';
+  private showRaidNotice(
+    faction: RaiderFaction,
+    count: number,
+    threat: number,
+    fromCamp = false,
+    escalationTier = 0,
+  ): void {
+    const sizeTier = threat >= 0.66 ? 'Large ' : threat >= 0.33 ? 'Organized ' : '';
+    const escalationLabel = this.getEscalationTierLabel(escalationTier);
     const originText = fromCamp ? ' from their camp' : '';
-    const message = `${tier}${RAIDER_DEFINITIONS[faction].label} raid${originText} - ${count} incoming!`;
+    const message = `${escalationLabel}${sizeTier}${RAIDER_DEFINITIONS[faction].label} raid${originText} - ${count} incoming!`;
     this.raidNoticeText.setText(message);
     this.raidNoticeText.setVisible(true);
     addNotification(message, 'danger', getElapsedSeconds());
+  }
+
+  /**
+   * Phase 80: today's size-tier labels (Large/Organized) top out at
+   * threat 1.0. These additional prefixes surface getEscalationTier()'s
+   * otherwise-invisible unbounded climb past that point - tier 0 renders as
+   * '' so a non-escalated wave's notice text is byte-for-byte unchanged.
+   */
+  private getEscalationTierLabel(tier: number): string {
+    if (tier <= 0) {
+      return '';
+    }
+    if (tier === 1) {
+      return 'Escalated ';
+    }
+    if (tier === 2) {
+      return 'Fearsome ';
+    }
+    if (tier === 3) {
+      return 'Brutal ';
+    }
+    return `Apocalyptic (Tier ${tier}) `;
   }
 
   private hideRaidNotice(): void {
@@ -6168,7 +6235,12 @@ export class MainScene extends Phaser.Scene {
   }
 
   /** origin (Phase 57): when a wave is sourced from a Raider Camp, every raider spawns at that camp's position instead of a random pickRaidSpawnPoint() edge point. */
-  private spawnRaider(faction: RaiderFaction, hpMultiplier = 1, origin?: { x: number; y: number }): void {
+  private spawnRaider(
+    faction: RaiderFaction,
+    hpMultiplier = 1,
+    origin?: { x: number; y: number },
+    escalationTier = 0,
+  ): void {
     const spawn = origin ?? this.pickRaidSpawnPoint();
     const definition = RAIDER_DEFINITIONS[faction];
 
@@ -6176,13 +6248,26 @@ export class MainScene extends Phaser.Scene {
       .image(spawn.x, spawn.y, RAIDERS_ATLAS_KEY, raiderTextureKey(faction))
       .setDepth(RAIDER_SPRITE_DEPTH);
 
-    const scaledMaxHp = Math.round(definition.maxHp * hpMultiplier);
+    // Phase 80: elite is a per-instance roll/bonus, exactly like the
+    // existing hpMultiplier convention right below - RAIDER_DEFINITIONS
+    // itself is never written to, only read from.
+    const isElite = escalationTier >= ELITE_RAIDER_MIN_TIER && Math.random() < ELITE_RAIDER_FRACTION;
+    const eliteHpMultiplier = isElite ? ELITE_RAIDER_HP_MULTIPLIER : 1;
+    const damageMultiplier = isElite ? ELITE_RAIDER_DAMAGE_MULTIPLIER : 1;
+
+    if (isElite) {
+      image.setTint(ELITE_RAIDER_TINT);
+    }
+
+    const scaledMaxHp = Math.round(definition.maxHp * hpMultiplier * eliteHpMultiplier);
     const raider: Raider = {
       id: `raider-${this.raiderIdCounter++}`,
       image,
       faction,
       hp: scaledMaxHp,
       maxHp: scaledMaxHp,
+      damageMultiplier,
+      isElite,
       targetBuildingId: null,
       arrived: false,
       detouring: false,
@@ -6595,10 +6680,13 @@ export class MainScene extends Phaser.Scene {
 
     for (const raider of this.raiders) {
       const definition = RAIDER_DEFINITIONS[raider.faction];
+      // Phase 80: per-instance elite bonus, RAIDER_DEFINITIONS.damage itself
+      // is only ever read here, never written to.
+      const damage = definition.damage * raider.damageMultiplier;
 
       const defender = this.findNearestUnit(raider.image.x, raider.image.y, unitRangePx);
       if (defender) {
-        const remaining = damageUnit(defender.barracksId, defender.kind, defender.index, definition.damage);
+        const remaining = damageUnit(defender.barracksId, defender.kind, defender.index, damage);
         if (remaining <= 0) {
           this.killUnit(defender);
         }
@@ -6612,7 +6700,7 @@ export class MainScene extends Phaser.Scene {
       if (!target || target.hp <= 0) {
         continue;
       }
-      target.hp = Math.max(0, target.hp - definition.damage);
+      target.hp = Math.max(0, target.hp - damage);
       this.registerMinimapBuildingDamage(target);
     }
   }

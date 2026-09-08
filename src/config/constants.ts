@@ -131,6 +131,53 @@ export const RAID_MAX_INTERVAL_SQUEEZE = 0.5;
 /** How long before a wave lands the incoming-raid countdown notice appears. */
 export const RAID_WARNING_LEAD_MS = 10000;
 
+/**
+ * Phase 80: Uncapped Threat / Infinite Escalation. getThreatLevel() (above)
+ * stays a clamped 0..1 value forever - three existing MainScene call sites
+ * (the interval squeeze, the Outlaw-bias threshold, the wave-size/HP lerp)
+ * depend on that range and are NOT touched by this phase. Instead
+ * gameState.getEscalationTier() is a second, unbounded value: 0 for as long
+ * as getThreatLevel() hasn't yet saturated (i.e. today's endgame behavior is
+ * reproduced exactly), then climbs 1, 2, 3... forever once net worth pushes
+ * past THREAT_NET_WORTH_FULL. Raider *count* still caps hard at
+ * RAID_ABSOLUTE_MAX_UNITS for render/performance reasons, but HP keeps
+ * climbing with no ceiling - a long-enough endless run is meant to become
+ * genuinely dangerous even to a well-defended town.
+ */
+/** Hard sprite-count ceiling for a single wave, regardless of escalation tier - what RAID_MAX_UNITS_ESCALATED was for threat 1.0, this is for tier N. */
+export const RAID_ABSOLUTE_MAX_UNITS = 20;
+/** Wave-size bonus added per escalation tier, on top of RAID_MAX_UNITS_ESCALATED, before the RAID_ABSOLUTE_MAX_UNITS clamp. */
+export const RAID_UNITS_PER_ESCALATION_TIER = 1;
+/** HP-multiplier bonus added per escalation tier, on top of RAID_MAX_HP_MULTIPLIER - uncapped, this is the actual "true endless" lever. */
+export const RAID_HP_PER_ESCALATION_TIER = 0.35;
+/**
+ * Floor under scheduleNextRaidCheck's interval squeeze so a delay can never
+ * approach zero no matter how high the tier climbs - the tier-based squeeze
+ * (see MainScene.scheduleNextRaidCheck) multiplies the *already-floored*
+ * threat-1.0 interval by an asymptotic factor that never reaches 0, and the
+ * result is additionally clamped to this floor as a second, independent
+ * guarantee.
+ */
+export const RAID_MIN_INTERVAL_FLOOR_MS = 12000;
+/**
+ * Net worth beyond THREAT_NET_WORTH_FULL (6000) required to climb one more
+ * escalation tier. Picked generously (5x the saturation threshold itself) so
+ * a tier takes several real minutes of continued growth to reach, not
+ * seconds - escalation should read as a slow, ongoing ramp deep into an
+ * endless run, not a cliff the moment threat first saturates.
+ */
+export const ESCALATION_NET_WORTH_PER_TIER = 30000;
+/** Escalation tier at which elite raiders start appearing in a wave. */
+export const ELITE_RAIDER_MIN_TIER = 2;
+/** Fraction of a wave's raiders that spawn elite once ELITE_RAIDER_MIN_TIER is reached. */
+export const ELITE_RAIDER_FRACTION = 0.25;
+/** Per-instance HP multiplier applied on top of a raider's already wave-scaled HP - never mutates RAIDER_DEFINITIONS. */
+export const ELITE_RAIDER_HP_MULTIPLIER = 1.6;
+/** Per-instance damage multiplier applied the same way. */
+export const ELITE_RAIDER_DAMAGE_MULTIPLIER = 1.4;
+/** Reddish-dark tint distinguishing an elite raider from a normal one of the same faction - no new art. */
+export const ELITE_RAIDER_TINT = 0x8b1a1a;
+
 // Phase 33: camera zoom bounds and per-wheel-notch step.
 export const CAMERA_MIN_ZOOM = 0.5;
 export const CAMERA_MAX_ZOOM = 2;
