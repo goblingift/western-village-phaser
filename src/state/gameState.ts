@@ -105,7 +105,13 @@ import {
   getWorkersRequired,
   setUnitCount,
 } from '../config/buildingConfig';
-import { TileType, distanceToNearestTileType, distanceToNearestWater, isBuildableTerrain } from '../config/mapConfig';
+import {
+  TileType,
+  distanceToNearestTileType,
+  distanceToNearestWater,
+  isBuildableTerrain,
+  regenerateWorldTiles,
+} from '../config/mapConfig';
 import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import {
   countVegetationInRadius,
@@ -139,6 +145,7 @@ import {
   getRankForSnapshot,
   getRankProgress,
 } from '../config/townRank';
+import { computeLegacyEarned, earnLegacy, getActivePrestigeModifiers, recordTownFounded } from './prestige';
 
 export interface Resources {
   rawMeat: number;
@@ -227,6 +234,8 @@ export interface GameOverSummary {
   elapsedSeconds: number;
   /** Phase 83: the town's final derived rank (see config/townRank.ts), shown on the game-over screen. */
   townRank: TownRank;
+  /** Phase 84: legacy points just banked from this run ending (death or time-up) - see state/prestige.ts's computeLegacyEarned. Always >= 0; GameOverOverlay surfaces it alongside the net-worth/records display. */
+  legacyEarned: number;
 }
 
 export type GameOverReason = 'time' | 'destroyed';
@@ -2673,9 +2682,14 @@ const WORKER_PRIORITY_RANK: Record<WorkerPriority, number> = { high: 0, normal: 
  * (a destroyed House is already removed from placedBuildings entirely).
  */
 function assignWorkforce(): void {
-  totalPopulation = placedBuildings
-    .filter((building) => building.type === BuildingType.House)
-    .reduce((sum, building) => sum + HOUSE_TIER_CONFIG[building.houseTier].population, 0);
+  // Phase 84: Kinfolk prestige upgrade grants flat permanent population
+  // capacity independent of any standing House - added on top of the
+  // House-derived sum, never replacing it.
+  totalPopulation =
+    placedBuildings
+      .filter((building) => building.type === BuildingType.House)
+      .reduce((sum, building) => sum + HOUSE_TIER_CONFIG[building.houseTier].population, 0) +
+    getActivePrestigeModifiers().permanentPopulationBonus;
 
   let available = totalPopulation;
   let employed = 0;
@@ -3170,10 +3184,17 @@ function runBrothelIncome(): void {
  * Phase 39: each building's base upkeep is scaled by the run's chosen
  * difficulty (Easy cheaper, Hard pricier) rather than by editing the base
  * BUILDING_DEFINITIONS values, keeping those the Normal baseline.
+ *
+ * Phase 84: a second, independent multiplicative factor - the prestige shop's
+ * upkeepDiscountMultiplier (Frontier Ledger / Iron Resolve) - composes
+ * alongside DIFFICULTY_SETTINGS.upkeepMultiplier rather than replacing it, so
+ * a Hard-mode player who has bought both upkeep upgrades still pays MORE than
+ * Normal, just less than an equally-progressed Hard run with no upgrades.
  */
 function runUpkeep(): number {
   let paid = 0;
-  const upkeepMultiplier = DIFFICULTY_SETTINGS[currentDifficulty].upkeepMultiplier;
+  const upkeepMultiplier =
+    DIFFICULTY_SETTINGS[currentDifficulty].upkeepMultiplier * getActivePrestigeModifiers().upkeepDiscountMultiplier;
 
   for (const building of placedBuildings) {
     const upkeep = BUILDING_DEFINITIONS[building.type].upkeep * upkeepMultiplier;
@@ -3726,6 +3747,19 @@ function endGame(reason: GameOverReason): void {
     return;
   }
   gameOver = true;
+
+  const townRank = getTownRank();
+  // Phase 84: the death/time-up path earns legacy same as a voluntary
+  // cash-out would for an equivalent snapshot, minus the voluntary bonus
+  // (see prestige.ts's computeLegacyEarned doc comment for the reasoning) -
+  // a player who never prestiges is still rewarded for how far the town got.
+  const legacyEarned = computeLegacyEarned(
+    { rank: townRank, netWorth: computeNetWorth().total, daysSurvived: getDayNumber() },
+    currentDifficulty,
+    false,
+  );
+  earnLegacy(legacyEarned);
+
   gameEvents.emit('game-over', {
     netWorth: computeNetWorth(),
     totalMeatProduced: Math.round(totalMeatProduced * 10) / 10,
@@ -3735,8 +3769,97 @@ function endGame(reason: GameOverReason): void {
     difficulty: currentDifficulty,
     mode: currentRunMode,
     elapsedSeconds,
-    townRank: getTownRank(),
+    townRank,
+    legacyEarned,
   });
+}
+
+/**
+ * Phase 84: gate for the voluntary "Establish a New Town" cash-out. An OR,
+ * not an AND, per the approved design ("gated by minimum rank OR day") - a
+ * player who has built a genuinely developed town (Village rank - Phase 83's
+ * 3rd tier, requiring $7000 net worth / 16 population / 5 completed
+ * objectives on top of the day count) should be able to cash out even on a
+ * short/fast run that hasn't reached the day minimum yet, and a player deep
+ * into a long grinding run should be able to cash out on tenure alone even if
+ * their town stayed small. Either alone already represents real, deliberate
+ * investment - an AND would force both, which is a strictly harder bar than
+ * either "achievement" was designed to represent on its own.
+ *
+ * Minimum rank: 'village' (Phase 83's 3rd of 6 tiers) - low enough to be
+ * reachable in a single normal-length session (it is NOT the max rank),
+ * high enough that it cannot be reached in the first few minutes: Village
+ * requires day >= 4 anyway, so on the rank axis alone the gate is already at
+ * least a small handful of day/night cycles away from a fresh reset.
+ *
+ * Minimum day: 4 - matches Village's own daysSurvivedAtLeast threshold
+ * exactly, so the day-only branch of the OR represents the same rough amount
+ * of real playtime as the rank-only branch typically takes, rather than one
+ * side of the OR being trivially easier than the other. Both together rule
+ * out the degenerate "reset immediately, repeatedly" exploit the design
+ * brief calls out: a fresh town cannot pass either check before day 4 at the
+ * very earliest, and in practice reaching Village rank that fast requires
+ * genuinely rushing net worth/population/objectives, not just waiting.
+ */
+export const PRESTIGE_MIN_RANK: TownRank = 'village';
+export const PRESTIGE_MIN_DAY = 4;
+
+export interface EstablishNewTownGate {
+  allowed: boolean;
+  reason?: string;
+}
+
+export function canEstablishNewTown(): EstablishNewTownGate {
+  if (gameOver) {
+    return { allowed: false, reason: 'The run has already ended.' };
+  }
+
+  const rank = getTownRank();
+  const day = getDayNumber();
+  const rankMet = TOWN_RANK_ORDER.indexOf(rank) >= TOWN_RANK_ORDER.indexOf(PRESTIGE_MIN_RANK);
+  const dayMet = day >= PRESTIGE_MIN_DAY;
+
+  if (rankMet || dayMet) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    reason: `Reach ${TOWN_RANK_LABELS[PRESTIGE_MIN_RANK]} rank or survive to Day ${PRESTIGE_MIN_DAY} first (currently ${TOWN_RANK_LABELS[rank]}, Day ${day}).`,
+  };
+}
+
+/**
+ * Voluntary cash-out: validates the gate, banks legacy from the CURRENT
+ * town's snapshot (with the voluntary-cashout bonus - see
+ * prestige.ts's computeLegacyEarned), then performs a full resetGame() -
+ * fresh terrain, buildings, resources, day counter, everything except the
+ * legacy points/purchased upgrades that just got (or already were) banked,
+ * exactly matching Decision 1's "full wipe, fresh map" design. Returns false
+ * (no-op) if the gate isn't met, so a caller never has to duplicate
+ * canEstablishNewTown's own check before calling this.
+ */
+export function establishNewTown(): boolean {
+  const gate = canEstablishNewTown();
+  if (!gate.allowed) {
+    return false;
+  }
+
+  const townRank = getTownRank();
+  const legacyEarned = computeLegacyEarned(
+    { rank: townRank, netWorth: computeNetWorth().total, daysSurvived: getDayNumber() },
+    currentDifficulty,
+    true,
+  );
+  earnLegacy(legacyEarned);
+  recordTownFounded();
+
+  const difficulty = currentDifficulty;
+  const mode = currentRunMode;
+  resetGame({ mode, difficulty });
+
+  gameEvents.emit('town-established', { legacyEarned });
+  return true;
 }
 
 /**
@@ -3752,7 +3875,23 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   // that omits `mode`.
   currentRunMode = options?.mode ?? 'endless';
   currentDifficulty = options?.difficulty ?? 'normal';
-  money = Math.round(STARTING_MONEY * DIFFICULTY_SETTINGS[currentDifficulty].startingMoneyMultiplier * 100) / 100;
+
+  // Phase 84: every reset now reseeds a fresh map (regenerateWorldTiles was
+  // wired up but never actually called before this phase) - "Establish a New
+  // Town" relies on resetGame's own reseed behavior rather than needing a
+  // second, separate reseed path, so this must be unconditional here rather
+  // than gated on some "is this a prestige reset" flag. MainScene rebuilds
+  // its tilemap layer/camera bounds from getWorldTiles() on 'game-reset'.
+  regenerateWorldTiles();
+
+  const prestigeModifiers = getActivePrestigeModifiers();
+  money =
+    Math.round(
+      (STARTING_MONEY * DIFFICULTY_SETTINGS[currentDifficulty].startingMoneyMultiplier +
+        prestigeModifiers.startingMoneyBonus) *
+        prestigeModifiers.startingMoneyMultiplier *
+        100,
+    ) / 100;
   Object.assign(resources, emptyResources());
   resourceTrends = emptyResources();
   resourceHistory = emptyResourceHistoryBuffers();
@@ -3774,6 +3913,14 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
     occupancy[y].fill(null);
   }
+
+  // Phase 84: Trail Wagon's material stipend, clamped to the fresh-town
+  // storage cap - computed AFTER placedBuildings is cleared above, so
+  // getStorageCap() reads the new (zero-building, BASE_STORAGE_CAP-only)
+  // town rather than momentarily reusing the previous run's Warehouse/Granary
+  // bonuses on an establishNewTown() cash-out.
+  resources.wood = Math.min(getStorageCap(), prestigeModifiers.startingWoodBonus);
+  resources.tools = Math.min(getStorageCap(), prestigeModifiers.startingToolsBonus);
 
   clearNotificationDebounceState();
   clearNotifications();

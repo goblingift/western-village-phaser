@@ -80,6 +80,7 @@ export class BuildingBar {
     topRow.appendChild(this.createStatsButton());
     topRow.appendChild(this.createHelpButton());
     topRow.appendChild(this.createSaveLoadButton());
+    topRow.appendChild(this.createPrestigeButton());
     bar.appendChild(topRow);
 
     for (const category of Object.values(BuildingCategory)) {
@@ -322,6 +323,21 @@ export class BuildingBar {
     button.textContent = 'Saves';
     button.title = 'Open the Save/Load menu';
     button.addEventListener('click', () => gameEvents.emit('toggle-save-load-overlay'));
+    return button;
+  }
+
+  /**
+   * Phase 84: opens the Prestige shop / "Establish a New Town" modal. Mid-run
+   * entry point - DifficultySelectOverlay carries a second, pre-run one that
+   * emits the same event, so legacy can be spent either before or during a
+   * run.
+   */
+  private createPrestigeButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'speed';
+    button.textContent = 'Legacy';
+    button.title = 'Prestige: spend legacy points, or establish a new town';
+    button.addEventListener('click', () => gameEvents.emit('toggle-prestige-overlay'));
     return button;
   }
 

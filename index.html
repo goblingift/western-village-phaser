@@ -59,6 +59,8 @@
       #notification-log-panel .notification-log-list,
       #statistics-panel,
       #help-panel,
+      #save-load-panel,
+      #prestige-panel,
       #game-over-panel,
       #difficulty-select-panel {
         touch-action: pan-y;
@@ -1096,6 +1098,136 @@
       #difficulty-select-panel button#continue-run-button:hover {
         background: #448aff;
       }
+      /* Phase 84: pre-run entry point into the Prestige shop - a plain
+         outlined button, distinct from both the green "Start New Game"
+         primary action and the blue "Continue" one so it doesn't compete
+         with either as the panel's main call to action. */
+      #difficulty-select-panel button.secondary-button {
+        display: block;
+        width: 100%;
+        margin-top: 8px;
+        background: transparent;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #difficulty-select-panel button.secondary-button:hover {
+        background: #4a3524;
+      }
+
+      /* Phase 84: Prestige shop / "Establish a New Town" modal. Same
+         fixed-backdrop pattern as #help-overlay / #save-load-overlay. */
+      #prestige-overlay {
+        position: fixed;
+        inset: 0;
+        background: #000000b3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+      }
+      #prestige-overlay[hidden] {
+        display: none;
+      }
+      #prestige-panel {
+        background: #2b1d12;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 8px;
+        padding: 20px 26px;
+        width: 620px;
+        max-width: 92vw;
+        max-height: 90vh;
+        overflow-y: auto;
+        font-family: sans-serif;
+        font-size: 12px;
+      }
+      #prestige-panel h2 {
+        margin-top: 0;
+      }
+      #prestige-panel h3 {
+        margin-bottom: 4px;
+        font-size: 13px;
+        color: #ffd54f;
+      }
+      #prestige-panel .stat {
+        color: #ffd54f;
+        font-size: 12px;
+        margin: 4px 0 10px;
+      }
+      #prestige-panel .help-note {
+        color: #8d7f6e;
+        font-size: 11px;
+        margin-bottom: 6px;
+      }
+      #prestige-panel .prestige-banner {
+        background: #2f5d33;
+        border: 1px solid #4caf50;
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 10px;
+        color: #d5ffd8;
+      }
+      #prestige-panel .prestige-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      #prestige-panel .prestige-row td {
+        padding: 8px 6px;
+        vertical-align: top;
+        border-bottom: 1px solid #ffffff14;
+        line-height: 1.4;
+      }
+      #prestige-panel .prestige-row-maxed {
+        opacity: 0.6;
+      }
+      #prestige-panel .prestige-desc {
+        color: #b8a894;
+        font-size: 11px;
+      }
+      #prestige-panel .prestige-actions-cell {
+        white-space: nowrap;
+        text-align: right;
+      }
+      #prestige-panel .prestige-gate-reason {
+        color: #ff8a80;
+        font-size: 11px;
+        margin-top: 6px;
+      }
+      #prestige-panel button {
+        background: #4a3524;
+        color: #f2e6d8;
+        border: 1px solid #8d6e4a;
+        border-radius: 4px;
+        padding: 6px 14px;
+        margin-left: 6px;
+        cursor: pointer;
+      }
+      #prestige-panel button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      #prestige-panel button#prestige-establish-button {
+        display: block;
+        width: 100%;
+        margin: 6px 0 0;
+        background: #6b4a2b;
+        border-color: #b8863f;
+        font-size: 13px;
+        padding: 10px 14px;
+      }
+      #prestige-panel button#prestige-establish-button:not(:disabled):hover {
+        background: #855c36;
+      }
+      #prestige-panel .save-load-actions {
+        margin-top: 14px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
 
       /* Touch-target sizing pass, scoped to touch-primary devices only via
          `pointer: coarse` (the standards-based way to detect "the primary
@@ -1272,10 +1404,20 @@
         #difficulty-select-panel button,
         #game-over-panel button,
         #help-panel button,
-        #save-load-panel button {
+        #save-load-panel button,
+        #prestige-panel button {
           min-height: 44px;
           min-width: 44px;
           padding: 12px 16px;
+        }
+        /* Phase 84: Prestige shop rows put an upgrade's description and its
+           Buy button side by side in a narrow table cell - stack the button
+           as a full-width block target on touch, mirroring Save/Load's
+           actions-cell rule below. */
+        #prestige-panel .prestige-actions-cell button {
+          display: block;
+          width: 100%;
+          margin: 6px 0 0;
         }
         #difficulty-select-panel .option-row {
           gap: 10px;

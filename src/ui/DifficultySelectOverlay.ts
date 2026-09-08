@@ -2,6 +2,7 @@ import { Difficulty, DIFFICULTY_SETTINGS, RunMode } from '../config/constants';
 import { resetGame } from '../state/gameState';
 import { gameEvents } from '../state/gameEvents';
 import { getMostRecentSaveSlotName, loadFromSlot } from '../state/persistence';
+import { getLegacyPoints } from '../state/prestige';
 import { RunRecord, formatDuration, getAllRecords, recordKey } from '../state/records';
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
@@ -101,6 +102,8 @@ export class DifficultySelectOverlay {
       <div class="stat">${MODE_DESCRIPTIONS[this.selectedMode]}</div>
       ${this.renderRecordsSection()}
       <button id="start-run-button">Start New Game</button>
+      <div class="stat">Legacy Points: ${getLegacyPoints()}</div>
+      <button id="open-prestige-button" class="secondary-button">Prestige Shop</button>
     `;
 
     this.attachHandlers(mostRecentSlot);
@@ -163,6 +166,13 @@ export class DifficultySelectOverlay {
     this.content.querySelector('#start-run-button')?.addEventListener('click', () => {
       this.overlay.hidden = true;
       resetGame({ mode: this.selectedMode, difficulty: this.selectedDifficulty });
+    });
+    // Phase 84: a pre-run entry point into the Prestige shop, so legacy can be
+    // spent before a fresh run starts, not only mid-run via BuildingBar's
+    // "Legacy" button. Does not hide this overlay - PrestigeOverlay renders
+    // on top of it and Close just returns here.
+    this.content.querySelector('#open-prestige-button')?.addEventListener('click', () => {
+      gameEvents.emit('toggle-prestige-overlay');
     });
   }
 }

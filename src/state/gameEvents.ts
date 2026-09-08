@@ -144,6 +144,14 @@ export interface GameEventMap {
    */
   'toggle-save-load-overlay': () => void;
   /**
+   * Phase 84: opens/closes the Prestige ("Establish a New Town") overlay.
+   * Emitted by BuildingBar's "Legacy" button and DifficultySelectOverlay's
+   * pre-run shop link; PrestigeOverlay owns its own shown/hidden state and is
+   * the only listener, exactly like 'toggle-help-overlay'/
+   * 'toggle-save-load-overlay'.
+   */
+  'toggle-prestige-overlay': () => void;
+  /**
    * Phase 69: fired by gameState's setGateOpen/setAllGates AFTER the affected
    * WoodenGate's nearby enclosures have already been recomputed (see those
    * functions' own doc comment - this ordering is the mandatory fix for the
@@ -163,6 +171,14 @@ export interface GameEventMap {
    * notifications.ts's promotion notice and any future UI cue key off.
    */
   'town-rank-changed': (payload: { rank: TownRank; previousRank: TownRank }) => void;
+  /**
+   * Phase 84: fired by gameState's establishNewTown() right after the full
+   * resetGame() reseed it performs - PrestigeOverlay listens to show a
+   * confirmation ("New town founded! +N legacy") and re-render its own
+   * balance/shop state, since a bare 'game-reset' carries no legacy-earned
+   * figure of its own.
+   */
+  'town-established': (payload: { legacyEarned: number }) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

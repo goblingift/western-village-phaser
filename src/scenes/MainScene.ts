@@ -1066,6 +1066,8 @@ export class MainScene extends Phaser.Scene {
   private lastInfoTileX: number | null = null;
   private lastInfoTileY: number | null = null;
   private tileData: TileType[][] = [];
+  /** Phase 84: stored so 'game-reset' can repaint every tile from a freshly regenerated map (see resetGame's new regenerateWorldTiles call) without rebuilding the whole Tilemap/layer object. */
+  private groundLayer!: Phaser.Tilemaps.TilemapLayer;
   private minimapX = 0;
   private minimapY = 0;
   private minimapGraphics!: Phaser.GameObjects.Graphics;
@@ -1264,6 +1266,22 @@ export class MainScene extends Phaser.Scene {
       throw new Error('Failed to create ground layer');
     }
 
+    this.groundLayer = layer;
+    this.redrawGroundLayer();
+
+    this.cameras.main.setBounds(0, 0, MAP_WIDTH_TILES * TILE_SIZE, MAP_HEIGHT_TILES * TILE_SIZE);
+  }
+
+  /**
+   * Phase 84: repaints every tile from mapConfig's current getWorldTiles() -
+   * shared by buildTilemap()'s initial paint and the new 'game-reset' redraw
+   * (resetGame now calls regenerateWorldTiles() on every reset, including a
+   * voluntary "Establish a New Town" cash-out, so the visible map must be
+   * repainted to match rather than silently keeping the old grid's tiles).
+   * Map dimensions/tile size are constant, so no Tilemap/layer/camera-bounds
+   * rebuild is needed - only the per-tile data changes.
+   */
+  private redrawGroundLayer(): void {
     // Phase 30: the terrain grid is owned by mapConfig (gameState consults it
     // on every placement check), so the scene reads it rather than generating
     // its own copy.
@@ -1271,11 +1289,9 @@ export class MainScene extends Phaser.Scene {
     this.tileData = tileData.map((row) => [...row]);
     for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
       for (let x = 0; x < MAP_WIDTH_TILES; x++) {
-        layer.putTileAt(tileData[y][x], x, y);
+        this.groundLayer.putTileAt(tileData[y][x], x, y);
       }
     }
-
-    this.cameras.main.setBounds(0, 0, MAP_WIDTH_TILES * TILE_SIZE, MAP_HEIGHT_TILES * TILE_SIZE);
   }
 
   /**
@@ -5348,6 +5364,13 @@ export class MainScene extends Phaser.Scene {
     gameEvents.on('game-reset', () => {
       this.cancelPlacement();
       gameEvents.emit('building-selected', null);
+
+      // Phase 84: resetGame() now reseeds a fresh map on every reset
+      // (regenerateWorldTiles), so the visible ground layer has to be
+      // repainted to match - otherwise the player would keep seeing the
+      // previous town's terrain even though gameState's placement checks are
+      // already validating against the new one.
+      this.redrawGroundLayer();
 
       for (const { image, animalImages, accentObjects } of this.buildingVisuals.values()) {
         image.destroy();
