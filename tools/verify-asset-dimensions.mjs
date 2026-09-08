@@ -53,7 +53,49 @@ const ASSET_CHECKS = [
       '34 building base frames (11x 32x32 + 23x 64x64) + 3 appended 32x32 variant frames ' +
       '(House-tier2, House-tier3, WoodenGate-closed), packed side-by-side in one row',
   },
-  // Phase 75: append cowboys-atlas.png / mounted-cowboys-atlas.png / ...
+  // Phase 75: player units, villagers, animals. 4 single-frame atlases
+  // (cowboys/brawlers/dynamiters/villagers, all square 18x18) + one non-square
+  // single-frame atlas (mounted-cowboys, 24x18) + one 4-frame animal atlas
+  // (72x18, 4 x 18x18 packed side-by-side: Chicken/Pig/Cow/Ostrich). Per-frame
+  // name/size correctness (not just whole-file dimensions) is verified
+  // separately by tools/verify-unit-frames.mjs, mirroring how
+  // verify-building-frames.mjs complements this file for buildings-atlas.
+  {
+    file: 'public/art/animals-atlas.png',
+    expectedWidth: 72,
+    expectedHeight: 18,
+    note: '4 animal frames (Chicken, Pig, Cow, Ostrich) x 18x18px each',
+  },
+  {
+    file: 'public/art/cowboys-atlas.png',
+    expectedWidth: 18,
+    expectedHeight: 18,
+    note: 'single "cowboy" frame, 18x18px',
+  },
+  {
+    file: 'public/art/mounted-cowboys-atlas.png',
+    expectedWidth: 24,
+    expectedHeight: 18,
+    note: 'single "cowboy-on-horse" frame, 24x18px (non-square, 4:3 ratio)',
+  },
+  {
+    file: 'public/art/brawlers-atlas.png',
+    expectedWidth: 18,
+    expectedHeight: 18,
+    note: 'single "brawler" frame, 18x18px',
+  },
+  {
+    file: 'public/art/dynamiters-atlas.png',
+    expectedWidth: 18,
+    expectedHeight: 18,
+    note: 'single "dynamiter" frame, 18x18px',
+  },
+  {
+    file: 'public/art/villagers-atlas.png',
+    expectedWidth: 18,
+    expectedHeight: 18,
+    note: 'single "villager" frame, 18x18px',
+  },
   // Phase 76: append raiders-atlas.png / raider-camps-atlas.png / wildlife-atlas.png
   // Phase 77: append vegetation-atlas.png / carts-atlas.png / accents-atlas.png
   // Phase 78: append resource-icons-atlas.png

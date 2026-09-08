@@ -5,10 +5,7 @@ import {
   AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
-  AnimalKind,
   BRAWLERS_ATLAS_KEY,
-  BRAWLER_SPRITE_SIZE,
-  BRAWLER_TEXTURE_KEY,
   BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
@@ -17,15 +14,8 @@ import {
   CART_SPRITE_WIDTH,
   CART_TEXTURE_KEY,
   COWBOYS_ATLAS_KEY,
-  COWBOY_SPRITE_SIZE,
-  COWBOY_TEXTURE_KEY,
   DYNAMITERS_ATLAS_KEY,
-  DYNAMITER_SPRITE_SIZE,
-  DYNAMITER_TEXTURE_KEY,
   MOUNTED_COWBOYS_ATLAS_KEY,
-  MOUNTED_COWBOY_SPRITE_HEIGHT,
-  MOUNTED_COWBOY_SPRITE_WIDTH,
-  MOUNTED_COWBOY_TEXTURE_KEY,
   RAIDERS_ATLAS_KEY,
   RAIDER_CAMPS_ATLAS_KEY,
   RAIDER_CAMP_SPRITE_SIZE,
@@ -35,10 +25,7 @@ import {
   RaiderFaction,
   ResourceKey,
   VILLAGERS_ATLAS_KEY,
-  VILLAGER_SPRITE_SIZE,
-  VILLAGER_TEXTURE_KEY,
   accentTextureKey,
-  animalTextureKey,
   buildingTextureKey,
   raiderCampTextureKey,
   raiderTextureKey,
@@ -223,42 +210,14 @@ const RESOURCE_ICON_SPRITES: Record<ResourceKey, PixelSprite> = {
   },
 };
 
-const CHICKEN_ANIMAL_SPRITE: PixelSprite = {
-  // C is the comb, Y the beak/legs; W/B mix the white/brown feather look asked for.
-  palette: { C: 0xd32f2f, W: 0xfff8e1, B: 0x8d6e4a, Y: 0xffa000 },
-  pattern: ['..C...', '.WWBY.', 'WWWBWW', 'WBWWWW', '.W..W.', '.Y..Y.'],
-};
-
-const PIG_ANIMAL_SPRITE: PixelSprite = {
-  // S doubles as the snout nostrils (row 3) and the legs (row 5).
-  palette: { P: 0xe8a5b8, S: 0x8d5a68 },
-  pattern: ['.PPPP.', 'PPPPPP', 'PPPPPP', 'PPSSPP', '.PPPP.', '.S..S.'],
-};
-
-const COW_ANIMAL_SPRITE: PixelSprite = {
-  // H in row 0 corners hints at horns; B is the brown spot pattern, D the legs.
-  palette: { W: 0xfff8e1, B: 0x6d4c41, H: 0xf5f0e1, D: 0x5d4037 },
-  pattern: ['H....H', '.WWWW.', 'WBWWBW', 'WWWBWW', '.WWWW.', '.D..D.'],
-};
-
 /**
- * Phase 62: Ostrich critter, matching OstrichFarm's new AnimalConfig. Reads
- * distinctly tall/lean against the other three animal sprites on the same 6x6
- * grid - a long neck (N) rising to a small head (K), rather than a squat
- * feathered body like CHICKEN_ANIMAL_SPRITE. B is the body/wing plumage, Y the
- * long legs.
+ * Phase 75 (visual overhaul): the procedural Chicken/Pig/Cow/Ostrich
+ * PixelSprite definitions that used to live here are gone. Animal critters
+ * are now loaded from a real PNG+JSON atlas (public/art/animals-atlas.png/
+ * .json, currently a PLACEHOLDER pending real AI-generated art - see
+ * docs/phase_73_to_78_visual_overhaul_plan.md and public/art/README.md) via
+ * `this.load.atlas(ANIMALS_ATLAS_KEY, ...)` in `preload()`.
  */
-const OSTRICH_ANIMAL_SPRITE: PixelSprite = {
-  palette: { N: 0xefebe9, K: 0x212121, B: 0x424242, Y: 0xffa000 },
-  pattern: ['...K..', '...N..', '..BBB.', '.BBBB.', '..BBB.', '..Y.Y.'],
-};
-
-const ANIMAL_SPRITES: Record<AnimalKind, PixelSprite> = {
-  Chicken: CHICKEN_ANIMAL_SPRITE,
-  Pig: PIG_ANIMAL_SPRITE,
-  Cow: COW_ANIMAL_SPRITE,
-  Ostrich: OSTRICH_ANIMAL_SPRITE,
-};
 
 /**
  * Phase 19 idle-animation accents: small pieces carved out of the building
@@ -314,48 +273,15 @@ const ACCENT_SPRITES: Record<AccentKind, PixelSprite> = {
 };
 
 /**
- * Phase 20 villager: a minimal human silhouette readable at animal-sprite
- * scale - hat brim, face, vest/torso, two legs. No walk-cycle frames; facing
- * is handled by flipping this single frame (MainScene.startVillagerWander).
+ * Phase 75 (visual overhaul): the procedural Villager/Cowboy/Cowboy-on-Horse/
+ * Brawler/Dynamiter PixelSprite definitions that used to live here are gone.
+ * These 5 small-unit sprites are now loaded from real PNG+JSON atlases
+ * (public/art/villagers-atlas.png/.json, cowboys-atlas.png/.json,
+ * mounted-cowboys-atlas.png/.json, brawlers-atlas.png/.json,
+ * dynamiters-atlas.png/.json - all currently PLACEHOLDERS pending real
+ * AI-generated art, see docs/phase_73_to_78_visual_overhaul_plan.md and
+ * public/art/README.md) via `this.load.atlas(...)` in `preload()`.
  */
-const VILLAGER_SPRITE: PixelSprite = {
-  palette: { H: 0x3e2723, F: 0xffcb8e, V: 0x6d4c41, L: 0x4e342e },
-  pattern: ['.HHHH.', '.FFFF.', 'VVVVVV', 'VVVVVV', '.L..L.', '.L..L.'],
-};
-
-/**
- * Phase 22 Cowboy: a wide brim (row 0) reads as a cowhand's hat rather than
- * the Villager's rounder cap; G is a single holstered-gun pixel at the hip
- * (row 3), the only silhouette hint this small a sprite can carry.
- */
-const COWBOY_SPRITE: PixelSprite = {
-  palette: { H: 0x4e342e, F: 0xffcb8e, V: 0x8d6748, L: 0x3e2723, G: 0x212121 },
-  pattern: ['HHHHHH', '.FFFF.', 'VVVVVV', 'VVVVVG', '.L..L.', '.L..L.'],
-};
-
-/**
- * Phase 28 Cowboy on Horse: a horse+rider silhouette, drawn wider than the
- * plain Cowboy's square 6x6 frame (8 cols instead of 6, same 6 rows) so a
- * mounted body reads clearly at this scale - a narrow rider (hat/face/vest,
- * rows 0-2) over a wide horse body (rows 3-4) with four separate leg pixels
- * (row 5) instead of the Cowboy's two-legged human gait.
- */
-const MOUNTED_COWBOY_SPRITE: PixelSprite = {
-  palette: { H: 0x4e342e, F: 0xffcb8e, V: 0x8d6748, B: 0x6d4c41, L: 0x3e2723 },
-  pattern: ['..HHHH..', '..FFFF..', '.VVVVVV.', 'BBBBBBBB', 'BBBBBBBB', 'L.L..L.L'],
-};
-
-/**
- * Phase 58 Brawler: a bulky, hatless silhouette distinct from every other
- * small-unit sprite so far - a short dark buzz-cut (H) instead of a brimmed
- * hat, a wide torso (V) and, unique to this sprite, two bright knuckle
- * pixels (K) punched out to the left/right edges of the torso row to read as
- * fists held out at the sides - the "fists" motif the phase spec asked for.
- */
-const BRAWLER_SPRITE: PixelSprite = {
-  palette: { H: 0x3e2723, F: 0xd7a266, V: 0x5d4037, K: 0xffca28, L: 0x3e2723 },
-  pattern: ['.HHHH.', '.FFFF.', 'VVVVVV', 'KVVVVK', '.L..L.', '.L..L.'],
-};
 
 /**
  * Phase 60 Goods Cart: a wheeled-wagon silhouette, distinct from every unit
@@ -368,18 +294,6 @@ const BRAWLER_SPRITE: PixelSprite = {
 const CART_SPRITE: PixelSprite = {
   palette: { C: 0xd7ccc8, W: 0x6d4c41, O: 0x3e2723 },
   pattern: ['.CCCCC.', 'WWWWWWW', 'WWWWWWW', '..O.O..', '.OO.OO.'],
-};
-
-/**
- * Phase 58 Dynamiter: a satchel (S patch across the torso, standing in for a
- * bandolier of charges) plus a single bright fuse-spark pixel (P) above the
- * hat brim - the "satchel/lit-fuse" motif - on an otherwise Cowboy-shaped
- * silhouette so it still reads as a person carrying gear, not a different
- * creature entirely.
- */
-const DYNAMITER_SPRITE: PixelSprite = {
-  palette: { H: 0x37474f, F: 0xffcb8e, V: 0x6d4c41, S: 0x8d6e4a, P: 0xff7043, L: 0x3e2723 },
-  pattern: ['..P...', '.HHHH.', '.FFFF.', 'VVSSVV', '.L..L.', '.L..L.'],
 };
 
 /**
@@ -548,13 +462,28 @@ export class BootScene extends Phaser.Scene {
     // not final art.
     this.load.atlas(BUILDING_ATLAS_KEY, 'art/buildings-atlas.png', 'art/buildings-atlas.json');
 
-    this.generateAnimalAtlas();
+    // Phase 75 (visual overhaul, player units/villagers/animals): these 6
+    // atlases are now real loaded PNG+JSON pairs rather than runtime-
+    // generated canvas textures, exactly mirroring Phase 74's building-atlas
+    // swap above - frame names/sizes are the contract (verified by
+    // `node tools/verify-unit-frames.mjs`), so every consuming call site in
+    // MainScene.ts (spawnUnitOfKind, redrawAnimalSprites, villager spawning)
+    // needs zero changes. See public/art/README.md: all 6 files are currently
+    // PLACEHOLDERS, not final art.
+    this.load.atlas(ANIMALS_ATLAS_KEY, 'art/animals-atlas.png', 'art/animals-atlas.json');
+    this.load.atlas(COWBOYS_ATLAS_KEY, 'art/cowboys-atlas.png', 'art/cowboys-atlas.json');
+    this.load.atlas(
+      MOUNTED_COWBOYS_ATLAS_KEY,
+      'art/mounted-cowboys-atlas.png',
+      'art/mounted-cowboys-atlas.json',
+    );
+    this.load.atlas(BRAWLERS_ATLAS_KEY, 'art/brawlers-atlas.png', 'art/brawlers-atlas.json');
+    this.load.atlas(DYNAMITERS_ATLAS_KEY, 'art/dynamiters-atlas.png', 'art/dynamiters-atlas.json');
+    this.load.atlas(VILLAGERS_ATLAS_KEY, 'art/villagers-atlas.png', 'art/villagers-atlas.json');
+
+    // Still 100% procedural (Phases 76-78 haven't landed yet) - see
+    // docs/phase_73_to_78_visual_overhaul_plan.md.
     this.generateAccentAtlas();
-    this.generateVillagerAtlas();
-    this.generateCowboyAtlas();
-    this.generateMountedCowboyAtlas();
-    this.generateBrawlerAtlas();
-    this.generateDynamiterAtlas();
     this.generateCartAtlas();
     this.generateRaiderAtlas();
     this.generateRaiderCampAtlas();
@@ -649,23 +578,6 @@ export class BootScene extends Phaser.Scene {
     }
   }
 
-  private generateAnimalAtlas(): void {
-    const kinds = Object.keys(ANIMAL_SPRITES) as AnimalKind[];
-
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    kinds.forEach((kind, index) => {
-      drawPixelSprite(graphics, index * ANIMAL_SPRITE_SIZE, 0, ANIMAL_SPRITES[kind], ANIMAL_PIXEL_SIZE);
-    });
-
-    graphics.generateTexture(ANIMALS_ATLAS_KEY, kinds.length * ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(ANIMALS_ATLAS_KEY);
-    kinds.forEach((kind, index) => {
-      texture.add(animalTextureKey(kind), 0, index * ANIMAL_SPRITE_SIZE, 0, ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE);
-    });
-  }
-
   /** Frames vary in size per accent (a thin crank bar vs. a wide awning strip), so this uses a side-by-side layout (the same shape the now-removed procedural generateBuildingAtlas used to) rather than the animal atlas's uniform grid. */
   private generateAccentAtlas(): void {
     const kinds = Object.keys(ACCENT_SPRITES) as AccentKind[];
@@ -701,85 +613,22 @@ export class BootScene extends Phaser.Scene {
     });
   }
 
-  /** Single-frame atlas (only one villager look exists), drawn at the same coarse grid as animal critters. */
-  private generateVillagerAtlas(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, VILLAGER_SPRITE, ANIMAL_PIXEL_SIZE);
-
-    graphics.generateTexture(VILLAGERS_ATLAS_KEY, VILLAGER_SPRITE_SIZE, VILLAGER_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(VILLAGERS_ATLAS_KEY);
-    texture.add(VILLAGER_TEXTURE_KEY, 0, 0, 0, VILLAGER_SPRITE_SIZE, VILLAGER_SPRITE_SIZE);
-  }
-
-  /** Single-frame atlas (only one Cowboy look exists), same coarse grid as animal/villager sprites. */
-  private generateCowboyAtlas(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, COWBOY_SPRITE, ANIMAL_PIXEL_SIZE);
-
-    graphics.generateTexture(COWBOYS_ATLAS_KEY, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(COWBOYS_ATLAS_KEY);
-    texture.add(COWBOY_TEXTURE_KEY, 0, 0, 0, COWBOY_SPRITE_SIZE, COWBOY_SPRITE_SIZE);
-  }
-
   /**
-   * Single-frame atlas, same technique as generateCowboyAtlas but with a
-   * non-square frame (MOUNTED_COWBOY_SPRITE_WIDTH x ...HEIGHT rather than the
-   * uniform ANIMAL_SPRITE_SIZE square every other small-unit atlas uses).
-   */
-  private generateMountedCowboyAtlas(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, MOUNTED_COWBOY_SPRITE, ANIMAL_PIXEL_SIZE);
-
-    graphics.generateTexture(MOUNTED_COWBOYS_ATLAS_KEY, MOUNTED_COWBOY_SPRITE_WIDTH, MOUNTED_COWBOY_SPRITE_HEIGHT);
-    graphics.destroy();
-
-    const texture = this.textures.get(MOUNTED_COWBOYS_ATLAS_KEY);
-    texture.add(
-      MOUNTED_COWBOY_TEXTURE_KEY,
-      0,
-      0,
-      0,
-      MOUNTED_COWBOY_SPRITE_WIDTH,
-      MOUNTED_COWBOY_SPRITE_HEIGHT,
-    );
-  }
-
-  /** Phase 58: single-frame atlas, same technique as generateCowboyAtlas - Brawler is square at the same COWBOY_SPRITE_SIZE (=BRAWLER_SPRITE_SIZE). */
-  private generateBrawlerAtlas(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, BRAWLER_SPRITE, ANIMAL_PIXEL_SIZE);
-
-    graphics.generateTexture(BRAWLERS_ATLAS_KEY, BRAWLER_SPRITE_SIZE, BRAWLER_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(BRAWLERS_ATLAS_KEY);
-    texture.add(BRAWLER_TEXTURE_KEY, 0, 0, 0, BRAWLER_SPRITE_SIZE, BRAWLER_SPRITE_SIZE);
-  }
-
-  /** Mirrors generateBrawlerAtlas exactly for the Dynamiter's own square single-frame atlas. */
-  private generateDynamiterAtlas(): void {
-    const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, DYNAMITER_SPRITE, ANIMAL_PIXEL_SIZE);
-
-    graphics.generateTexture(DYNAMITERS_ATLAS_KEY, DYNAMITER_SPRITE_SIZE, DYNAMITER_SPRITE_SIZE);
-    graphics.destroy();
-
-    const texture = this.textures.get(DYNAMITERS_ATLAS_KEY);
-    texture.add(DYNAMITER_TEXTURE_KEY, 0, 0, 0, DYNAMITER_SPRITE_SIZE, DYNAMITER_SPRITE_SIZE);
-  }
-
-  /**
-   * Phase 60: single-frame atlas, same non-square technique as
-   * generateMountedCowboyAtlas - a wagon reads wider than tall, same as a
-   * mounted rider does.
+   * Phase 60: single-frame atlas, same non-square technique the now-loaded
+   * mounted-cowboys-atlas used to use when it was still procedural - a wagon
+   * reads wider than tall, same as a mounted rider does.
+   *
+   * Phase 75 note: CART_SPRITE_WIDTH/HEIGHT (14x10) are independent literals,
+   * NOT derived from ANIMAL_SPRITE_SIZE, so - same reasoning as
+   * generateWildlifeAtlas above - this generator computes its own pixel size
+   * from its own pattern's column count (7) rather than reusing the shared
+   * ANIMAL_PIXEL_SIZE, which changed under it when Phase 75 raised
+   * ANIMAL_SPRITE_SIZE 12->18.
    */
   private generateCartAtlas(): void {
+    const cartPixelSize = CART_SPRITE_WIDTH / CART_SPRITE.pattern[0].length;
     const graphics = this.make.graphics({ x: 0, y: 0 });
-    drawPixelSprite(graphics, 0, 0, CART_SPRITE, ANIMAL_PIXEL_SIZE);
+    drawPixelSprite(graphics, 0, 0, CART_SPRITE, cartPixelSize);
 
     graphics.generateTexture(CARTS_ATLAS_KEY, CART_SPRITE_WIDTH, CART_SPRITE_HEIGHT);
     graphics.destroy();
@@ -843,13 +692,29 @@ export class BootScene extends Phaser.Scene {
     });
   }
 
-  /** Phase 71: three-frame atlas (one per WildlifeKind), same uniform-grid layout technique as generateRaiderAtlas but on WILDLIFE_SPRITE_SIZE's own frame. */
+  /**
+   * Phase 71: three-frame atlas (one per WildlifeKind), same uniform-grid
+   * layout technique as generateRaiderAtlas but on WILDLIFE_SPRITE_SIZE's own
+   * frame.
+   *
+   * Phase 75 note: deliberately does NOT reuse the shared ANIMAL_PIXEL_SIZE
+   * constant here (unlike generateRaiderAtlas, where RAIDER_SPRITE_SIZE is
+   * itself an alias of ANIMAL_SPRITE_SIZE and so the two always agree).
+   * WILDLIFE_SPRITE_SIZE is its own independent literal (wildlifeConfig.ts,
+   * left at 12px - Phase 76's scope, not this phase's), so after Phase 75
+   * raised ANIMAL_SPRITE_SIZE 12->18, ANIMAL_PIXEL_SIZE (18/6=3) would no
+   * longer match WILDLIFE_SPRITE_SIZE's still-12px frame (each 6-col pattern
+   * would paint 18px wide into a 12px-wide slot). This local
+   * wildlifePixelSize keeps this generator correctly self-sized regardless of
+   * what ANIMAL_SPRITE_SIZE does.
+   */
   private generateWildlifeAtlas(): void {
     const kinds = Object.keys(WILDLIFE_SPRITES) as WildlifeKind[];
+    const wildlifePixelSize = WILDLIFE_SPRITE_SIZE / ANIMAL_PIXEL_GRID;
 
     const graphics = this.make.graphics({ x: 0, y: 0 });
     kinds.forEach((kind, index) => {
-      drawPixelSprite(graphics, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITES[kind], ANIMAL_PIXEL_SIZE);
+      drawPixelSprite(graphics, index * WILDLIFE_SPRITE_SIZE, 0, WILDLIFE_SPRITES[kind], wildlifePixelSize);
     });
 
     graphics.generateTexture(WILDLIFE_ATLAS_KEY, kinds.length * WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE);

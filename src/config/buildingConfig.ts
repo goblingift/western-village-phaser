@@ -1371,8 +1371,22 @@ export function buildingTextureKey(type: BuildingType, tier?: HouseTier, gateOpe
 /** Separate atlas from BUILDING_ATLAS_KEY: animals are a different asset class (small, per-instance, not per-tile). */
 export const ANIMALS_ATLAS_KEY = 'animals-atlas';
 
-/** On-screen size (px) of a single static animal sprite; smaller than TILE_SIZE so several fit around a footprint. */
-export const ANIMAL_SPRITE_SIZE = 12;
+/**
+ * On-screen size (px) of a single static animal sprite; smaller than
+ * TILE_SIZE so several fit around a footprint.
+ *
+ * Phase 75 (visual overhaul): raised 12 -> 18 per the plan's §5d resolution -
+ * a 12x12 texture (144px total) has no room for AI-generated detail, so every
+ * "small unit" class sharing this constant (animals, villagers, Cowboy,
+ * Brawler, Dynamiter, and - via this same alias - Raiders, since
+ * RAIDER_SPRITE_SIZE below is defined as ANIMAL_SPRITE_SIZE, not its own
+ * literal) now generates/loads at 18x18 (324px, a 2.25x improvement).
+ * Cowboy-on-Horse's independent MOUNTED_COWBOY_SPRITE_WIDTH/HEIGHT pair scales
+ * proportionally (16x12 -> 24x18, same 4:3 ratio) right below.
+ * WILDLIFE_SPRITE_SIZE (wildlifeConfig.ts) and RAIDER_CAMP_SPRITE_SIZE are
+ * separate literals, deliberately NOT touched here - Phase 76's scope.
+ */
+export const ANIMAL_SPRITE_SIZE = 18;
 
 export function animalTextureKey(animalLabel: AnimalKind): string {
   return `animal-${animalLabel}`;
@@ -1426,9 +1440,13 @@ export const COWBOY_TEXTURE_KEY = 'cowboy';
  */
 export const MOUNTED_COWBOYS_ATLAS_KEY = 'mounted-cowboys-atlas';
 
-/** Wider than a plain Cowboy's square ANIMAL_SPRITE_SIZE frame to read as horse-body + rider. */
-export const MOUNTED_COWBOY_SPRITE_WIDTH = 16;
-export const MOUNTED_COWBOY_SPRITE_HEIGHT = 12;
+/**
+ * Wider than a plain Cowboy's square ANIMAL_SPRITE_SIZE frame to read as
+ * horse-body + rider. Phase 75: scaled proportionally with ANIMAL_SPRITE_SIZE's
+ * 12->18 raise, keeping the original 4:3 width:height ratio (16x12 -> 24x18).
+ */
+export const MOUNTED_COWBOY_SPRITE_WIDTH = 24;
+export const MOUNTED_COWBOY_SPRITE_HEIGHT = 18;
 
 /** Only one Cowboy-on-Horse look exists, so a single fixed frame key, same as COWBOY_TEXTURE_KEY. */
 export const MOUNTED_COWBOY_TEXTURE_KEY = 'cowboy-on-horse';

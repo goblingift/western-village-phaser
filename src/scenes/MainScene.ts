@@ -394,8 +394,17 @@ const HP_BAR_EMPTY_COLOR = 0xd32f2f;
 const UNIT_HP_BAR_WIDTH = 14;
 const UNIT_HP_BAR_HEIGHT = 3;
 const UNIT_HP_BAR_MARGIN_ABOVE_PX = 2;
-/** Half-height of every small-unit sprite class (animals/villagers/Cowboys/mounted Cowboys/raiders all sit in the 12px-tall band, see ANIMAL_SPRITE_SIZE), used to lift the bar clear of the sprite regardless of unit kind. */
-const UNIT_SPRITE_HALF_HEIGHT_PX = 6;
+/**
+ * Half-height of every small-unit sprite class (animals/villagers/Cowboys/
+ * mounted Cowboys/raiders all share ANIMAL_SPRITE_SIZE's height band), used
+ * to lift the bar clear of the sprite regardless of unit kind. Phase 75:
+ * derived from ANIMAL_SPRITE_SIZE (18) instead of a hardcoded 6 (half of the
+ * old 12px), so this stays correct automatically if the size constant ever
+ * changes again. Cowboy-on-Horse's taller MOUNTED_COWBOY_SPRITE_HEIGHT (18)
+ * happens to match this same half-height (9) at the current 4:3 ratio, so it
+ * uses this default too rather than needing its own override.
+ */
+const UNIT_SPRITE_HALF_HEIGHT_PX = ANIMAL_SPRITE_SIZE / 2;
 /** Display-only cap (Phase 20): rendered sprite count, unrelated to gameState's population/workforce numbers. Raised 30 -> 40 (Phase 66) for the bigger, more populated 60x45 map. */
 const VILLAGER_CAP = 40;
 const VILLAGER_WALK_SPEED_PX_PER_SEC = 50;
