@@ -84,6 +84,39 @@ export function encodePng(width, height, rgba) {
 }
 
 /**
+ * Phase 74 (buildings atlas): tiny reusable RGBA canvas helper so placeholder-
+ * generation scripts don't each hand-roll their own row/stride pixel-index
+ * math. Deliberately minimal - just enough to fill rects and set individual
+ * pixels - not a general drawing library.
+ */
+export function createRgbaBuffer(width, height) {
+  return {
+    width,
+    height,
+    data: Buffer.alloc(width * height * 4),
+  };
+}
+
+export function setPixel(buf, x, y, [r, g, b, a = 255]) {
+  if (x < 0 || y < 0 || x >= buf.width || y >= buf.height) {
+    return;
+  }
+  const idx = (y * buf.width + x) * 4;
+  buf.data[idx] = r;
+  buf.data[idx + 1] = g;
+  buf.data[idx + 2] = b;
+  buf.data[idx + 3] = a;
+}
+
+export function fillRect(buf, x, y, w, h, color) {
+  for (let yy = y; yy < y + h; yy++) {
+    for (let xx = x; xx < x + w; xx++) {
+      setPixel(buf, xx, yy, color);
+    }
+  }
+}
+
+/**
  * Reads back just the width/height of a PNG file (from its IHDR chunk),
  * without needing to decode pixel data. Used by the dimension-verification
  * tool so it doesn't need a PNG-decoding dependency either.

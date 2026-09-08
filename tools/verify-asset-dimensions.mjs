@@ -39,7 +39,20 @@ const ASSET_CHECKS = [
     expectedHeight: 32,
     note: '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 32x32px each',
   },
-  // Phase 74: append buildings-atlas.png here once it ships.
+  // Phase 74: 34 building base frames (11 x 32x32 1x1 + 23 x 64x64 2x2, all
+  // packed side-by-side in one row) + 3 appended 32x32 variant frames
+  // (House-tier2, House-tier3, WoodenGate-closed) = 1920x64px overall. This
+  // only checks the whole-file dimensions (packing sanity); per-frame name
+  // and per-frame size correctness is verified separately by
+  // tools/verify-building-frames.mjs, which reads buildings-atlas.json.
+  {
+    file: 'public/art/buildings-atlas.png',
+    expectedWidth: 1920,
+    expectedHeight: 64,
+    note:
+      '34 building base frames (11x 32x32 + 23x 64x64) + 3 appended 32x32 variant frames ' +
+      '(House-tier2, House-tier3, WoodenGate-closed), packed side-by-side in one row',
+  },
   // Phase 75: append cowboys-atlas.png / mounted-cowboys-atlas.png / ...
   // Phase 76: append raiders-atlas.png / raider-camps-atlas.png / wildlife-atlas.png
   // Phase 77: append vegetation-atlas.png / carts-atlas.png / accents-atlas.png
