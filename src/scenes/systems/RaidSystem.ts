@@ -858,7 +858,7 @@ export class RaidSystem {
         continue;
       }
       target.hp = Math.max(0, target.hp - damage);
-      this.scene.registerMinimapBuildingDamage(target);
+      this.scene.minimapSystem.registerMinimapBuildingDamage(target);
     }
   }
 
@@ -981,8 +981,8 @@ export class RaidSystem {
     // Phase 45: a wave's damage flashes/off-screen pings are wave-scoped like
     // everything else reset here - a flash left over from the previous run
     // would otherwise render at a stale tile until it happened to expire.
-    this.scene.minimapBuildingFlashes.clear();
-    this.scene.offscreenThreats.clear();
+    this.scene.minimapSystem.minimapBuildingFlashes.clear();
+    this.scene.minimapSystem.offscreenThreats.clear();
 
     this.scheduleNextRaidCheck();
   }
@@ -1038,7 +1038,7 @@ export class RaidSystem {
       const camp = spawnRaiderCamp(spawn.x, spawn.y, faction, RAIDER_CAMP_MAX_HP);
       this.createCampVisual(camp);
     }
-    this.scene.redrawMinimap();
+    this.scene.minimapSystem.redrawMinimap();
   }
 
   private createCampVisual(camp: RaiderCamp): void {
@@ -1107,7 +1107,7 @@ export class RaidSystem {
     const message = `${RAIDER_DEFINITIONS[camp.faction].label} camp destroyed! +$${RAIDER_CAMP_LOOT_MONEY}, +${RAIDER_CAMP_LOOT_TOOLS} Tools`;
     addNotification(message, 'info', getElapsedSeconds());
 
-    this.scene.redrawMinimap();
+    this.scene.minimapSystem.redrawMinimap();
   }
 
   /**

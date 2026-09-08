@@ -207,7 +207,7 @@ export class WorldVisualsSystem {
 
     gameEvents.on('vegetation-added', (entity: VegetationEntity) => {
       this.addVegetationSprite(entity);
-      this.scene.redrawMinimap();
+      this.scene.minimapSystem.redrawMinimap();
     });
 
     gameEvents.on('vegetation-removed', (entity: VegetationEntity) => {
@@ -217,7 +217,7 @@ export class WorldVisualsSystem {
         image.destroy();
         this.vegetationImages.delete(entity.id);
       }
-      this.scene.redrawMinimap();
+      this.scene.minimapSystem.redrawMinimap();
     });
   }
 
