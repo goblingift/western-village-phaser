@@ -4,71 +4,71 @@
       "frame": {
         "x": 0,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "sourceSize": {
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       }
     },
     "raider-camp-Rustlers": {
       "frame": {
-        "x": 24,
+        "x": 96,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "sourceSize": {
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       }
     },
     "raider-camp-Coyotes": {
       "frame": {
-        "x": 48,
+        "x": 192,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       },
       "sourceSize": {
-        "w": 24,
-        "h": 24
+        "w": 96,
+        "h": 96
       }
     }
   },
   "meta": {
-    "app": "western-village-phaser tools/generate-placeholder-raiders.mjs",
+    "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
     "image": "raider-camps-atlas.png",
     "format": "RGBA8888",
     "size": {
-      "w": 72,
-      "h": 24
+      "w": 288,
+      "h": 96
     },
     "scale": "1"
   }

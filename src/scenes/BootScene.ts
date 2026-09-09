@@ -160,6 +160,16 @@ export class BootScene extends Phaser.Scene {
       MOUNTED_COWBOYS_ATLAS_KEY,
       BRAWLERS_ATLAS_KEY,
       DYNAMITERS_ATLAS_KEY,
+      // Final 7 categories (2026-09-09) - raiders/wildlife/camps/vegetation/
+      // carts/accents/resource-icons, completing the asset-pipeline rework
+      // across every remaining atlas.
+      RAIDERS_ATLAS_KEY,
+      WILDLIFE_ATLAS_KEY,
+      RAIDER_CAMPS_ATLAS_KEY,
+      VEGETATION_ATLAS_KEY,
+      CARTS_ATLAS_KEY,
+      ACCENTS_ATLAS_KEY,
+      RESOURCE_ICONS_ATLAS_KEY,
     ]) {
       this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
     }

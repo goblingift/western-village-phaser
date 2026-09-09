@@ -14,6 +14,8 @@ import {
   ANIMAL_SPRITE_SIZE,
   BuildingType,
   CARTS_ATLAS_KEY,
+  CART_SPRITE_HEIGHT,
+  CART_SPRITE_WIDTH,
   CART_TEXTURE_KEY,
   PlacedBuilding,
   VILLAGERS_ATLAS_KEY,
@@ -22,6 +24,7 @@ import {
 import {
   WILDLIFE_ATLAS_KEY,
   WILDLIFE_DEFINITIONS,
+  WILDLIFE_SPRITE_SIZE,
   WildlifeKind,
   pickRandomWildlifeKind,
   wildlifeTextureKey,
@@ -388,6 +391,7 @@ export class AmbientLifeSystem {
 
     const cart = this.scene.add
       .image(origin.x, origin.y, CARTS_ATLAS_KEY, CART_TEXTURE_KEY)
+      .setDisplaySize(CART_SPRITE_WIDTH, CART_SPRITE_HEIGHT)
       .setDepth(CART_SPRITE_DEPTH);
     cart.setFlipX(destination.x < origin.x);
     this.activeCarts.push(cart);
@@ -448,6 +452,7 @@ export class AmbientLifeSystem {
 
     const image = this.scene.add
       .image(spawn.x, spawn.y, WILDLIFE_ATLAS_KEY, wildlifeTextureKey(kind))
+      .setDisplaySize(WILDLIFE_SPRITE_SIZE, WILDLIFE_SPRITE_SIZE)
       .setDepth(WILDLIFE_SPRITE_DEPTH);
 
     const creature: Wildlife = {

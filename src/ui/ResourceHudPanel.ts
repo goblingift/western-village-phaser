@@ -121,6 +121,7 @@ export class ResourceHudPanel {
       const icon = scene.add
         .image(x, y + ROW_HEIGHT / 2, RESOURCE_ICONS_ATLAS_KEY, resourceIconTextureKey(key))
         .setOrigin(0, 0.5)
+        .setDisplaySize(RESOURCE_ICON_SIZE, RESOURCE_ICON_SIZE)
         .setScrollFactor(0)
         .setDepth(PANEL_CONTENT_DEPTH);
 

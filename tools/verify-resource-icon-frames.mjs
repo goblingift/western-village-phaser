@@ -26,7 +26,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-const ICON_SIZE = 12;
+// Asset-pipeline rework (2026-09-09): 4x supersampled (ART_SCALE), rendered
+// via setDisplaySize back to real 12x12 on-screen size.
+const ICON_SIZE = 12 * 4;
 
 // Mirrors buildingConfig.ts's ResourceKey union exactly (15 entries).
 const RESOURCE_KEYS = [

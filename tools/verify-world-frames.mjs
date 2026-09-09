@@ -33,6 +33,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
 const TILE_SIZE = 32;
+// Asset-pipeline rework (2026-09-09): every frame in this file is now 4x
+// supersampled (ART_SCALE) and rendered via setDisplaySize back to its real
+// on-screen size - sizes below are scaled at the point of use.
+const ART_SCALE = 4;
 
 /**
  * One entry per atlas file this phase owns: which frame names it must
@@ -43,23 +47,23 @@ const ATLAS_CHECKS = [
   {
     file: 'public/art/vegetation-atlas.json',
     frames: [
-      { name: 'vegetation-Tree', width: TILE_SIZE, height: TILE_SIZE },
-      { name: 'vegetation-Cactus', width: TILE_SIZE, height: TILE_SIZE },
+      { name: 'vegetation-Tree', width: TILE_SIZE * ART_SCALE, height: TILE_SIZE * ART_SCALE },
+      { name: 'vegetation-Cactus', width: TILE_SIZE * ART_SCALE, height: TILE_SIZE * ART_SCALE },
     ],
   },
   {
     file: 'public/art/carts-atlas.json',
-    frames: [{ name: 'goods-cart', width: 14, height: 10 }],
+    frames: [{ name: 'goods-cart', width: 14 * ART_SCALE, height: 10 * ART_SCALE }],
   },
   {
     file: 'public/art/accents-atlas.json',
     frames: [
-      { name: 'accent-WellCrank', width: 16, height: 4 },
-      { name: 'accent-WarehouseDoor', width: 24, height: 24 },
-      { name: 'accent-SupermarketAwning', width: 64, height: 8 },
-      { name: 'accent-ChickenDoor', width: 16, height: 12 },
-      { name: 'accent-HouseWindowLight', width: 12, height: 12 },
-      { name: 'accent-Campfire', width: 12, height: 12 },
+      { name: 'accent-WellCrank', width: 16 * ART_SCALE, height: 4 * ART_SCALE },
+      { name: 'accent-WarehouseDoor', width: 24 * ART_SCALE, height: 24 * ART_SCALE },
+      { name: 'accent-SupermarketAwning', width: 64 * ART_SCALE, height: 8 * ART_SCALE },
+      { name: 'accent-ChickenDoor', width: 16 * ART_SCALE, height: 12 * ART_SCALE },
+      { name: 'accent-HouseWindowLight', width: 12 * ART_SCALE, height: 12 * ART_SCALE },
+      { name: 'accent-Campfire', width: 12 * ART_SCALE, height: 12 * ART_SCALE },
     ],
   },
 ];

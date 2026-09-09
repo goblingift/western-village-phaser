@@ -8,6 +8,7 @@ import {
 import { VegetationEntity, countVegetationInRadius, getVegetation } from '../../state/vegetation';
 import {
   ACCENTS_ATLAS_KEY,
+  ACCENT_SIZES,
   AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
@@ -228,6 +229,7 @@ export class WorldVisualsSystem {
     const image = this.scene.add
       .image(entity.tileX * TILE_SIZE, entity.tileY * TILE_SIZE, VEGETATION_ATLAS_KEY, vegetationTextureKey(entity.kind))
       .setOrigin(0, 0)
+      .setDisplaySize(TILE_SIZE, TILE_SIZE)
       .setDepth(VEGETATION_DEPTH);
     // Phase 34: a tree replanted at 2am must not be the only green thing on a
     // blue map, so new sprites adopt the current phase's tint immediately.
@@ -421,9 +423,14 @@ export class WorldVisualsSystem {
 
       // Flicker runs permanently; it's only ever visible when the alpha tween
       // below has faded the fire in, so there's nothing to start/stop.
+      // Rebased relative to the accent's own current scaleY (asset-pipeline
+      // rework, 2026-09-09): accent textures are now supersampled and
+      // rendered via setDisplaySize, so their resting scale is a fraction
+      // like 0.25, not 1 - a literal `scaleY: 1.15` target would render the
+      // campfire 4x too large mid-flicker.
       this.scene.tweens.add({
         targets: fire,
-        scaleY: 1.15,
+        scaleY: fire.scaleY * 1.15,
         duration: CAMPFIRE_FLICKER_MS,
         yoyo: true,
         repeat: -1,
@@ -442,7 +449,11 @@ export class WorldVisualsSystem {
   }
 
   private createAccentImage(x: number, y: number, kind: AccentKind): Phaser.GameObjects.Image {
-    return this.scene.add.image(x, y, ACCENTS_ATLAS_KEY, accentTextureKey(kind)).setDepth(ACCENT_DEPTH);
+    const size = ACCENT_SIZES[kind];
+    return this.scene.add
+      .image(x, y, ACCENTS_ATLAS_KEY, accentTextureKey(kind))
+      .setDisplaySize(size.width, size.height)
+      .setDepth(ACCENT_DEPTH);
   }
 
   /** Crank bar pivots from its own center, between the well's support posts; starts at -15deg so the yoyo tween sweeps it through 0 up to +15deg. */
@@ -485,11 +496,18 @@ export class WorldVisualsSystem {
 
   private createSupermarketAwningAccent(originX: number, originY: number): Phaser.GameObjects.Image {
     const awning = this.createAccentImage(originX + 32, originY + 8, 'SupermarketAwning').setOrigin(0.5, 0.5);
-    awning.setScale(SUPERMARKET_AWNING_SCALE_X_MIN, 1);
+    // Rebased relative to the accent's own current scaleX/scaleY (asset-
+    // pipeline rework, 2026-09-09): setScale(x, 1) used to be safe when
+    // every accent rendered at native texture size (base scale 1), but
+    // accent textures are now supersampled + setDisplaySize'd, so a literal
+    // `1` for scaleY would blow the awning up to native (4x too tall).
+    const baseScaleX = awning.scaleX;
+    const baseScaleY = awning.scaleY;
+    awning.setScale(baseScaleX * SUPERMARKET_AWNING_SCALE_X_MIN, baseScaleY);
 
     this.scene.tweens.add({
       targets: awning,
-      scaleX: SUPERMARKET_AWNING_SCALE_X_MAX,
+      scaleX: baseScaleX * SUPERMARKET_AWNING_SCALE_X_MAX,
       duration: SUPERMARKET_AWNING_TWEEN_MS,
       yoyo: true,
       repeat: -1,
@@ -510,10 +528,13 @@ export class WorldVisualsSystem {
     const duration = Phaser.Math.Between(CHICKEN_DOOR_DURATION_MIN_MS, CHICKEN_DOOR_DURATION_MAX_MS);
     const repeatDelay = Phaser.Math.Between(CHICKEN_DOOR_REPEAT_DELAY_MIN_MS, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
     const delay = Phaser.Math.Between(0, CHICKEN_DOOR_REPEAT_DELAY_MAX_MS);
+    // Rebased relative to the accent's own current scaleY (asset-pipeline
+    // rework, 2026-09-09) - see createSupermarketAwningAccent's identical fix.
+    const baseScaleY = door.scaleY;
 
     this.scene.tweens.add({
       targets: door,
-      scaleY: CHICKEN_DOOR_SCALE_Y_CLOSED,
+      scaleY: baseScaleY * CHICKEN_DOOR_SCALE_Y_CLOSED,
       duration,
       delay,
       repeatDelay,

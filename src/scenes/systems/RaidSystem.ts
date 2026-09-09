@@ -37,7 +37,9 @@ import {
   PlacedBuilding,
   RAIDERS_ATLAS_KEY,
   RAIDER_CAMPS_ATLAS_KEY,
+  RAIDER_CAMP_SPRITE_SIZE,
   RAIDER_DEFINITIONS,
+  RAIDER_SPRITE_SIZE,
   RaiderDefinition,
   RaiderFaction,
   BUILDING_DEFINITIONS,
@@ -448,6 +450,7 @@ export class RaidSystem {
 
     const image = this.scene.add
       .image(spawn.x, spawn.y, RAIDERS_ATLAS_KEY, raiderTextureKey(faction))
+      .setDisplaySize(RAIDER_SPRITE_SIZE, RAIDER_SPRITE_SIZE)
       .setDepth(RAIDER_SPRITE_DEPTH);
 
     // Phase 80: elite is a per-instance roll/bonus, exactly like the
@@ -1044,6 +1047,7 @@ export class RaidSystem {
   private createCampVisual(camp: RaiderCamp): void {
     const image = this.scene.add
       .image(camp.x, camp.y, RAIDER_CAMPS_ATLAS_KEY, raiderCampTextureKey(camp.faction))
+      .setDisplaySize(RAIDER_CAMP_SPRITE_SIZE, RAIDER_CAMP_SPRITE_SIZE)
       .setDepth(RAIDER_CAMP_SPRITE_DEPTH);
     this.campVisuals.set(camp.id, image);
   }

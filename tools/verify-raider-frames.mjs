@@ -29,8 +29,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-const SPRITE_SIZE = 18;
-const CAMP_SIZE = 24;
+// Asset-pipeline rework (2026-09-09): 4x supersampled (ART_SCALE), rendered
+// via setDisplaySize back to real 18x18/24x24 on-screen size.
+const ART_SCALE = 4;
+const SPRITE_SIZE = 18 * ART_SCALE;
+const CAMP_SIZE = 24 * ART_SCALE;
 
 /**
  * One entry per atlas file this phase owns: which frame names it must

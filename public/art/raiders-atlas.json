@@ -4,71 +4,71 @@
       "frame": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     },
     "raider-Rustlers": {
       "frame": {
-        "x": 18,
+        "x": 72,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     },
     "raider-Coyotes": {
       "frame": {
-        "x": 36,
+        "x": 144,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     }
   },
   "meta": {
-    "app": "western-village-phaser tools/generate-placeholder-raiders.mjs",
+    "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
     "image": "raiders-atlas.png",
     "format": "RGBA8888",
     "size": {
-      "w": 54,
-      "h": 18
+      "w": 216,
+      "h": 72
     },
     "scale": "1"
   }

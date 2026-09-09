@@ -1526,6 +1526,24 @@ export function accentTextureKey(kind: AccentKind): string {
   return `accent-${kind}`;
 }
 
+/**
+ * On-screen size for each accent - unlike every other sprite class, accents
+ * have no single shared size (each is a small non-square piece pinned to a
+ * hardcoded pivot on its parent building), so there's no single constant to
+ * reuse. Matches docs/ASSET_GENERATION_CHECKLIST.md §13 exactly. Used to
+ * setDisplaySize() each accent back to this real size regardless of its
+ * source texture's (now supersampled) resolution - see
+ * WorldVisualsSystem.createAccentImage.
+ */
+export const ACCENT_SIZES: Record<AccentKind, { width: number; height: number }> = {
+  WellCrank: { width: 16, height: 4 },
+  WarehouseDoor: { width: 24, height: 24 },
+  SupermarketAwning: { width: 64, height: 8 },
+  ChickenDoor: { width: 16, height: 12 },
+  HouseWindowLight: { width: 12, height: 12 },
+  Campfire: { width: 12, height: 12 },
+};
+
 /** Distinct asset class again (Phase 20): decorative population sprites, unrelated to any single building footprint. */
 export const VILLAGERS_ATLAS_KEY = 'villagers-atlas';
 

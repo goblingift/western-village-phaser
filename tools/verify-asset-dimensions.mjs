@@ -115,62 +115,54 @@ const ASSET_CHECKS = [
   // (RAIDER_CAMP_SPRITE_SIZE, an independent literal this phase does not
   // touch). Per-frame name/size correctness is verified separately by
   // tools/verify-raider-frames.mjs.
+  // Asset-pipeline rework (2026-09-09): every atlas below is now 4x
+  // supersampled (ART_SCALE) and rendered via setDisplaySize back to its
+  // real on-screen size - expected whole-file dimensions are the
+  // supersampled source resolution, matching each verify-*-frames.mjs
+  // script's own ART_SCALE constant.
   {
     file: 'public/art/raiders-atlas.png',
-    expectedWidth: 54,
-    expectedHeight: 18,
-    note: '3 raider frames (Outlaws, Rustlers, Coyotes) x 18x18px each',
+    expectedWidth: 216,
+    expectedHeight: 72,
+    note: '3 raider frames (Outlaws, Rustlers, Coyotes) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/raider-camps-atlas.png',
-    expectedWidth: 72,
-    expectedHeight: 24,
-    note: '3 raider camp frames (Outlaws, Rustlers, Coyotes) x 24x24px each',
+    expectedWidth: 288,
+    expectedHeight: 96,
+    note: '3 raider camp frames (Outlaws, Rustlers, Coyotes) x 96x96px each (24x24 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/wildlife-atlas.png',
-    expectedWidth: 54,
-    expectedHeight: 18,
-    note: '3 wildlife frames (Snake, Coyote, MountainLion) x 18x18px each',
+    expectedWidth: 216,
+    expectedHeight: 72,
+    note: '3 wildlife frames (Snake, Coyote, MountainLion) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
-  // Phase 77: vegetation, carts, accents. vegetation-atlas is a uniform 2-frame
-  // strip at TILE_SIZE (32x32, unaffected by Phase 75's 12->18 small-unit
-  // bump); carts-atlas is a single non-square 14x10 frame (CART_SPRITE_WIDTH/
-  // HEIGHT, independent literals); accents-atlas packs 6 frames of differing
-  // sizes side-by-side (16+24+64+16+12+12 = 144 wide, tallest frame 24 high).
-  // Per-frame name/size correctness (not just whole-file dimensions) is
-  // verified separately by tools/verify-world-frames.mjs.
   {
     file: 'public/art/vegetation-atlas.png',
-    expectedWidth: 64,
-    expectedHeight: 32,
-    note: '2 vegetation frames (Tree, Cactus) x 32x32px each',
+    expectedWidth: 256,
+    expectedHeight: 128,
+    note: '2 vegetation frames (Tree, Cactus) x 128x128px each (TILE_SIZE 32x32 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/carts-atlas.png',
-    expectedWidth: 14,
-    expectedHeight: 10,
-    note: 'single "goods-cart" frame, 14x10px (non-square)',
+    expectedWidth: 56,
+    expectedHeight: 40,
+    note: 'single "goods-cart" frame, 56x40px (14x10 x 4x ART_SCALE, non-square)',
   },
   {
     file: 'public/art/accents-atlas.png',
-    expectedWidth: 144,
-    expectedHeight: 24,
+    expectedWidth: 576,
+    expectedHeight: 96,
     note:
-      '6 accent frames packed side-by-side: WellCrank 16x4, WarehouseDoor 24x24, ' +
-      'SupermarketAwning 64x8, ChickenDoor 16x12, HouseWindowLight 12x12, Campfire 12x12',
+      '6 accent frames packed side-by-side, each x4 ART_SCALE: WellCrank 64x16, WarehouseDoor 96x96, ' +
+      'SupermarketAwning 256x32, ChickenDoor 64x48, HouseWindowLight 48x48, Campfire 48x48',
   },
-  // Phase 78: resource icons (HUD polish). 15 frames (one per ResourceKey,
-  // mirrors src/config/buildingConfig.ts's ResourceKey union) packed
-  // side-by-side, each 12x12px (RESOURCE_ICON_SIZE - a HUD-chrome size
-  // independent of Phase 75/76's 12->18 small-unit-sprite bump). Per-frame
-  // name/size correctness is verified separately by
-  // tools/verify-resource-icon-frames.mjs.
   {
     file: 'public/art/resource-icons-atlas.png',
-    expectedWidth: 180,
-    expectedHeight: 12,
-    note: '15 resource icon frames x 12x12px each (one per ResourceKey)',
+    expectedWidth: 720,
+    expectedHeight: 48,
+    note: '15 resource icon frames x 48x48px each (12x12 x 4x ART_SCALE, one per ResourceKey)',
   },
 ];
 
