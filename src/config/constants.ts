@@ -360,6 +360,23 @@ export const ENDLESS_THREAT_RAMP_CYCLES = 6;
  */
 export const PRODUCTION_STALL_NOTIFY_TICKS = 3;
 
+/**
+ * Phase 97: how many consecutive ticks a House's needs must sit unmet before
+ * the notification log reports it.
+ *
+ * This closes a genuine silent-failure hole: runHouseNeeds only ever called
+ * addNotification on a tier CHANGE, and a Tier-1 House cannot drop below Tier
+ * 1, so the notification branch was unreachable for exactly the houses that
+ * carry the early economy. A town whose Well can't keep up therefore lost its
+ * primary income source (Phase 92's Tier-1 tax) town-wide with zero feedback
+ * anywhere in the game.
+ *
+ * Same debounce shape and value as PRODUCTION_STALL_NOTIFY_TICKS above - a
+ * single borderline tick where another consumer drained the pool first is
+ * normal and not worth a log entry, three in a row is a real supply problem.
+ */
+export const HOUSE_NEEDS_NOTIFY_TICKS = 3;
+
 /** Phase 44: notification log retention - oldest entries drop once the log exceeds this many. */
 export const MAX_NOTIFICATION_LOG_ENTRIES = 50;
 

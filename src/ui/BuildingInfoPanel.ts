@@ -59,6 +59,7 @@ import {
   clearRallyPoint,
   demolishBuilding,
   depositToBank,
+  getBuildingCashFlow,
   getChurchRadius,
   getCropOutputMultiplier,
   getCropWaterDistance,
@@ -275,6 +276,17 @@ export class BuildingInfoPanel {
         ? `Upkeep: $${definition.upkeep}/tick${this.selected.disabled ? ' - UNPAID, idle' : ''}`
         : null;
 
+    // Phase 97: this building's own last-tick cash position, so "which
+    // building is bleeding me" is answerable per building here as well as
+    // across the whole town in the Statistics panel. Suppressed entirely for a
+    // building that moved no money at all (Road, Fence, an upkeep-free shed) -
+    // a "$0/tick" line on those is noise, not information.
+    const cashFlow = getBuildingCashFlow(this.selected.id);
+    const cashFlowText =
+      cashFlow && (cashFlow.income > 0 || cashFlow.expense > 0)
+        ? `Net: ${cashFlow.net >= 0 ? '+' : '-'}$${Math.abs(cashFlow.net)}/tick (earns $${cashFlow.income}, costs $${cashFlow.expense})`
+        : null;
+
     const harvestStatus = definition.harvest
       ? this.describeHarvestStatus(this.selected, definition.harvest)
       : null;
@@ -407,6 +419,7 @@ export class BuildingInfoPanel {
       ${watchtowerText ? `<div>${watchtowerText}</div>` : ''}
       ${ammoText ? `<div>${ammoText}</div>` : ''}
       ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}
+      ${cashFlowText ? `<div class="${cashFlow && cashFlow.net < 0 ? 'cash-negative' : 'cash-positive'}">${cashFlowText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}
       ${wellText ? `<div>${wellText}</div>` : ''}

@@ -11,7 +11,7 @@ import {
 import { RIFLE_AMMO_PER_SHOT, RIFLE_DAMAGE_MULTIPLIER } from '../config/constants';
 import { getResourceConsumers, getResourceProducerLabels } from '../config/resourceGraph';
 import { gameEvents } from '../state/gameEvents';
-import { getResourceTrends, getResources } from '../state/gameState';
+import { getResourceTrends, getResources, getWaterLedger } from '../state/gameState';
 import { getCurrentMarketPrice } from '../state/market';
 
 /**
@@ -129,6 +129,7 @@ export class EconomyPanel {
         every tick, as long as it is staffed &mdash; you never click to sell.
         Prices fluctuate: dumping a lot of one good pushes its price down for a while.
       </div>
+      ${this.renderWaterLedger()}
       <h3>Goods you can sell</h3>
       <table class="economy-table">
         <tr><th>Good</th><th>Stock</th><th>Rate</th><th>Price now</th><th>Sold at</th></tr>
@@ -152,6 +153,50 @@ export class EconomyPanel {
     `;
 
     this.content.querySelector('#economy-close')?.addEventListener('click', () => this.hide());
+  }
+
+  /**
+   * Phase 97: the water ledger. Houses pay the town's first and steadiest
+   * income (Phase 92's Tier-1 tax) and they pay it ONLY on a tick where their
+   * Water need is met - but a Well's real output falls off with its distance
+   * to water, so a town can quietly outgrow its wells and lose that income
+   * entirely. Nothing in the game showed this: a Tier-1 House cannot drop a
+   * tier, so even the tier-change notification never fired.
+   *
+   * Shown at the top of the economy panel rather than in a new overlay because
+   * this IS the town's ledger - where the money comes from and why it stopped.
+   */
+  private renderWaterLedger(): string {
+    const ledger = getWaterLedger();
+    if (ledger.totalHouses === 0) {
+      return '';
+    }
+
+    const shortfall = Math.round((ledger.houseDemandPerTick - ledger.supplyPerTick) * 100) / 100;
+    const dry = ledger.dryHouses > 0;
+    const short = shortfall > 0;
+
+    const verdict = dry
+      ? `<strong class="economy-bad">${ledger.dryHouses} of ${ledger.totalHouses} houses are dry</strong> &mdash;
+         a dry house pays no tax at all. Build another Well (closer to water is better) or fewer houses.`
+      : short
+        ? `<strong class="economy-warn">Wells are behind demand by ${shortfall}/tick</strong> &mdash;
+           houses are still paying from the stockpile, but that will run out.`
+        : `<strong class="economy-good">Supply covers every house.</strong>`;
+
+    return `
+      <h3>Water ledger &mdash; the town's tax base</h3>
+      <table class="economy-table">
+        <tr><th>Well output (last tick)</th><th>House demand</th><th>Other use</th><th>Houses dry</th></tr>
+        <tr>
+          <td>${ledger.supplyPerTick}/tick</td>
+          <td>${ledger.houseDemandPerTick}/tick</td>
+          <td>${ledger.otherDemandPerTick}/tick</td>
+          <td class="${dry ? 'economy-bad' : ''}">${ledger.dryHouses} of ${ledger.totalHouses}</td>
+        </tr>
+      </table>
+      <div class="economy-note">${verdict}</div>
+    `;
   }
 
   private renderSellableRow(key: ResourceKey): string {

@@ -39,6 +39,7 @@ import {
   GAME_DURATION_SECONDS,
   GRANARY_STORAGE_BONUS,
   GRAVEL_MAX_DISTANCE_TILES,
+  HOUSE_NEEDS_NOTIFY_TICKS,
   HOUSE_TIER_HYSTERESIS_TICKS,
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
@@ -93,6 +94,7 @@ import {
   HOUSE_TIER_CONFIG,
   HarvestConfig,
   HouseTier,
+  HouseTierConfig,
   MarketableResourceKey,
   PlacedBuilding,
   RESOURCE_LABELS,
@@ -415,12 +417,82 @@ const stalledInputTicks = new Map<string, number>();
 const stalledInputNotified = new Set<string>();
 const upkeepDisabledNotified = new Set<string>();
 const resourcesWastingAtCap = new Set<ResourceKey>();
+/**
+ * Phase 97: the fourth trigger, same fire-once-on-transition shape as the
+ * three above - a House whose needs have been unmet for
+ * HOUSE_NEEDS_NOTIFY_TICKS consecutive ticks. Keyed by buildingId; cleared the
+ * moment that House's needs are met again, so a later failure can fire fresh.
+ * No separate tick counter is needed: runHouseNeeds already maintains
+ * houseNeedsUnmetStreak on the building itself.
+ */
+const houseNeedsUnmetNotified = new Set<string>();
 
 function clearNotificationDebounceState(): void {
   stalledInputTicks.clear();
   stalledInputNotified.clear();
   upkeepDisabledNotified.clear();
   resourcesWastingAtCap.clear();
+  houseNeedsUnmetNotified.clear();
+}
+
+/**
+ * Phase 97: per-building cash flow for the current tick - "which building is
+ * bleeding me", which nothing in the game could answer before.
+ *
+ * A side Map keyed by buildingId (like productivityRecords and the debounce
+ * state above) rather than a PlacedBuilding field, since it is pure
+ * observation for the UI and never read back into a gameplay decision. Reset
+ * at the top of every runProductionTick and written by every pass that
+ * actually moves `money` on a specific building's behalf: runUpkeep (expense),
+ * the three fixed-rate sell passes + Trading Post (income), runHouseNeeds'
+ * tax collection (income) and runBrothelIncome (income).
+ *
+ * Bank interest is deliberately NOT recorded here: it compounds into
+ * bankBalance, not `money`, so counting it as income would overstate the
+ * town's actual per-tick cash position.
+ */
+export interface BuildingCashFlow {
+  income: number;
+  expense: number;
+  net: number;
+}
+const buildingCashFlow = new Map<string, { income: number; expense: number }>();
+
+function addBuildingIncome(buildingId: string, amount: number): void {
+  if (amount <= 0) {
+    return;
+  }
+  const entry = buildingCashFlow.get(buildingId) ?? { income: 0, expense: 0 };
+  entry.income += amount;
+  buildingCashFlow.set(buildingId, entry);
+}
+
+function addBuildingExpense(buildingId: string, amount: number): void {
+  if (amount <= 0) {
+    return;
+  }
+  const entry = buildingCashFlow.get(buildingId) ?? { income: 0, expense: 0 };
+  entry.expense += amount;
+  buildingCashFlow.set(buildingId, entry);
+}
+
+/**
+ * Phase 97: last completed tick's cash flow for one building, or null if it
+ * neither earned nor spent anything (a Road, a Fence, an idle Warehouse).
+ * Rounded to cents at read time rather than on every accumulation, so a
+ * building with several small income sources doesn't lose them to rounding.
+ */
+export function getBuildingCashFlow(buildingId: string): BuildingCashFlow | null {
+  const entry = buildingCashFlow.get(buildingId);
+  if (!entry) {
+    return null;
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    income: round2(entry.income),
+    expense: round2(entry.expense),
+    net: round2(entry.income - entry.expense),
+  };
 }
 
 /**
@@ -1883,9 +1955,11 @@ function removeBuilding(building: PlacedBuilding, reason: 'destroyed' | 'demolis
   stalledInputTicks.delete(building.id);
   stalledInputNotified.delete(building.id);
   upkeepDisabledNotified.delete(building.id);
+  houseNeedsUnmetNotified.delete(building.id);
   // Phase 49: same reasoning - a destroyed-then-rebuilt building starts its
   // productivity window fresh under its new id rather than inheriting one.
   productivityRecords.delete(building.id);
+  buildingCashFlow.delete(building.id);
   // Real Fence Enclosures: drop the removed building's own cached enclosure
   // (only meaningful if it was itself a farm) and recompute every nearby
   // farm's enclosure - occupancy for this tile is already cleared above, so
@@ -2824,6 +2898,7 @@ function runFixedRateSales<K extends ResourceKey>(
     if (!building.staffed) {
       building.active = false;
       assignSale(building, { sold: {}, revenue: 0 });
+      recordProductivityTick(building.id, false, 'Understaffed');
       continue;
     }
 
@@ -2850,9 +2925,17 @@ function runFixedRateSales<K extends ResourceKey>(
     }
 
     money = Math.round((money + revenue) * 100) / 100;
+    addBuildingIncome(building.id, revenue);
 
     assignSale(building, { sold, revenue: Math.round(revenue * 100) / 100 });
     building.active = anySold;
+    // Phase 97: sellers were invisible in the Statistics panel, which keys off
+    // getBuildingProductivity and therefore only ever listed buildings with a
+    // `production`/`harvest` config. A seller absolutely has an on/off state
+    // worth describing - it is either moving goods or sitting on an empty
+    // pool - so it is recorded here with the same blocker-priority wording the
+    // production loop and BuildingInfoPanel already use.
+    recordProductivityTick(building.id, anySold, anySold ? null : 'No stock to sell');
   }
 }
 
@@ -2894,6 +2977,7 @@ function runTradingPostSales(): void {
     if (!building.staffed) {
       building.active = false;
       building.tradingPostSale = { sold: {}, revenue: 0 };
+      recordProductivityTick(building.id, false, 'Understaffed');
       continue;
     }
 
@@ -2924,12 +3008,16 @@ function runTradingPostSales(): void {
     }
 
     money = Math.round((money + revenue) * 100) / 100;
+    addBuildingIncome(building.id, revenue);
 
     building.tradingPostSale = {
       sold,
       revenue: Math.round(revenue * 100) / 100,
     };
     building.active = anySold;
+    // Phase 97: a Trading Post with no enabled order (or nothing above its
+    // threshold) is a distinct, very common, and previously unreported state.
+    recordProductivityTick(building.id, anySold, anySold ? null : 'No order filled');
   }
 }
 
@@ -2991,6 +3079,26 @@ export function setTradingPostOrder(
  * other pass in this file treats a disabled building as merely idle, not
  * penalized further.
  */
+/**
+ * Phase 97: which of a House's needs actually failed this tick, for the
+ * notification message and the Statistics panel's block reason. Takes the
+ * per-group snapshot runHouseNeeds just built (rather than re-deriving it from
+ * the resource pool) so the reported reason can never disagree with the check
+ * that produced it. Church coverage is appended separately because it is not a
+ * HouseNeedGroup - it lives on HouseTierConfig.requiresChurch.
+ */
+function describeUnmetHouseNeeds(
+  status: { label: string; met: boolean }[],
+  tierConfig: HouseTierConfig,
+  churchServed: boolean,
+): string {
+  const missing = status.filter((need) => !need.met).map((need) => need.label);
+  if (tierConfig.requiresChurch && !churchServed) {
+    missing.push('Church coverage');
+  }
+  return missing.length > 0 ? missing.join(', ') : 'unknown';
+}
+
 function runHouseNeeds(): void {
   for (const building of placedBuildings) {
     if (building.type !== BuildingType.House) {
@@ -3088,8 +3196,15 @@ function runHouseNeeds(): void {
         const netTax = Math.round(grossTax * (1 - nuisance.taxPenaltyFraction) * 100) / 100;
         building.lastHouseTax = { gross: grossTax, net: netTax, nuisanceSources: nuisance.sources };
         money = Math.round((money + netTax) * 100) / 100;
+        addBuildingIncome(building.id, netTax);
       }
       building.houseNeedsUnmetStreak = 0;
+      // Phase 97: a House is one of the town's primary income sources but had
+      // no productivity record at all (no `production`/`harvest` config), so
+      // the Statistics panel could not show that half the town was dry.
+      recordProductivityTick(building.id, true, null);
+      // Recovery: allow a fresh unmet notification if this House goes dry again later.
+      houseNeedsUnmetNotified.delete(building.id);
 
       if (nextTier !== null && nextTierMet) {
         building.houseNeedsMetStreak += 1;
@@ -3114,6 +3229,38 @@ function runHouseNeeds(): void {
     } else {
       building.houseNeedsUnmetStreak += 1;
       building.houseNeedsMetStreak = 0;
+      building.lastHouseTax = { gross: 0, net: 0, nuisanceSources: 0 };
+      recordProductivityTick(
+        building.id,
+        false,
+        `Needs unmet: ${describeUnmetHouseNeeds(status, tierConfig, churchServed)}`,
+      );
+
+      /**
+       * Phase 97: the silent-failure fix. This used to notify ONLY on a tier
+       * change - and a Tier-1 House can never drop below Tier 1, so for
+       * exactly the houses carrying the early economy (Phase 92 made Tier 1
+       * the town's first real income lever) the notification branch was
+       * unreachable. A town whose Well couldn't keep up lost its income
+       * town-wide with no feedback anywhere in the game.
+       *
+       * Debounced with the same fire-once-on-transition shape as Phase 44's
+       * stall/upkeep triggers, reusing the streak counter runHouseNeeds
+       * already maintains rather than adding a second tick counter that could
+       * drift from it.
+       */
+      if (
+        building.houseNeedsUnmetStreak >= HOUSE_NEEDS_NOTIFY_TICKS &&
+        !houseNeedsUnmetNotified.has(building.id)
+      ) {
+        houseNeedsUnmetNotified.add(building.id);
+        addNotification(
+          `A House has unmet needs (${describeUnmetHouseNeeds(status, tierConfig, churchServed)}) - it pays no tax until supply returns`,
+          'warning',
+          elapsedSeconds,
+          building.id,
+        );
+      }
 
       if (building.houseNeedsUnmetStreak >= HOUSE_TIER_HYSTERESIS_TICKS && building.houseTier > 1) {
         building.houseTier = (building.houseTier - 1) as HouseTier;
@@ -3188,6 +3335,7 @@ function runBrothelIncome(): void {
     const income = Math.round(ladyCount * BROTHEL_INCOME_PER_LADY_PER_HOUSE * tierMultiplierSum * 100) / 100;
     if (income > 0) {
       money = Math.round((money + income) * 100) / 100;
+      addBuildingIncome(building.id, income);
       gameEvents.emit('money-changed', money);
     }
     building.lastBrothelIncome = { housesServed, income };
@@ -3236,6 +3384,7 @@ function runUpkeep(): number {
     if (money >= upkeep) {
       money = Math.round((money - upkeep) * 100) / 100;
       paid += upkeep;
+      addBuildingExpense(building.id, upkeep);
       building.disabled = false;
       // Recovery: allow a fresh notification if this building goes unpaid again later.
       upkeepDisabledNotified.delete(building.id);
@@ -3374,6 +3523,9 @@ export function runProductionTick(): void {
   // reports into these via addProducedThisTick/addConsumedThisTick.
   tickResourceProduced = {};
   tickResourceConsumed = {};
+  // Phase 97: same per-tick reset discipline for the cash-flow accumulators -
+  // getBuildingCashFlow always describes the last COMPLETED tick.
+  buildingCashFlow.clear();
 
   // Phase 51: advance the market before anything sells this tick, so every
   // sell pass below reads a price that already reflects the drift/pressure/
@@ -3745,6 +3897,86 @@ export function getIndustryNuisance(
   };
 }
 
+/**
+ * Phase 97: the town's water supply-vs-demand position, for the Economy
+ * panel's ledger section.
+ *
+ * Every number here is READ BACK from what actually happened rather than
+ * re-derived from the config, which matters because a Well's real output is
+ * the product of a five-factor multiplier chain (distance falloff, drought,
+ * dust storm, road connection, staffing) that a second implementation here
+ * would inevitably drift from:
+ *
+ *  - `supplyPerTick` is the water genuinely added to the pool last tick,
+ *    straight off Phase 49's resource history (the same buffer the Statistics
+ *    panel's sparkline reads).
+ *  - `houseDemandPerTick` is the only config-derived figure, and it has to be:
+ *    it is what the town WOULD draw if every House were paying, whereas a dry
+ *    House consumes nothing at all (runHouseNeeds is atomic - it consumes only
+ *    when every group is affordable), so reading consumption back would report
+ *    a shortage as zero demand and hide the exact failure this is meant to
+ *    surface.
+ *  - `dryHouses` is index-aligned against the per-group snapshot runHouseNeeds
+ *    wrote last tick, so it counts the Houses that really failed their water
+ *    group - not an estimate.
+ */
+export interface WaterLedger {
+  supplyPerTick: number;
+  houseDemandPerTick: number;
+  otherDemandPerTick: number;
+  dryHouses: number;
+  totalHouses: number;
+}
+
+export function getWaterLedger(): WaterLedger {
+  const history = resourceHistory.water;
+  const latest = history.length > 0 ? history[history.length - 1] : null;
+  const supplyPerTick = latest ? latest.produced : 0;
+
+  let houseDemandPerTick = 0;
+  let dryHouses = 0;
+  let totalHouses = 0;
+
+  for (const building of placedBuildings) {
+    if (building.type !== BuildingType.House || building.hp <= 0) {
+      continue;
+    }
+    if (building.constructionTicksRemaining && building.constructionTicksRemaining > 0) {
+      continue;
+    }
+    totalHouses += 1;
+
+    const tierConfig = HOUSE_TIER_CONFIG[building.houseTier];
+    tierConfig.needs.forEach((group, index) => {
+      const waterAmount = group.options.water;
+      if (waterAmount === undefined) {
+        return;
+      }
+      houseDemandPerTick += waterAmount;
+      // houseNeedsStatus is pushed in tierConfig.needs' own order by
+      // runHouseNeeds, so index alignment here is exact rather than a
+      // label-string match that would break the moment a label is reworded.
+      const status = building.houseNeedsStatus[index];
+      if (status && !status.met) {
+        dryHouses += 1;
+      }
+    });
+  }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const totalConsumed = latest ? latest.consumed : 0;
+  return {
+    supplyPerTick: round2(supplyPerTick),
+    houseDemandPerTick: round2(houseDemandPerTick),
+    // Whatever else drank from the pool last tick (Butcher inputs, etc.).
+    // Floored at 0: a tick where Houses were dry consumes less than the
+    // config-derived house demand, which would otherwise read negative.
+    otherDemandPerTick: round2(Math.max(0, totalConsumed - houseDemandPerTick)),
+    dryHouses,
+    totalHouses,
+  };
+}
+
 export function computeNetWorth(): NetWorthBreakdown {
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -4084,6 +4316,7 @@ export function resetGame(options?: { mode?: RunMode; difficulty?: Difficulty })
   tickResourceProduced = {};
   tickResourceConsumed = {};
   productivityRecords.clear();
+  buildingCashFlow.clear();
   enclosureCache.clear();
   totalMeatProduced = 0;
   elapsedSeconds = 0;

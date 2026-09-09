@@ -3,6 +3,7 @@ import { gameEvents } from '../state/gameEvents';
 import {
   BuildingProductivity,
   ResourceHistoryEntry,
+  getBuildingCashFlow,
   getBuildingProductivity,
   getPlacedBuildings,
   getResourceHistory,
@@ -28,10 +29,18 @@ type SortDirection = 'asc' | 'desc';
  *  - Resource Trends: one row per resource with any production-tick history,
  *    a tiny canvas sparkline of the net rate over the tracked window, and the
  *    last tick's produced/consumed/net numbers.
- *  - Building Productivity: every currently-placed building gateState
- *    actually tracks (production/harvest buildings only - see
- *    getBuildingProductivity's doc comment), as a sortable-by-click list of
- *    "active ticks / window" percentage plus the current block reason.
+ *  - Building Productivity: every currently-placed building gameState
+ *    actually tracks, as a sortable-by-click list of "active ticks / window"
+ *    percentage, last tick's net cash flow, and the current block reason.
+ *
+ * Phase 97 widened both halves of that second section. Houses and the three
+ * seller buildings (Market Stall, Supermarket, Saloon) - plus Trading Post -
+ * are now tracked too: they have no `production`/`harvest` config, which is
+ * what this panel keyed off, so the town's entire income side was invisible
+ * here even though a dry House or an empty Market Stall is exactly the kind of
+ * silent stoppage this panel exists to surface. The net $/tick column comes
+ * from gameState's per-building cash-flow accumulator and answers "which
+ * building is bleeding me", which nothing in the game could answer before.
  *
  * Deliberately re-renders only while visible (gated in the 'production-tick'
  * listener) so an idle, hidden panel costs nothing every 2s tick.
@@ -77,7 +86,7 @@ export class StatisticsPanel {
 
     const buildingHeading = document.createElement('div');
     buildingHeading.className = 'statistics-panel-section-title statistics-panel-sort-heading';
-    buildingHeading.textContent = 'Building Productivity (click to sort) ↕';
+    buildingHeading.textContent = 'Building Productivity & net $/tick (click to sort) ↕';
     buildingHeading.addEventListener('click', () => this.toggleSort());
     this.panel.appendChild(buildingHeading);
 
@@ -248,6 +257,22 @@ export class StatisticsPanel {
     percentLabel.textContent = `${percent}%`;
     percentLabel.classList.add(percent >= 70 ? 'good' : percent >= 30 ? 'ok' : 'bad');
     row.appendChild(percentLabel);
+
+    // Phase 97: "which building is bleeding me". A building that moved no
+    // money at all last tick (a Road, a Fence, an idle Warehouse) shows a
+    // dash rather than a misleading $0.
+    const cashFlow = getBuildingCashFlow(building.id);
+    const cashLabel = document.createElement('span');
+    cashLabel.className = 'statistics-panel-building-cash';
+    if (cashFlow) {
+      cashLabel.textContent = `${cashFlow.net >= 0 ? '+' : '-'}$${Math.abs(cashFlow.net)}`;
+      cashLabel.title = `Income $${cashFlow.income}/tick, upkeep $${cashFlow.expense}/tick`;
+      cashLabel.classList.add(cashFlow.net > 0 ? 'good' : cashFlow.net < 0 ? 'bad' : 'ok');
+    } else {
+      cashLabel.textContent = '-';
+      cashLabel.classList.add('ok');
+    }
+    row.appendChild(cashLabel);
 
     const reasonLabel = document.createElement('span');
     reasonLabel.className = 'statistics-panel-building-reason';

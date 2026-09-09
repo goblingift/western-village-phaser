@@ -2144,7 +2144,12 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.House) {
     parts.push(
-      `Grows Tier 1->3 as needs are met (pop ${HOUSE_TIER_CONFIG[1].population}/${HOUSE_TIER_CONFIG[2].population}/${HOUSE_TIER_CONFIG[3].population}, tax $0/$${HOUSE_TIER_CONFIG[2].taxPerTick}/$${HOUSE_TIER_CONFIG[3].taxPerTick} per tick)`,
+      // Phase 97 bug fix: Tier 1's tax was hardcoded as "$0" here and stayed
+      // that way when Phase 92 raised it to $1 - the one surface meant to make
+      // the town's first income lever legible was advertising it as worthless.
+      // Every figure is now read from HOUSE_TIER_CONFIG so it cannot go stale
+      // again, exactly as the population figures beside it already were.
+      `Grows Tier 1->3 as needs are met (pop ${HOUSE_TIER_CONFIG[1].population}/${HOUSE_TIER_CONFIG[2].population}/${HOUSE_TIER_CONFIG[3].population}, tax $${HOUSE_TIER_CONFIG[1].taxPerTick}/$${HOUSE_TIER_CONFIG[2].taxPerTick}/$${HOUSE_TIER_CONFIG[3].taxPerTick} per tick)`,
     );
     parts.push('Tier 2/3 also require being served by a nearby staffed Church');
   }

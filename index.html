@@ -383,6 +383,13 @@
         color: #ff5252;
         font-weight: bold;
       }
+      /* Phase 97: per-building net cash flow line. */
+      #building-info-panel .cash-positive {
+        color: #8bc34a;
+      }
+      #building-info-panel .cash-negative {
+        color: #ff8a65;
+      }
       #building-info-panel button.danger {
         background: #7f3b2f;
       }
@@ -730,6 +737,21 @@
       #statistics-panel .statistics-panel-building-percent.bad {
         color: #ef5350;
       }
+      /* Phase 97: per-building net cash flow, between the activity % and the block reason. */
+      #statistics-panel .statistics-panel-building-cash {
+        flex: 0 0 52px;
+        text-align: right;
+        font-weight: bold;
+      }
+      #statistics-panel .statistics-panel-building-cash.good {
+        color: #8bc34a;
+      }
+      #statistics-panel .statistics-panel-building-cash.ok {
+        color: #8d7f6e;
+      }
+      #statistics-panel .statistics-panel-building-cash.bad {
+        color: #ef5350;
+      }
       #statistics-panel .statistics-panel-building-reason {
         flex: 0 0 110px;
         text-align: right;
@@ -1018,6 +1040,16 @@
         color: #ffd54f;
         white-space: nowrap;
         font-weight: bold;
+      }
+      /* Phase 97: water-ledger verdict colouring (also used on the dry-house count cell). */
+      #economy-panel .economy-good {
+        color: #8bc34a;
+      }
+      #economy-panel .economy-warn {
+        color: #ffb74d;
+      }
+      #economy-panel .economy-bad {
+        color: #ef5350;
       }
       #economy-panel .economy-actions {
         margin-top: 12px;
