@@ -451,6 +451,14 @@ export interface PlacedBuilding {
    * doesn't carry), so sharing lastSale would not even type-check.
    */
   marketStallSale?: AutoSale<MarketStallSellableKey>;
+  /**
+   * Phase 95: only meaningful for House; last tick's collected tax before and
+   * after the heavy-industry nuisance penalty, plus how many industry
+   * buildings caused it. Undefined until the first tick where this House
+   * actually paid tax, matching lastSale/lastHarvest's "absent means not yet
+   * meaningful" convention.
+   */
+  lastHouseTax?: { gross: number; net: number; nuisanceSources: number };
   /** Only meaningful for Barracks; trained cowboy count, starts at 0, mirrors animalCount. */
   cowboyCount: number;
   /**
@@ -1528,6 +1536,48 @@ export const MARKET_STALL_SELL_RATES: Record<MarketStallSellableKey, { amount: n
  * MarketableResourceKey, it's what lets either caller pass a plain ResourceKey
  * to state/market's price lookups without a cast.
  */
+/**
+ * Phase 95: every resource a building type can PRODUCE, by any of the three
+ * routes (a plain production block, an AnimalConfig, a HarvestConfig). A
+ * livestock farm declares an empty `production` block and makes everything
+ * through its animals, so an outputs-only check would report a Pig Farm as
+ * producing nothing - the exact bug that would have made adjacency silently
+ * never fire for the game's most obvious chain (Pig Farm -> Butcher).
+ */
+export function getBuildingOutputKeys(type: BuildingType): ResourceKey[] {
+  const definition = BUILDING_DEFINITIONS[type];
+  return Array.from(
+    new Set<ResourceKey>([
+      ...(Object.keys(definition.production?.outputs ?? {}) as ResourceKey[]),
+      ...(Object.keys(definition.animal?.outputPerAnimal ?? {}) as ResourceKey[]),
+      ...(Object.keys(definition.harvest?.outputs ?? {}) as ResourceKey[]),
+    ]),
+  );
+}
+
+/**
+ * Phase 95: the building types a House does not want as a neighbour (see
+ * INDUSTRY_NUISANCE_RADIUS_TILES). Deliberately the noisy/dirty PROCESSORS
+ * and extraction sites, not farms or Forestry - a frontier town grew up
+ * around its fields, and penalising them would make the earliest, most
+ * necessary layout the wrong one.
+ */
+export const HEAVY_INDUSTRY_TYPES: readonly BuildingType[] = [
+  BuildingType.Butcher,
+  BuildingType.Sewery,
+  BuildingType.WoodCutter,
+  BuildingType.Liquor,
+  BuildingType.Blacksmith,
+  BuildingType.Gunsmith,
+  BuildingType.Quarry,
+  BuildingType.IronMine,
+  BuildingType.CoalMine,
+];
+
+export function isHeavyIndustry(type: BuildingType): boolean {
+  return HEAVY_INDUSTRY_TYPES.includes(type);
+}
+
 export function isMarketableResource(key: ResourceKey): key is MarketableResourceKey {
   return (MARKETABLE_RESOURCE_KEYS as ResourceKey[]).includes(key);
 }

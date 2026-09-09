@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { CHURCH_BASE_RADIUS_TILES, TILE_SIZE } from '../../config/constants';
+import { ADJACENCY_RADIUS_TILES, CHURCH_BASE_RADIUS_TILES, TILE_SIZE } from '../../config/constants';
 import { getResourceChainBuildingTypes } from '../../config/resourceGraph';
 import {
   VEGETATION_ATLAS_KEY,
@@ -31,6 +31,7 @@ import {
 import { gameEvents } from '../../state/gameEvents';
 import {
   DayPhase,
+  getAdjacencyStatus,
   getBuildingById,
   getChurchRadius,
   getDayPhase,
@@ -936,6 +937,19 @@ export class WorldVisualsSystem {
         const center = getHarvestCenterTile(previewTileX, previewTileY, selectedType);
         this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
       } else if (
+        // Phase 95: a consumer being placed shows its supply-chain radius,
+        // green once at least one of its inputs has a producer inside it -
+        // reusing the same square (Chebyshev) ring the harvest radius and
+        // Church service radius already draw through, because that is exactly
+        // the shape getAdjacencyStatus measures.
+        BUILDING_DEFINITIONS[selectedType].production?.inputs !== undefined &&
+        previewTileX !== undefined &&
+        previewTileY !== undefined
+      ) {
+        const center = getHarvestCenterTile(previewTileX, previewTileY, selectedType);
+        const status = getAdjacencyStatus(previewTileX, previewTileY, selectedType);
+        this.drawServiceRing(center.tileX, center.tileY, ADJACENCY_RADIUS_TILES, status.suppliedInputs.length > 0);
+      } else if (
         selectedType === BuildingType.Church &&
         previewTileX !== undefined &&
         previewTileY !== undefined
@@ -958,6 +972,14 @@ export class WorldVisualsSystem {
     if (harvest) {
       const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
       this.drawHarvestRing(center.tileX, center.tileY, harvest.radiusTiles, harvest.kind);
+      return;
+    }
+    // Phase 95: same ring for an already-placed consumer, so a player can see
+    // why its Supply chain line reads the way it does.
+    if (BUILDING_DEFINITIONS[selected.type].production?.inputs !== undefined) {
+      const center = getHarvestCenterTile(selected.tileX, selected.tileY, selected.type);
+      const status = getAdjacencyStatus(selected.tileX, selected.tileY, selected.type, selected.id);
+      this.drawServiceRing(center.tileX, center.tileY, ADJACENCY_RADIUS_TILES, status.suppliedInputs.length > 0);
       return;
     }
     if (selected.type === BuildingType.Church) {

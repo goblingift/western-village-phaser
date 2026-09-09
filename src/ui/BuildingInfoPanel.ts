@@ -44,6 +44,8 @@ import {
   MOUNTED_COWBOY_TRAIN_COST,
   TRADING_POST_DEFAULT_AMOUNT,
   TRADING_POST_DEFAULT_THRESHOLD,
+  ADJACENCY_RADIUS_TILES,
+  INDUSTRY_NUISANCE_RADIUS_TILES,
   RIFLE_DAMAGE_MULTIPLIER,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
@@ -68,6 +70,8 @@ import {
   getNearestChurchDistance,
   getNearestStaffedWaterTowerDistance,
   getRepairCost,
+  getAdjacencyStatus,
+  getIndustryNuisance,
   getResources,
   getRockDistance,
   getWellWaterDistance,
@@ -157,6 +161,10 @@ export class BuildingInfoPanel {
     // Phase 93: "Produces: 1.2 Logs" never said what to DO with the logs. This
     // answers it at the exact moment the player is looking at the producer.
     const sellHintText = this.formatSellHint(this.selected.type);
+    // Phase 95: district synergy - whether this consumer is standing near
+    // producers of its own inputs, and what that's worth.
+    const adjacencyText = this.formatAdjacencyText(this.selected);
+    const nuisanceText = this.formatNuisanceText(this.selected);
     const outputText = production?.outputs ? this.formatResourceMap(production.outputs) : null;
     const workersRequired = getWorkersRequired(this.selected.type);
     const workersText =
@@ -416,6 +424,8 @@ export class BuildingInfoPanel {
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
       ${sellHintText ? `<div class="sell-hint">${sellHintText}</div>` : ''}
+      ${adjacencyText ? `<div>${adjacencyText}</div>` : ''}
+      ${nuisanceText ? `<div>${nuisanceText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${understaffedText ? `<div class="hp-disabled">${understaffedText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
@@ -1319,6 +1329,46 @@ export class BuildingInfoPanel {
    * Chicken Farm declares an empty `production` block and makes everything
    * through its animals.
    */
+  /**
+   * Phase 95: the live district-synergy readout for a consumer building -
+   * which of its inputs have a producer within ADJACENCY_RADIUS_TILES, what
+   * the resulting output bonus is, and (when something is missing) exactly
+   * which input to build nearer. Returns null for a building with no
+   * production inputs, where the whole mechanic doesn't apply.
+   */
+  private formatAdjacencyText(building: PlacedBuilding): string | null {
+    const status = getAdjacencyStatus(building.tileX, building.tileY, building.type, building.id);
+    if (status.suppliedInputs.length === 0 && status.missingInputs.length === 0) {
+      return null;
+    }
+    const percent = Math.round((status.multiplier - 1) * 100);
+    if (status.suppliedInputs.length === 0) {
+      return `Supply chain: no bonus - no producer of ${status.missingInputs
+        .map((key) => RESOURCE_LABELS[key])
+        .join(' or ')} within ${ADJACENCY_RADIUS_TILES} tiles`;
+    }
+    const supplied = status.suppliedInputs.map((key) => RESOURCE_LABELS[key]).join(', ');
+    const missing =
+      status.missingInputs.length > 0
+        ? ` (still far from ${status.missingInputs.map((key) => RESOURCE_LABELS[key]).join(', ')})`
+        : '';
+    return `Supply chain: +${percent}% output - ${supplied} produced nearby${missing}`;
+  }
+
+  /** Phase 95: the House side of the same trade-off - heavy industry next door cuts the tax it pays. */
+  private formatNuisanceText(building: PlacedBuilding): string | null {
+    if (building.type !== BuildingType.House) {
+      return null;
+    }
+    const nuisance = getIndustryNuisance(building.tileX, building.tileY, building.type, building.id);
+    if (nuisance.sources === 0) {
+      return null;
+    }
+    const percent = Math.round(nuisance.taxPenaltyFraction * 100);
+    const net = building.lastHouseTax ? ` (now $${building.lastHouseTax.net}/tick)` : '';
+    return `Industry nearby: ${nuisance.sources} within ${INDUSTRY_NUISANCE_RADIUS_TILES} tiles - tax -${percent}%${net}`;
+  }
+
   private formatSellHint(type: BuildingType): string | null {
     const definition = BUILDING_DEFINITIONS[type];
     const outputKeys = new Set<ResourceKey>([

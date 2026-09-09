@@ -47,6 +47,11 @@ import {
   MOUNTED_COWBOY_TRAIN_COST,
   MOUNTED_COWBOY_TRAIN_TICKS,
   PRODUCTION_STALL_NOTIFY_TICKS,
+  ADJACENCY_BONUS_PER_INPUT,
+  ADJACENCY_RADIUS_TILES,
+  HOUSE_INDUSTRY_TAX_PENALTY_MAX,
+  HOUSE_INDUSTRY_TAX_PENALTY_PER_SOURCE,
+  INDUSTRY_NUISANCE_RADIUS_TILES,
   REPAIR_COST_FRACTION,
   RIFLE_AMMO_PER_SHOT,
   RunMode,
@@ -104,7 +109,9 @@ import {
   getConstructionTicks,
   getUnitCount,
   getUnitHpArray,
+  getBuildingOutputKeys,
   getWorkersRequired,
+  isHeavyIndustry,
   setUnitCount,
 } from '../config/buildingConfig';
 import {
@@ -3068,7 +3075,15 @@ function runHouseNeeds(): void {
         // applies once the House itself already owes tax (Tier 1 never does).
         const servingPriestCount = tierConfig.requiresChurch ? countServingPriests(building) : 0;
         const churchTaxBonus = servingPriestCount * CHURCH_PRIEST_TAX_BONUS;
-        money = Math.round((money + tierConfig.taxPerTick + churchTaxBonus) * 100) / 100;
+        // Phase 95: heavy industry next door drives the rateable value down.
+        // Applied to the tier tax AND the Priest bonus together (both are
+        // "what this household pays"), and stored on the building so the info
+        // panel can show the live figure rather than re-deriving it.
+        const nuisance = getIndustryNuisance(building.tileX, building.tileY, building.type, building.id);
+        const grossTax = tierConfig.taxPerTick + churchTaxBonus;
+        const netTax = Math.round(grossTax * (1 - nuisance.taxPenaltyFraction) * 100) / 100;
+        building.lastHouseTax = { gross: grossTax, net: netTax, nuisanceSources: nuisance.sources };
+        money = Math.round((money + netTax) * 100) / 100;
       }
       building.houseNeedsUnmetStreak = 0;
 
@@ -3487,6 +3502,12 @@ export function runProductionTick(): void {
     if (animalConfig) {
       bonus *= getCattleDiseaseMultiplier();
     }
+    // Phase 95: district synergy - a consumer standing near producers of its
+    // own inputs runs better. Folded into the same multiplier chain as the
+    // road bonus/weather/terrain factors above rather than added as a second
+    // pass, so there is exactly one place output is scaled. A building with no
+    // production inputs (every farm, Well, Forestry) gets a flat 1 back.
+    bonus *= getAdjacencyStatus(building.tileX, building.tileY, building.type, building.id).multiplier;
     // Animal buildings scale their per-animal rate by how many animals are owned instead of using a flat production.outputs amount.
     const outputs = harvestOutputs
       ? harvestOutputs
@@ -3621,6 +3642,103 @@ export function consumeRifleAmmo(amount: number = RIFLE_AMMO_PER_SHOT): boolean 
   resources.rifles = Math.round((resources.rifles - amount) * 1000) / 1000;
   addConsumedThisTick('rifles', amount);
   return true;
+}
+
+/**
+ * Phase 95: which of `type`'s production inputs have a producer standing
+ * within ADJACENCY_RADIUS_TILES of where its footprint would sit, and the
+ * resulting output multiplier.
+ *
+ * Takes a tile position rather than a PlacedBuilding so the placement preview
+ * can ask about a building that doesn't exist yet, and the info panel can ask
+ * about one that does - one implementation, so what the preview promises and
+ * what the tick actually pays can't diverge (the same reason
+ * getHarvestCenterTile is shared).
+ *
+ * A supplier counts if it is standing and finished; it does NOT have to be
+ * staffed or actively producing this tick. Adjacency is a property of where
+ * you built, and flapping the bonus every time a supplier briefly lost a
+ * worker would make it unreadable - and would make the placement preview a
+ * lie, since it can only ever show the standing-buildings answer.
+ */
+export function getAdjacencyStatus(
+  tileX: number,
+  tileY: number,
+  type: BuildingType,
+  ignoreBuildingId?: string,
+): { suppliedInputs: ResourceKey[]; missingInputs: ResourceKey[]; multiplier: number } {
+  const inputs = Object.keys(BUILDING_DEFINITIONS[type].production?.inputs ?? {}) as ResourceKey[];
+  if (inputs.length === 0) {
+    return { suppliedInputs: [], missingInputs: [], multiplier: 1 };
+  }
+
+  const center = getHarvestCenterTile(tileX, tileY, type);
+  const suppliedInputs: ResourceKey[] = [];
+  const missingInputs: ResourceKey[] = [];
+
+  for (const input of inputs) {
+    const supplied = placedBuildings.some((candidate) => {
+      if (candidate.id === ignoreBuildingId || candidate.hp <= 0) {
+        return false;
+      }
+      if (candidate.constructionTicksRemaining && candidate.constructionTicksRemaining > 0) {
+        return false;
+      }
+      if (!getBuildingOutputKeys(candidate.type).includes(input)) {
+        return false;
+      }
+      const candidateCenter = getHarvestCenterTile(candidate.tileX, candidate.tileY, candidate.type);
+      const distance = Math.max(
+        Math.abs(center.tileX - candidateCenter.tileX),
+        Math.abs(center.tileY - candidateCenter.tileY),
+      );
+      return distance <= ADJACENCY_RADIUS_TILES;
+    });
+    (supplied ? suppliedInputs : missingInputs).push(input);
+  }
+
+  return {
+    suppliedInputs,
+    missingInputs,
+    multiplier: 1 + suppliedInputs.length * ADJACENCY_BONUS_PER_INPUT,
+  };
+}
+
+/**
+ * Phase 95: how many heavy-industry buildings sit within
+ * INDUSTRY_NUISANCE_RADIUS_TILES of a House, and the resulting tax penalty
+ * fraction (0 = unaffected, 0.75 = the cap). Same standing-and-finished rule
+ * as getAdjacencyStatus, and likewise position-based so the placement preview
+ * can ask about a House that isn't built yet.
+ */
+export function getIndustryNuisance(
+  tileX: number,
+  tileY: number,
+  type: BuildingType,
+  ignoreBuildingId?: string,
+): { sources: number; taxPenaltyFraction: number } {
+  const center = getHarvestCenterTile(tileX, tileY, type);
+  let sources = 0;
+  for (const candidate of placedBuildings) {
+    if (candidate.id === ignoreBuildingId || candidate.hp <= 0 || !isHeavyIndustry(candidate.type)) {
+      continue;
+    }
+    if (candidate.constructionTicksRemaining && candidate.constructionTicksRemaining > 0) {
+      continue;
+    }
+    const candidateCenter = getHarvestCenterTile(candidate.tileX, candidate.tileY, candidate.type);
+    const distance = Math.max(
+      Math.abs(center.tileX - candidateCenter.tileX),
+      Math.abs(center.tileY - candidateCenter.tileY),
+    );
+    if (distance <= INDUSTRY_NUISANCE_RADIUS_TILES) {
+      sources += 1;
+    }
+  }
+  return {
+    sources,
+    taxPenaltyFraction: Math.min(sources * HOUSE_INDUSTRY_TAX_PENALTY_PER_SOURCE, HOUSE_INDUSTRY_TAX_PENALTY_MAX),
+  };
 }
 
 export function computeNetWorth(): NetWorthBreakdown {

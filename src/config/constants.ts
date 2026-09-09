@@ -267,6 +267,44 @@ export const WATCHTOWER_DAMAGE = 6;
  * interesting decision is Rifles-as-ammo versus Rifles-as-$35-each at the
  * Supermarket rather than micro-managing a scarce magazine.
  */
+/**
+ * Phase 95: Adjacency & district synergy. Building placement used to be a
+ * solved non-problem - a Butcher next to its own Pig Farm performed exactly
+ * like one built across the map, since the only spatial modifiers were the
+ * flat road-connected 1.1x and a couple of binary terrain gates.
+ *
+ * A consumer now gets ADJACENCY_BONUS_PER_INPUT extra output for EACH DISTINCT
+ * input resource that has a producer within ADJACENCY_RADIUS_TILES (Chebyshev,
+ * footprint-centre to footprint-centre). Per distinct INPUT, not per nearby
+ * producer, so the reward is for clustering a real chain rather than for
+ * spamming five Pig Farms around one Butcher - which also caps the bonus
+ * naturally at the building's own input count (a Butcher: 2 inputs, so at most
+ * +16%; a Blacksmith: 3, at most +24%).
+ *
+ * 8% is deliberately modest: it multiplies onto a chain that already carries
+ * the road bonus, dust-storm/drought/disease events, well-distance falloff and
+ * crop irrigation, so a large value here would compound into something wild.
+ * Retune here, in one place - runProductionTick reads nothing else.
+ */
+export const ADJACENCY_RADIUS_TILES = 4;
+export const ADJACENCY_BONUS_PER_INPUT = 0.08;
+
+/**
+ * The other half of the trade-off: a House within
+ * INDUSTRY_NUISANCE_RADIUS_TILES of heavy industry (see
+ * HEAVY_INDUSTRY_TYPES) collects less tax - nobody wants to live next to the
+ * tannery. Expressed as a FRACTION of that House's tier tax rather than a flat
+ * amount, so it stays meaningful at Tier 3's $5/tick as well as Tier 1's $1,
+ * and capped so a house in a dense industrial district still earns something.
+ *
+ * Numerically identical to raising the House's upkeep, but applied to the tax
+ * side so it can't push a household into the upkeep-unpaid/disabled branch,
+ * and so it shows up right next to the tax figure in the info panel.
+ */
+export const INDUSTRY_NUISANCE_RADIUS_TILES = 3;
+export const HOUSE_INDUSTRY_TAX_PENALTY_PER_SOURCE = 0.25;
+export const HOUSE_INDUSTRY_TAX_PENALTY_MAX = 0.75;
+
 export const RIFLE_DAMAGE_MULTIPLIER = 1.5;
 export const RIFLE_AMMO_PER_SHOT = 0.05;
 
