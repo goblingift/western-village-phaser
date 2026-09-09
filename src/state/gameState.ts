@@ -733,6 +733,10 @@ function checkBuildingUnlocks(): void {
     if (isBuildingUnlocked(type)) {
       unlockNotified.add(type);
       addNotification(`New building unlocked: ${BUILDING_DEFINITIONS[type].label}`, 'info', elapsedSeconds);
+      // Phase 96: a real event alongside the notification, so a listener
+      // (the tutorial's contextual tips) can react to an unlock without
+      // string-matching the notification text.
+      gameEvents.emit('building-unlocked', type);
     }
   }
 }

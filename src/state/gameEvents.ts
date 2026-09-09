@@ -104,6 +104,13 @@ export interface GameEventMap {
    */
   'toggle-economy-panel': () => void;
   /**
+   * Phase 96: fired by gameState.checkBuildingUnlocks the first time a
+   * building's unlock requirement is met, alongside the existing notification.
+   * Exists so a listener can react to an unlock structurally rather than by
+   * string-matching notification text.
+   */
+  'building-unlocked': (type: BuildingType) => void;
+  /**
    * Phase 64: (re)starts the first-run tutorial from step 1, regardless of
    * the "tutorial seen" flag. Emitted by the Help panel's Replay button, so a
    * player who skipped it can always get it back.
