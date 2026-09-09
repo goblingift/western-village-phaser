@@ -8,11 +8,13 @@ import {
   MAP_HEIGHT_TILES,
   MAP_WIDTH_TILES,
   RAIDER_CAMP_ATTACK_HIT_RADIUS_PX,
+  RAIDER_CAMP_LOOT_ESCALATION_PER_TIER,
   RAIDER_CAMP_LOOT_MONEY,
   RAIDER_CAMP_LOOT_TOOLS,
   RAIDER_CAMP_MAX_COUNT,
   RAIDER_CAMP_MAX_HP,
   RAIDER_CAMP_MIN_COUNT,
+  RAIDER_CAMP_RESPAWN_INTERVAL_DAYS,
   RAIDER_CAMP_SPAWN_DAY,
   RAID_ABSOLUTE_MAX_UNITS,
   RAID_HP_PER_ESCALATION_TIER,
@@ -167,6 +169,15 @@ export class RaidSystem {
   private campVisuals = new Map<string, Phaser.GameObjects.Image>();
   /** Phase 57: true once this run has rolled its initial 1-3 Raider Camps (on the first dawn at/after RAIDER_CAMP_SPAWN_DAY, or restored from a loaded save) - guards spawnInitialRaiderCamps against firing more than once per run. */
   private initialCampsSpawned = false;
+  /**
+   * Phase 101: the day number the camp population was last at full strength
+   * (or last had a camp founded), against which
+   * RAIDER_CAMP_RESPAWN_INTERVAL_DAYS is measured. Scene-local and NOT
+   * persisted, like every other piece of raid scheduling state - a load simply
+   * restarts the interval from the loaded day (see notifyLoadedDayNumber),
+   * which errs toward the player rather than instantly founding a camp.
+   */
+  private lastCampSpawnDay = 0;
 
   raidActive = false;
   raidNoticeText!: Phaser.GameObjects.Text;
@@ -1025,23 +1036,66 @@ export class RaidSystem {
    */
   setupRaiderCamps(): void {
     gameEvents.on('day-phase-changed', ({ dayNumber, phase }: DayPhaseChange) => {
-      if (this.initialCampsSpawned || phase !== 'day' || dayNumber < RAIDER_CAMP_SPAWN_DAY) {
+      if (phase !== 'day' || dayNumber < RAIDER_CAMP_SPAWN_DAY) {
         return;
       }
-      this.initialCampsSpawned = true;
-      this.spawnInitialRaiderCamps();
+      if (!this.initialCampsSpawned) {
+        this.initialCampsSpawned = true;
+        this.lastCampSpawnDay = dayNumber;
+        this.spawnInitialRaiderCamps();
+        return;
+      }
+      // Phase 101: camps re-establish, so clearing them is a repeatable reason
+      // to keep an army rather than a one-shot that ends the offense phase for
+      // the rest of the run. Checked on the same dawn event the initial spawn
+      // already rides - no second timer.
+      this.maybeRespawnRaiderCamp(dayNumber);
     });
   }
 
   private spawnInitialRaiderCamps(): void {
     const count = Phaser.Math.Between(RAIDER_CAMP_MIN_COUNT, RAIDER_CAMP_MAX_COUNT);
     for (let i = 0; i < count; i++) {
-      const spawn = this.pickRaidSpawnPoint();
-      const faction = this.pickRaidFaction();
-      const camp = spawnRaiderCamp(spawn.x, spawn.y, faction, RAIDER_CAMP_MAX_HP);
-      this.createCampVisual(camp);
+      this.foundRaiderCamp();
     }
     this.scene.minimapSystem.redrawMinimap();
+  }
+
+  /**
+   * Founds one replacement camp if the map is below its camp ceiling and
+   * enough days have passed since the last one appeared. Announced through the
+   * notification log (warning kind - a new camp means new raids come from it),
+   * since a camp founded at a random map edge is easy to miss on the minimap.
+   */
+  private maybeRespawnRaiderCamp(dayNumber: number): void {
+    if (getRaiderCamps().length >= RAIDER_CAMP_MAX_COUNT) {
+      // Still refresh the clock: the interval measures time since the camp
+      // population was last full, so a player who never clears anything
+      // doesn't bank up instant respawns for the moment they finally do.
+      this.lastCampSpawnDay = dayNumber;
+      return;
+    }
+    if (dayNumber - this.lastCampSpawnDay < RAIDER_CAMP_RESPAWN_INTERVAL_DAYS) {
+      return;
+    }
+
+    this.lastCampSpawnDay = dayNumber;
+    const camp = this.foundRaiderCamp();
+    this.scene.minimapSystem.redrawMinimap();
+    addNotification(
+      `A new ${RAIDER_DEFINITIONS[camp.faction].label} camp has been founded nearby.`,
+      'warning',
+      getElapsedSeconds(),
+    );
+  }
+
+  /** The shared "one camp appears at a random edge with a random faction" primitive both the initial spawn and the respawn use. */
+  private foundRaiderCamp(): RaiderCamp {
+    const spawn = this.pickRaidSpawnPoint();
+    const faction = this.pickRaidFaction();
+    const camp = spawnRaiderCamp(spawn.x, spawn.y, faction, RAIDER_CAMP_MAX_HP);
+    this.createCampVisual(camp);
+    return camp;
   }
 
   private createCampVisual(camp: RaiderCamp): void {
@@ -1062,6 +1116,10 @@ export class RaidSystem {
   /** Called from setupSaveLoad's 'game-loaded' handler: sets whether the once-per-run initial camp spawn should still be considered pending, based on the loaded day number rather than merely on whether any camp currently exists. */
   notifyLoadedDayNumber(dayNumber: number): void {
     this.initialCampsSpawned = dayNumber >= RAIDER_CAMP_SPAWN_DAY;
+    // Phase 101: restart the respawn interval from the loaded day rather than
+    // from 0, so loading a late-game save doesn't found a camp on the very
+    // next dawn purely because the counter was never initialised.
+    this.lastCampSpawnDay = dayNumber;
   }
 
   /**
@@ -1107,8 +1165,16 @@ export class RaidSystem {
     this.scene.spawnDustBurstAt(camp.x, camp.y);
     playWorldSound('buildingCollapse', camp.x, camp.y);
 
-    grantRaiderCampLoot(RAIDER_CAMP_LOOT_MONEY, { tools: RAIDER_CAMP_LOOT_TOOLS });
-    const message = `${RAIDER_DEFINITIONS[camp.faction].label} camp destroyed! +$${RAIDER_CAMP_LOOT_MONEY}, +${RAIDER_CAMP_LOOT_TOOLS} Tools`;
+    // Phase 101: the payout tracks Phase 80's uncapped escalation tier, so a
+    // camp cleared late in a long Endless run - behind waves carrying +35% HP
+    // per tier and elite raiders - is worth proportionally more than the same
+    // camp on day 2. Tier 0 pays exactly the pre-Phase-101 amounts.
+    const lootMultiplier = 1 + getEscalationTier() * RAIDER_CAMP_LOOT_ESCALATION_PER_TIER;
+    const lootMoney = Math.round(RAIDER_CAMP_LOOT_MONEY * lootMultiplier);
+    const lootTools = Math.round(RAIDER_CAMP_LOOT_TOOLS * lootMultiplier);
+
+    grantRaiderCampLoot(lootMoney, { tools: lootTools });
+    const message = `${RAIDER_DEFINITIONS[camp.faction].label} camp destroyed! +$${lootMoney}, +${lootTools} Tools`;
     addNotification(message, 'info', getElapsedSeconds());
 
     this.scene.minimapSystem.redrawMinimap();
@@ -1127,5 +1193,6 @@ export class RaidSystem {
     }
     this.campVisuals.clear();
     this.initialCampsSpawned = false;
+    this.lastCampSpawnDay = 0;
   }
 }

@@ -552,9 +552,41 @@ export const RAIDER_CAMP_MIN_COUNT = 1;
 export const RAIDER_CAMP_MAX_COUNT = 3;
 export const RAIDER_CAMP_SPAWN_DAY = 2;
 export const RAIDER_CAMP_MAX_HP = 140;
-/** Loot dropped once a camp's hp reaches 0 - a flat reward, not scaled by threat, so raiding a camp is reliably worth it even early in a run. */
+/**
+ * Base loot dropped once a camp's hp reaches 0 - the floor, paid in full at
+ * escalation tier 0 so raiding a camp is reliably worth it even early.
+ *
+ * Phase 101: no longer flat forever. Every extra escalation tier
+ * (gameState.getEscalationTier, Phase 80's uncapped ramp) adds
+ * RAIDER_CAMP_LOOT_ESCALATION_PER_TIER of the base to the payout, so clearing
+ * a camp deep into a long Endless run - where camps sit behind waves carrying
+ * +35% HP per tier and elite raiders - is worth meaningfully more than the same
+ * act on day 2. Without this, the only offense the game has paid a fixed 150
+ * while the cost of mounting it climbed without limit.
+ *
+ * Camp HP is deliberately NOT scaled alongside it: camps are a small, bounded
+ * population (RAIDER_CAMP_MIN/MAX_COUNT at a time), so a growing payout cannot
+ * be farmed, and the real cost of an assault is the army you had to keep alive
+ * and the town you left undefended while it marched.
+ */
 export const RAIDER_CAMP_LOOT_MONEY = 150;
 export const RAIDER_CAMP_LOOT_TOOLS = 10;
+export const RAIDER_CAMP_LOOT_ESCALATION_PER_TIER = 0.5;
+
+/**
+ * Phase 101: camps re-establish. Previously all camps spawned exactly once per
+ * run (spawnInitialRaiderCamps) and clearing them ended the offense phase
+ * permanently - a standing army had nothing to do between raids, and the loot
+ * was a one-shot with no repeatable structure.
+ *
+ * From the first dawn RAIDER_CAMP_RESPAWN_INTERVAL_DAYS after the last camp
+ * appeared, one new camp is founded whenever fewer than RAIDER_CAMP_MAX_COUNT
+ * stand. This is not free money: a standing camp is where raid waves come from
+ * (RaidSystem.startRaid sources faction and origin from a live camp), so
+ * ignoring one costs the player raids, and clearing one costs them the risk of
+ * marching their defenders away from the town.
+ */
+export const RAIDER_CAMP_RESPAWN_INTERVAL_DAYS = 2;
 /** Slightly larger than MainScene's RAIDER_ATTACK_HIT_RADIUS_PX, matching the camp's bigger sprite footprint. */
 export const RAIDER_CAMP_ATTACK_HIT_RADIUS_PX = 14;
 
