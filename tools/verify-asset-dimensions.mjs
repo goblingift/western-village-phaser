@@ -29,6 +29,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readPngDimensions } from './png-writer.mjs';
+import { readWebpDimensions } from './webp-reader.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
@@ -40,7 +41,7 @@ const repoRoot = join(__dirname, '..');
 /** @type {AssetCheck[]} */
 const ASSET_CHECKS = [
   {
-    file: 'public/art/tiles-atlas.png',
+    file: 'public/art/tiles-atlas.webp',
     expectedWidth: 640,
     expectedHeight: 128,
     note:
@@ -73,37 +74,37 @@ const ASSET_CHECKS = [
   // source resolution (72/96), matching verify-unit-frames.mjs's own
   // ART_SCALE constant.
   {
-    file: 'public/art/animals-atlas.png',
+    file: 'public/art/animals-atlas.webp',
     expectedWidth: 288,
     expectedHeight: 72,
     note: '4 animal frames (Chicken, Pig, Cow, Ostrich) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/cowboys-atlas.png',
+    file: 'public/art/cowboys-atlas.webp',
     expectedWidth: 72,
     expectedHeight: 72,
     note: 'single "cowboy" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/mounted-cowboys-atlas.png',
+    file: 'public/art/mounted-cowboys-atlas.webp',
     expectedWidth: 96,
     expectedHeight: 72,
     note: 'single "cowboy-on-horse" frame, 96x72px (24x18 x 4x ART_SCALE, non-square 4:3 ratio)',
   },
   {
-    file: 'public/art/brawlers-atlas.png',
+    file: 'public/art/brawlers-atlas.webp',
     expectedWidth: 72,
     expectedHeight: 72,
     note: 'single "brawler" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/dynamiters-atlas.png',
+    file: 'public/art/dynamiters-atlas.webp',
     expectedWidth: 72,
     expectedHeight: 72,
     note: 'single "dynamiter" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/villagers-atlas.png',
+    file: 'public/art/villagers-atlas.webp',
     expectedWidth: 72,
     expectedHeight: 72,
     note: 'single "villager" frame, 72x72px (18x18 x 4x ART_SCALE)',
@@ -121,37 +122,37 @@ const ASSET_CHECKS = [
   // supersampled source resolution, matching each verify-*-frames.mjs
   // script's own ART_SCALE constant.
   {
-    file: 'public/art/raiders-atlas.png',
+    file: 'public/art/raiders-atlas.webp',
     expectedWidth: 216,
     expectedHeight: 72,
     note: '3 raider frames (Outlaws, Rustlers, Coyotes) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/raider-camps-atlas.png',
+    file: 'public/art/raider-camps-atlas.webp',
     expectedWidth: 288,
     expectedHeight: 96,
     note: '3 raider camp frames (Outlaws, Rustlers, Coyotes) x 96x96px each (24x24 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/wildlife-atlas.png',
+    file: 'public/art/wildlife-atlas.webp',
     expectedWidth: 216,
     expectedHeight: 72,
     note: '3 wildlife frames (Snake, Coyote, MountainLion) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/vegetation-atlas.png',
+    file: 'public/art/vegetation-atlas.webp',
     expectedWidth: 256,
     expectedHeight: 128,
     note: '2 vegetation frames (Tree, Cactus) x 128x128px each (TILE_SIZE 32x32 x 4x ART_SCALE)',
   },
   {
-    file: 'public/art/carts-atlas.png',
+    file: 'public/art/carts-atlas.webp',
     expectedWidth: 56,
     expectedHeight: 40,
     note: 'single "goods-cart" frame, 56x40px (14x10 x 4x ART_SCALE, non-square)',
   },
   {
-    file: 'public/art/accents-atlas.png',
+    file: 'public/art/accents-atlas.webp',
     expectedWidth: 576,
     expectedHeight: 96,
     note:
@@ -159,7 +160,7 @@ const ASSET_CHECKS = [
       'SupermarketAwning 256x32, ChickenDoor 64x48, HouseWindowLight 48x48, Campfire 48x48',
   },
   {
-    file: 'public/art/resource-icons-atlas.png',
+    file: 'public/art/resource-icons-atlas.webp',
     expectedWidth: 720,
     expectedHeight: 48,
     note: '15 resource icon frames x 48x48px each (12x12 x 4x ART_SCALE, one per ResourceKey)',
@@ -173,7 +174,15 @@ function main() {
     const absolutePath = join(repoRoot, check.file);
 
     if (!existsSync(absolutePath)) {
-      console.error(`[FAIL] ${check.file}: file does not exist.`);
+      const pngFallback = absolutePath.replace(/\.webp$/, '.png');
+      if (check.file.endsWith('.webp') && existsSync(pngFallback)) {
+        console.error(
+          `[FAIL] ${check.file}: missing, but the .png still exists - BootScene.preload() only ever ` +
+            'requests .webp. Run `python3 tools/asset_generation/convert_to_webp.py`.',
+        );
+      } else {
+        console.error(`[FAIL] ${check.file}: file does not exist.`);
+      }
       failed = true;
       continue;
     }
@@ -181,9 +190,12 @@ function main() {
     let dimensions;
     try {
       const buffer = readFileSync(absolutePath);
-      dimensions = readPngDimensions(buffer);
+      // Phase 90: shipped art is WebP; PNG is still readable here so a
+      // freshly-(re)generated, not-yet-converted file gives a dimension
+      // answer rather than a parse error.
+      dimensions = check.file.endsWith('.webp') ? readWebpDimensions(buffer) : readPngDimensions(buffer);
     } catch (error) {
-      console.error(`[FAIL] ${check.file}: could not read PNG dimensions (${error.message}).`);
+      console.error(`[FAIL] ${check.file}: could not read image dimensions (${error.message}).`);
       failed = true;
       continue;
     }

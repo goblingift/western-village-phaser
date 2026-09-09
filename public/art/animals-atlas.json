@@ -84,7 +84,7 @@
   "meta": {
     "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
-    "image": "animals-atlas.png",
+    "image": "animals-atlas.webp",
     "format": "RGBA8888",
     "size": {
       "w": 288,

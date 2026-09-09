@@ -225,11 +225,18 @@ function main() {
   let totalReachabilityChecked = 0;
 
   for (const [type, size] of Object.entries(BUILDING_SIZES)) {
-    const pngPath = join(repoRoot, 'public/art/buildings', `${type}.png`);
+    const imagePath = join(repoRoot, 'public/art/buildings', `${type}.webp`);
     const jsonPath = join(repoRoot, 'public/art/buildings', `${type}.json`);
 
-    if (!existsSync(pngPath)) {
-      console.error(`[FAIL] public/art/buildings/${type}.png does not exist.`);
+    if (!existsSync(imagePath)) {
+      const stalePng = existsSync(join(repoRoot, 'public/art/buildings', `${type}.png`));
+      console.error(
+        `[FAIL] public/art/buildings/${type}.webp does not exist.` +
+          (stalePng
+            ? ' The .png does - BootScene.preload() only requests .webp. Run ' +
+              '`python3 tools/asset_generation/convert_to_webp.py`.'
+            : ''),
+      );
       failed = true;
       continue;
     }

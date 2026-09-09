@@ -28,8 +28,13 @@ export const TILESET_KEY = 'tiles-atlas';
  * PixelPalette / the various *_SPRITE pattern tables and generate*Atlas
  * methods). Phase 78 deleted the last of those (generateResourceIconAtlas)
  * and its shared drawing primitives - every texture below is now a real
- * loaded PNG(+JSON atlas) file under public/art/, all still PLACEHOLDER art
+ * loaded image (+JSON atlas) file under public/art/
  * (see public/art/README.md and docs/phase_73_to_78_visual_overhaul_plan.md).
+ *
+ * Phase 90: those images are WebP, not PNG - 7.84 MB of eagerly-preloaded
+ * PNG became 2.34 MB (70% smaller) at quality 90 with a bit-exact alpha
+ * plane. Regenerate with tools/asset_generation/convert_to_webp.py after any
+ * asset pass; `npm run verify:art` fails if a category is still PNG-only.
  * Frame names are produced by pure functions in buildingConfig.ts /
  * vegetationConfig.ts / wildlifeConfig.ts (buildingTextureKey,
  * resourceIconTextureKey, etc.) - as long as each atlas JSON uses exactly
@@ -70,7 +75,7 @@ export class BootScene extends Phaser.Scene {
     // companion public/art/tiles-atlas.json exists for documentation/tooling
     // parity only (see tools/generate-placeholder-tiles.mjs's doc comment and
     // docs/ASSET_GENERATION_CHECKLIST.md §3) and is never passed to Phaser.
-    this.load.image(TILESET_KEY, 'art/tiles-atlas.png');
+    this.load.image(TILESET_KEY, 'art/tiles-atlas.webp');
 
     // Buildings: one atlas PER BUILDING TYPE (asset-pipeline rework,
     // 2026-09-09) instead of one shared buildings-atlas - each building's own
@@ -84,42 +89,42 @@ export class BootScene extends Phaser.Scene {
     for (const definition of Object.values(BUILDING_DEFINITIONS)) {
       this.load.atlas(
         buildingAtlasKey(definition.type),
-        `art/buildings/${definition.type}.png`,
+        `art/buildings/${definition.type}.webp`,
         `art/buildings/${definition.type}.json`,
       );
     }
 
     // Player units, villagers, animals - verified by `node tools/verify-unit-frames.mjs`.
-    this.load.atlas(ANIMALS_ATLAS_KEY, 'art/animals-atlas.png', 'art/animals-atlas.json');
-    this.load.atlas(COWBOYS_ATLAS_KEY, 'art/cowboys-atlas.png', 'art/cowboys-atlas.json');
+    this.load.atlas(ANIMALS_ATLAS_KEY, 'art/animals-atlas.webp', 'art/animals-atlas.json');
+    this.load.atlas(COWBOYS_ATLAS_KEY, 'art/cowboys-atlas.webp', 'art/cowboys-atlas.json');
     this.load.atlas(
       MOUNTED_COWBOYS_ATLAS_KEY,
-      'art/mounted-cowboys-atlas.png',
+      'art/mounted-cowboys-atlas.webp',
       'art/mounted-cowboys-atlas.json',
     );
-    this.load.atlas(BRAWLERS_ATLAS_KEY, 'art/brawlers-atlas.png', 'art/brawlers-atlas.json');
-    this.load.atlas(DYNAMITERS_ATLAS_KEY, 'art/dynamiters-atlas.png', 'art/dynamiters-atlas.json');
-    this.load.atlas(VILLAGERS_ATLAS_KEY, 'art/villagers-atlas.png', 'art/villagers-atlas.json');
+    this.load.atlas(BRAWLERS_ATLAS_KEY, 'art/brawlers-atlas.webp', 'art/brawlers-atlas.json');
+    this.load.atlas(DYNAMITERS_ATLAS_KEY, 'art/dynamiters-atlas.webp', 'art/dynamiters-atlas.json');
+    this.load.atlas(VILLAGERS_ATLAS_KEY, 'art/villagers-atlas.webp', 'art/villagers-atlas.json');
 
     // Raiders, raider camps, wildlife - verified by `node tools/verify-raider-frames.mjs`.
-    this.load.atlas(RAIDERS_ATLAS_KEY, 'art/raiders-atlas.png', 'art/raiders-atlas.json');
+    this.load.atlas(RAIDERS_ATLAS_KEY, 'art/raiders-atlas.webp', 'art/raiders-atlas.json');
     this.load.atlas(
       RAIDER_CAMPS_ATLAS_KEY,
-      'art/raider-camps-atlas.png',
+      'art/raider-camps-atlas.webp',
       'art/raider-camps-atlas.json',
     );
-    this.load.atlas(WILDLIFE_ATLAS_KEY, 'art/wildlife-atlas.png', 'art/wildlife-atlas.json');
+    this.load.atlas(WILDLIFE_ATLAS_KEY, 'art/wildlife-atlas.webp', 'art/wildlife-atlas.json');
 
     // Vegetation, carts, accents - verified by `node tools/verify-world-frames.mjs`.
-    this.load.atlas(VEGETATION_ATLAS_KEY, 'art/vegetation-atlas.png', 'art/vegetation-atlas.json');
-    this.load.atlas(CARTS_ATLAS_KEY, 'art/carts-atlas.png', 'art/carts-atlas.json');
-    this.load.atlas(ACCENTS_ATLAS_KEY, 'art/accents-atlas.png', 'art/accents-atlas.json');
+    this.load.atlas(VEGETATION_ATLAS_KEY, 'art/vegetation-atlas.webp', 'art/vegetation-atlas.json');
+    this.load.atlas(CARTS_ATLAS_KEY, 'art/carts-atlas.webp', 'art/carts-atlas.json');
+    this.load.atlas(ACCENTS_ATLAS_KEY, 'art/accents-atlas.webp', 'art/accents-atlas.json');
 
     // Resource icons (HUD chrome) - the last category migrated (Phase 78),
     // verified by `node tools/verify-resource-icon-frames.mjs`.
     this.load.atlas(
       RESOURCE_ICONS_ATLAS_KEY,
-      'art/resource-icons-atlas.png',
+      'art/resource-icons-atlas.webp',
       'art/resource-icons-atlas.json',
     );
   }

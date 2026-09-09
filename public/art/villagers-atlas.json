@@ -24,7 +24,7 @@
   "meta": {
     "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
-    "image": "villagers-atlas.png",
+    "image": "villagers-atlas.webp",
     "format": "RGBA8888",
     "size": {
       "w": 72,

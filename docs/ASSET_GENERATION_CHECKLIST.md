@@ -122,7 +122,16 @@ A thin (1px at final size) outline around each sprite's outer silhouette only, i
 Single subject, centered, filling most of the frame with a small margin. No text, no watermark, no UI chrome, no border, no background scenery beyond the subject's own contact shadow.
 
 ### 2.8 File format
-**PNG**, with an alpha channel (RGBA), for every asset except the terrain tileset (opaque RGB is fine there too, but RGBA is safe/preferred everywhere).
+**Author in PNG**, with an alpha channel (RGBA), for every asset except the terrain tileset (opaque RGB is fine there too, but RGBA is safe/preferred everywhere).
+
+**Then convert to WebP — this is a required final step (Phase 90).** The game only ever requests `.webp`; a PNG dropped into `public/art/` will simply 404 at load. Every filename written `*.png` throughout this document therefore means "author it as `.png`, ship it as `.webp`":
+
+```bash
+python3 tools/asset_generation/convert_to_webp.py   # converts every PNG under public/art/, deletes the PNGs
+npm run verify:art                                  # fails with a "run convert_to_webp.py" hint if any category is still PNG-only
+```
+
+Why: the whole art set is eagerly preloaded before the game starts, and 7.84 MB of PNG became 2.34 MB of WebP (70% smaller) at quality 90 with a **bit-exact alpha plane** — measured on the real assets, indistinguishable side-by-side at 3× magnification, and the game renders these downscaled anyway. Quality is one constant (`WEBP_QUALITY`) in that script if it ever needs retuning.
 
 ### 2.9 Generate large, downscale to exact size
 AI tools produce their best detail at large canvas sizes. Generate at a large size (roughly 16-64x the final target — see the per-category "generate at" hint in each table) then downscale to the **exact final pixel dimensions listed** using a sharp/pixel-preserving downscale (nearest-neighbor or a two-step bicubic-then-nearest — avoid a single soft blur-downscale, it will muddy fine pixel detail). **The final dimensions must match exactly** — even 1 pixel off will misalign a building on the game's tile grid.

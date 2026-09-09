@@ -124,7 +124,7 @@
   "meta": {
     "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
-    "image": "Butcher.png",
+    "image": "Butcher.webp",
     "format": "RGBA8888",
     "size": {
       "w": 1536,
