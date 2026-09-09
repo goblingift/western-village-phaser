@@ -559,11 +559,22 @@ export function getConstructionTicks(type: BuildingType): number {
  * so a building that's almost done shows Construction75, not Construction25.
  */
 export function constructionFrameNameForTicks(ticksRemaining: number, totalTicks: number): string {
-  const fractionBuilt = totalTicks > 0 ? 1 - ticksRemaining / totalTicks : 1;
-  if (fractionBuilt < 0.4) {
+  if (totalTicks <= 0) {
+    return 'Construction75';
+  }
+  // Phase 89: thirds instead of the old 0.4/0.7 cutoffs, and compared in INTEGER
+  // TICK SPACE rather than on a float fraction, so all three frames are actually
+  // reachable at both tick counts and the boundaries can't drift on float error.
+  // With CONSTRUCTION_TICKS_1X1 = 3 the only fractions that can ever occur are
+  // 0, 1/3 and 2/3 - under the old 0.7 cutoff, 2/3 resolved to Construction50, so
+  // Construction75 was dead art for every 1x1 building in the game.
+  // tools/verify-building-frames.mjs now fails the build on exactly this class of
+  // unreachable-frame bug.
+  const builtTicks = totalTicks - ticksRemaining;
+  if (builtTicks * 3 < totalTicks) {
     return 'Construction25';
   }
-  if (fractionBuilt < 0.7) {
+  if (builtTicks * 3 < totalTicks * 2) {
     return 'Construction50';
   }
   return 'Construction75';
@@ -1435,40 +1446,62 @@ export function buildingTextureKey(type: BuildingType, tier?: HouseTier, gateOpe
 }
 
 /**
- * Damage-state suffix derived from a building's live hp/maxHp ratio - the
- * same 3-band split ("Intact"/"Damaged"/"Ruined") the asset pipeline's
- * tools/asset_generation/lib/post_process.py generates locally (free, no
- * paid API call per state) for every building's spriteset. Not every
- * building's atlas necessarily HAS the damage frames yet (real generation is
- * incremental, one building at a time), so this is only ever a *candidate*
- * suffix - see resolveBuildingFrameName below for the existence-checked
- * fallback that actually decides what gets rendered.
+ * Damage-state FRAME NAME derived from a building's live hp/maxHp ratio -
+ * the same 3-band split ("Intact"/"Damaged"/"Ruined") the asset pipeline's
+ * tools/asset_generation/lib/post_process.py generates for every building's
+ * spriteset, and - critically - the exact frame names those atlases actually
+ * carry (verified against public/art/buildings/*.json: every one of the 34
+ * atlases names its damage frames plain `Damaged`/`Ruined`).
+ *
+ * Phase 89 bug fix: this used to return a `-Damaged`/`-Ruined` SUFFIX which
+ * resolveBuildingFrameName concatenated onto the base frame, producing
+ * `Intact-Damaged` - a name no atlas has ever contained. The existence-check
+ * fallback below then silently swallowed every miss, so raids showed zero
+ * visual damage on any building despite the art shipping in every player's
+ * download. Returning the standalone frame name (not a suffix) is what makes
+ * the lookup hit.
+ *
+ * Returns null at full/near-full health, meaning "no damage frame applies".
  */
-export function damageStateSuffix(hp: number, maxHp: number): '' | '-Damaged' | '-Ruined' {
+export function damageStateFrameName(hp: number, maxHp: number): 'Damaged' | 'Ruined' | null {
   if (maxHp <= 0) {
-    return '';
+    return null;
   }
   const ratio = hp / maxHp;
   if (ratio < 0.34) {
-    return '-Ruined';
+    return 'Ruined';
   }
   if (ratio < 0.67) {
-    return '-Damaged';
+    return 'Damaged';
   }
-  return '';
+  return null;
 }
 
 /**
- * Combines a base frame name (from buildingTextureKey) with the hp-derived
- * damage suffix, but only actually uses the damage-suffixed frame if it
- * exists in the given atlas - `frameExists` is injected (rather than this
- * function reaching into a Phaser Texture itself) so buildingConfig.ts stays
- * scene/Phaser-free, matching every other pure derivation in this file.
- * Falls back to the plain base frame for any building whose atlas hasn't had
- * its Damaged/Ruined states generated yet - the whole point of this
- * indirection is that a building's visual degrades gracefully rather than
- * erroring or showing a missing-frame placeholder the moment its hp drops
- * before its damage art exists.
+ * Picks the frame a building should actually render, given its base
+ * (tier/gate-open) frame from buildingTextureKey and its live hp.
+ * `frameExists` is injected (rather than this function reaching into a
+ * Phaser Texture itself) so buildingConfig.ts stays scene/Phaser-free,
+ * matching every other pure derivation in this file.
+ *
+ * PRECEDENCE (Phase 89, deliberate and documented): DAMAGE STATE WINS OVER
+ * BASE VARIANT. A damaged House renders `Damaged`/`Ruined`, not `Tier2`; a
+ * damaged closed WoodenGate renders `Damaged`/`Ruined`, not `Closed`. No
+ * `Tier2-Damaged`/`Closed-Damaged` art exists (the pipeline generates one
+ * damage set per building, not one per base variant), so the alternative
+ * would be "variant buildings never show damage at all" - and a burning
+ * building is far more urgent information than its tier or its gate
+ * position, both of which stay readable in BuildingInfoPanel (and the tier
+ * is legible again the moment the player repairs it).
+ *
+ * The variant-specific name is still TRIED FIRST (`Tier2-Damaged`), so if
+ * per-variant damage art is ever generated it lights up with zero code
+ * changes; today that lookup always misses and falls through to the plain
+ * `Damaged`/`Ruined` frame every atlas has.
+ *
+ * Final fallback is the plain base frame, so a building whose atlas somehow
+ * lacks damage art degrades gracefully rather than erroring or rendering a
+ * missing-frame placeholder.
  */
 export function resolveBuildingFrameName(
   baseFrame: string,
@@ -1476,8 +1509,18 @@ export function resolveBuildingFrameName(
   maxHp: number,
   frameExists: (frameName: string) => boolean,
 ): string {
-  const candidate = `${baseFrame}${damageStateSuffix(hp, maxHp)}`;
-  return frameExists(candidate) ? candidate : baseFrame;
+  const damageFrame = damageStateFrameName(hp, maxHp);
+  if (!damageFrame) {
+    return baseFrame;
+  }
+  const variantSpecific = `${baseFrame}-${damageFrame}`;
+  if (frameExists(variantSpecific)) {
+    return variantSpecific;
+  }
+  if (frameExists(damageFrame)) {
+    return damageFrame;
+  }
+  return baseFrame;
 }
 
 /** Separate atlas from BUILDING_ATLAS_KEY: animals are a different asset class (small, per-instance, not per-tile). */

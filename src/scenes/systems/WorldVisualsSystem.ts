@@ -278,11 +278,12 @@ export class WorldVisualsSystem {
    * Resolves which atlas + frame to render for a building's CURRENT state:
    * atlas is always that building type's own per-building spriteset
    * (buildingAtlasKey); frame starts from the tier/gate-open base
-   * (buildingTextureKey) and layers on an hp-derived Damaged/Ruined suffix
-   * ONLY if that building's atlas actually has the frame generated
-   * (resolveBuildingFrameName's existence check) - falls back to the base
-   * frame gracefully for the (currently: most) buildings whose damage art
-   * hasn't been generated yet.
+   * (buildingTextureKey) and, once hp drops below the Damaged/Ruined bands,
+   * switches to that building atlas's own `Damaged`/`Ruined` frame
+   * (resolveBuildingFrameName - damage state wins over tier/gate-open base
+   * variants, see its doc comment for the precedence rationale). Falls back
+   * to the base frame gracefully if a building's atlas somehow lacks damage
+   * art.
    */
   resolveBuildingTexture(building: PlacedBuilding): { atlasKey: string; frameName: string } {
     const atlasKey = buildingAtlasKey(building.type);

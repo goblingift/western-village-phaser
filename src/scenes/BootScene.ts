@@ -76,7 +76,7 @@ export class BootScene extends Phaser.Scene {
     // 2026-09-09) instead of one shared buildings-atlas - each building's own
     // file carries whatever state frames (Intact/Damaged/Ruined/
     // Construction*/Tier*) have been generated for it so far. Frame names
-    // must exactly match buildingTextureKey()/damageStateSuffix() -
+    // must exactly match buildingTextureKey()/damageStateFrameName() -
     // verified by `node tools/verify-building-frames.mjs`. These are 4x
     // supersampled (ART_SCALE) relative to their tile footprint and rendered
     // via setDisplaySize + LINEAR filtering (set below in create()) rather
