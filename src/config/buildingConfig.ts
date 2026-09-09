@@ -731,7 +731,16 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Butcher,
     label: 'Butcher',
     cost: 150,
-    materials: { wood: 5 },
+    /**
+     * Phase 100: was `{ wood: 5 }`, which was unbuildable at this building's
+     * own unlock tier - Wood's only producer (Wood-cutter) is gated at
+     * population 8, twice Butcher's own gate. Butcher is the FIRST processor
+     * in the meat chain and the natural follow-up to a Pig Farm (also
+     * population 4), so delaying it to match Wood would have stranded the
+     * whole early chain; costing it Logs instead (always-unlocked Forestry)
+     * keeps the chain reachable exactly when the game says it is.
+     */
+    materials: { logs: 4 },
     size: { width: 2, height: 2 },
     color: 0xc62828,
     category: BuildingCategory.Industry,
@@ -869,7 +878,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Gate,
     label: 'Gate',
     cost: 25,
-    materials: { logs: 2, wood: 1 },
+    // Phase 100: dropped the 1 Wood (Wood-cutter, population 8) from a
+    // population-3 building - a rough log gate needs no sawn lumber, and the
+    // Logs half was already the honest cost.
+    materials: { logs: 3 },
     size: { width: 1, height: 1 },
     color: 0x8d6748,
     category: BuildingCategory.Barriers,
@@ -895,7 +907,10 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.WoodenWall,
     label: 'Wooden Wall',
     cost: 20,
-    materials: { wood: 2 },
+    // Phase 100: was `{ wood: 2 }` at a population-4 gate, four population
+    // tiers before Wood exists. A palisade is stacked logs, not sawn lumber,
+    // so Logs is both the thematically right material and the available one.
+    materials: { logs: 3 },
     size: { width: 1, height: 1 },
     color: 0x6d4c41,
     category: BuildingCategory.Barriers,
@@ -922,7 +937,11 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.WoodenGate,
     label: 'Wooden Gate',
     cost: 40,
-    materials: { wood: 3, logs: 2 },
+    // Phase 100: same correction as Wooden Wall - the Wood half was
+    // unavailable at this building's population-4 gate, so its cost is now
+    // entirely Logs (slightly more of them, since it is the costlier,
+    // mechanism-carrying cousin of a plain wall).
+    materials: { logs: 5 },
     size: { width: 1, height: 1 },
     color: 0x8d6748,
     category: BuildingCategory.Barriers,
@@ -1179,7 +1198,15 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Watchtower,
     label: 'Watchtower',
     cost: 130,
-    materials: { wood: 6, tools: 2 },
+    /**
+     * Phase 100: dropped `tools: 2`. Tools' only producer (Blacksmith) is
+     * gated at population 12 while this unlocks at 10, so the Tools half was
+     * unbuildable at this building's own tier - and a Watchtower is a
+     * defensive building, exactly the kind whose advertised availability
+     * needs to be true when a raid is inbound. The 6 Wood stays: Wood-cutter
+     * is gated at population 8, safely below this building's own 10.
+     */
+    materials: { wood: 6 },
     size: { width: 1, height: 1 },
     color: 0x5d4037,
     category: BuildingCategory.Military,
@@ -1356,7 +1383,29 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     type: BuildingType.Church,
     label: 'Church',
     cost: 200,
-    materials: { wood: 8 },
+    /**
+     * Phase 100: was `{ wood: 8 }`, the sharpest instance of the whole
+     * mismatch class. Church's own comment above states the design intent
+     * plainly - "reachable before it's required", off two Tier-1 Houses'
+     * population alone - but Wood's only producer (Wood-cutter) is gated at
+     * population 8, and running the Forestry -> Wood-cutter chain costs 8
+     * workers (4 each, both 2x2), which is the ENTIRE population of four
+     * Tier-1 Houses. In practice the Wood cost pushed a population-4 building
+     * out to roughly population 10-12.
+     *
+     * That matters more than it would for any other building, because Church
+     * coverage is a hard gate on House Tier 2/3 (HOUSE_TIER_CONFIG's
+     * requiresChurch), i.e. on population growth beyond 2 per House - the
+     * thing the player needs in order to afford the wood chain in the first
+     * place.
+     *
+     * Fixing the COST rather than raising the unlock keeps the stated intent
+     * intact, and gives the always-unlocked Forestry a real early-game
+     * purpose (its Logs previously fed only Fence/Gate and the Wood-cutter
+     * that was itself gated at population 8). A frontier chapel built of logs
+     * is also the more western answer.
+     */
+    materials: { logs: 8 },
     size: { width: 2, height: 2 },
     color: 0xefebe9,
     category: BuildingCategory.Housing,
