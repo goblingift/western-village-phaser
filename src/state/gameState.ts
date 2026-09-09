@@ -94,8 +94,8 @@ import {
   ResourceKey,
   SALOON_SELL_RATES,
   SUPERMARKET_SELL_RATES,
-  SaloonSellableKey,
-  SupermarketSellableKey,
+  AutoSale,
+  MARKET_STALL_SELL_RATES,
   TradeOrderConfig,
   TrainingQueueJob,
   UnitKind,
@@ -2775,39 +2775,58 @@ export function getStorageCap(): number {
 }
 
 /**
- * Supermarkets don't fit the input->output production shape: they read/write
- * the shared resource pool and Money directly, and "active" reflects whether
- * a sale actually happened this tick rather than whether inputs were
- * available. Run as a separate pass after normal production so a Supermarket
- * can sell Meat/Eggs that other buildings produced earlier in the same tick.
+ * Fixed-rate autonomous sellers (Supermarket, Saloon, and Phase 92's Market
+ * Stall) don't fit the input->output production shape: they read/write the
+ * shared resource pool and Money directly, and "active" reflects whether a
+ * sale actually happened this tick rather than whether inputs were
+ * available. Run as a separate pass after normal production so a seller can
+ * sell goods other buildings produced earlier in the same tick.
+ *
+ * Phase 92 collapsed what were two byte-identical loops (runSupermarketSales
+ * / runSaloonSales, differing only in building type, rate table and which
+ * PlacedBuilding field the result was written to) into this one generic
+ * pass, rather than pasting a third copy for the Market Stall. The three
+ * still keep SEPARATE rate tables and SEPARATE result fields - the reason
+ * Phase 27 gave for not sharing those is still valid (a change to one
+ * building's sellable-goods list must not silently move another's) - but
+ * there is now exactly one implementation of "sell up to `amount` of each
+ * listed good at the live market price".
+ *
+ * Every seller draws down and depresses the SAME market (getCurrentMarketPrice
+ * / recordMarketSaleVolume), so a Market Stall dumping eggs lowers what a
+ * Supermarket gets for eggs, exactly as two Supermarkets already did.
  */
-function runSupermarketSales(): void {
+function runFixedRateSales<K extends ResourceKey>(
+  type: BuildingType,
+  rates: Record<K, { amount: number; price: number }>,
+  assignSale: (building: PlacedBuilding, sale: AutoSale<K>) => void,
+): void {
   for (const building of placedBuildings) {
-    if (building.type !== BuildingType.Supermarket) {
+    if (building.type !== type) {
       continue;
     }
 
     if (!building.staffed) {
       building.active = false;
-      building.lastSale = { sold: {}, revenue: 0 };
+      assignSale(building, { sold: {}, revenue: 0 });
       continue;
     }
 
-    const sold: Partial<Record<SupermarketSellableKey, number>> = {};
+    const sold: Partial<Record<K, number>> = {};
     let revenue = 0;
     let anySold = false;
 
-    for (const [key, rate] of Object.entries(SUPERMARKET_SELL_RATES) as [SupermarketSellableKey, { amount: number; price: number }][]) {
+    for (const [key, rate] of Object.entries(rates) as [K, { amount: number; price: number }][]) {
       const soldAmount = Math.min(rate.amount, resources[key]);
       resources[key] -= soldAmount;
       addConsumedThisTick(key, soldAmount);
-      // Phase 51: SUPERMARKET_SELL_RATES.price is now only the market's
-      // baseline peg - the actual sale reads the live, fluctuating price.
+      // Phase 51: the rate table's `price` is now only the market's baseline
+      // peg - the actual sale reads the live, fluctuating price.
       // Phase 55: Gold Rush layers a temporary global spike on top of
       // state/market.ts's own drift/pressure/merchant-deal pricing.
-      const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
+      const price = getCurrentMarketPrice(key as MarketableResourceKey) * getGoldRushMultiplier();
       revenue += soldAmount * price;
-      recordMarketSaleVolume(key, soldAmount);
+      recordMarketSaleVolume(key as MarketableResourceKey, soldAmount);
       addSoldThisRun(key, soldAmount);
       sold[key] = Math.round(soldAmount * 10) / 10;
       if (soldAmount > 0) {
@@ -2817,59 +2836,28 @@ function runSupermarketSales(): void {
 
     money = Math.round((money + revenue) * 100) / 100;
 
-    building.lastSale = {
-      sold,
-      revenue: Math.round(revenue * 100) / 100,
-    };
+    assignSale(building, { sold, revenue: Math.round(revenue * 100) / 100 });
     building.active = anySold;
   }
 }
 
-/**
- * Mirrors runSupermarketSales but reads/writes Saloon's own saloonSale field
- * against SALOON_SELL_RATES - a separate pass rather than a shared loop so
- * Supermarket's rate table/sale field stay untouched by this addition.
- */
+function runSupermarketSales(): void {
+  runFixedRateSales(BuildingType.Supermarket, SUPERMARKET_SELL_RATES, (building, sale) => {
+    building.lastSale = sale;
+  });
+}
+
 function runSaloonSales(): void {
-  for (const building of placedBuildings) {
-    if (building.type !== BuildingType.Saloon) {
-      continue;
-    }
+  runFixedRateSales(BuildingType.Saloon, SALOON_SELL_RATES, (building, sale) => {
+    building.saloonSale = sale;
+  });
+}
 
-    if (!building.staffed) {
-      building.active = false;
-      building.saloonSale = { sold: {}, revenue: 0 };
-      continue;
-    }
-
-    const sold: Partial<Record<SaloonSellableKey, number>> = {};
-    let revenue = 0;
-    let anySold = false;
-
-    for (const [key, rate] of Object.entries(SALOON_SELL_RATES) as [SaloonSellableKey, { amount: number; price: number }][]) {
-      const soldAmount = Math.min(rate.amount, resources[key]);
-      resources[key] -= soldAmount;
-      addConsumedThisTick(key, soldAmount);
-      // Phase 55: Gold Rush layers a temporary global spike on top of
-      // state/market.ts's own drift/pressure/merchant-deal pricing.
-      const price = getCurrentMarketPrice(key) * getGoldRushMultiplier();
-      revenue += soldAmount * price;
-      recordMarketSaleVolume(key, soldAmount);
-      addSoldThisRun(key, soldAmount);
-      sold[key] = Math.round(soldAmount * 10) / 10;
-      if (soldAmount > 0) {
-        anySold = true;
-      }
-    }
-
-    money = Math.round((money + revenue) * 100) / 100;
-
-    building.saloonSale = {
-      sold,
-      revenue: Math.round(revenue * 100) / 100,
-    };
-    building.active = anySold;
-  }
+/** Phase 92: the always-unlocked entry point to the sell economy. */
+function runMarketStallSales(): void {
+  runFixedRateSales(BuildingType.MarketStall, MARKET_STALL_SELL_RATES, (building, sale) => {
+    building.marketStallSale = sale;
+  });
 }
 
 /**
@@ -3529,6 +3517,7 @@ export function runProductionTick(): void {
     recordProductivityTick(building.id, true, null);
   }
 
+  runMarketStallSales();
   runSupermarketSales();
   runSaloonSales();
   runTradingPostSales();

@@ -4,6 +4,7 @@ import {
   HOUSE_TIER_CONFIG,
   MARKETABLE_RESOURCE_KEYS,
   ResourceKey,
+  MARKET_STALL_SELL_RATES,
   SALOON_SELL_RATES,
   SUPERMARKET_SELL_RATES,
 } from './buildingConfig';
@@ -62,6 +63,10 @@ export function getResourceConsumers(key: ResourceKey): BuildingType[] {
   }
   if (key in SALOON_SELL_RATES) {
     consumers.push(BuildingType.Saloon);
+  }
+  // Phase 92: the Market Stall is the always-unlocked basic-goods seller.
+  if (key in MARKET_STALL_SELL_RATES) {
+    consumers.push(BuildingType.MarketStall);
   }
   // Phase 51: a Trading Post CAN trade any marketable resource, even before
   // the player has actually configured an order for it - "consumer" here

@@ -70,10 +70,13 @@ const BUILDINGS = [
   { type: 'WaterTower', w: 1, h: 1, category: 'Housing' },
   { type: 'Church', w: 2, h: 2, category: 'Housing' },
   { type: 'Brothel', w: 2, h: 2, category: 'Commerce' },
+  // Phase 92: always-unlocked basic-goods seller (real generated art shipped;
+  // this entry exists so a placeholder regeneration stays complete).
+  { type: 'MarketStall', w: 1, h: 1, category: 'Commerce' },
 ];
 
-if (BUILDINGS.length !== 34) {
-  throw new Error(`Expected 34 BuildingType entries, found ${BUILDINGS.length}. Update this table.`);
+if (BUILDINGS.length !== 35) {
+  throw new Error(`Expected 35 BuildingType entries, found ${BUILDINGS.length}. Update this table.`);
 }
 
 // Every frame name buildingTextureKey() can produce for a given building

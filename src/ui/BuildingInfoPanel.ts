@@ -157,6 +157,9 @@ export class BuildingInfoPanel {
       workersRequired > 0 ? `Workers: ${this.selected.assignedWorkers}/${workersRequired}` : null;
     const isSupermarket = this.selected.type === BuildingType.Supermarket;
     const isSaloon = this.selected.type === BuildingType.Saloon;
+    // Phase 92: the Market Stall is an autonomous seller like Supermarket/
+    // Saloon - same "Sold: ... -> +$X" line, its own rate table/sale field.
+    const isMarketStall = this.selected.type === BuildingType.MarketStall;
     const isBarracks = this.selected.type === BuildingType.Barracks;
     const isHorsery = this.selected.type === BuildingType.Horsery;
     const isBank = this.selected.type === BuildingType.Bank;
@@ -190,7 +193,7 @@ export class BuildingInfoPanel {
                   ? 'Active'
                   : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`
             }`
-          : definition.requiresWorkers && !isSupermarket && !isSaloon
+          : definition.requiresWorkers && !isSupermarket && !isSaloon && !isMarketStall
             ? `Storage bonus: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
             : null;
     // Phase 42: a plain production building's "Production: Off" line doesn't
@@ -212,6 +215,8 @@ export class BuildingInfoPanel {
       : null;
     const saleText = isSupermarket
       ? this.formatSaleText(this.selected.lastSale, this.selected, workersRequired)
+      : isMarketStall
+      ? this.formatSaleText(this.selected.marketStallSale, this.selected, workersRequired)
       : isSaloon
         ? this.formatSaleText(this.selected.saloonSale, this.selected, workersRequired)
         : isTradingPost

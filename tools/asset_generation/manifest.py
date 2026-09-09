@@ -136,6 +136,11 @@ BUILDINGS = Category(
               "Small frontier chapel — steeple with a cross, arched window, double doors."),
         Frame("building-Brothel", 64, 64, 1024,
               "Two-storey false front, balcony, hanging lantern, upstairs window row, plain double doors, rose/dusky-pink accent."),
+        Frame("building-MarketStall", 32, 32, 512,
+              "Tiny one-tile open market stall — a small wooden counter under a "
+              "short striped awning, a couple of crates/baskets of eggs and produce "
+              "on the counter, a simple hanging price board. Humble and cheap-looking, "
+              "clearly a smaller/poorer sibling of the big Trading Post tent."),
         # Extra texture-variant frames (buildingTextureKey()) — always 1x1.
         Frame("building-House-tier2", 32, 32, 512,
               "The same frontier House, upgraded to Tier 2 — a second window row, painted trim stripe, more prosperous look."),
@@ -146,8 +151,8 @@ BUILDINGS = Category(
     ),
 )
 
-if len(BUILDINGS.frames) != 37:
-    raise RuntimeError(f"Expected 37 building frames, found {len(BUILDINGS.frames)}")
+if len(BUILDINGS.frames) != 38:
+    raise RuntimeError(f"Expected 38 building frames, found {len(BUILDINGS.frames)}")
 
 # --- 3. Player units — one atlas per unit type (§5) --------------------------
 
@@ -384,5 +389,5 @@ CATEGORIES: tuple[Category, ...] = (
 CATEGORIES_BY_KEY = {c.key: c for c in CATEGORIES}
 
 _TOTAL_FRAMES = sum(len(c.frames) for c in CATEGORIES)
-if _TOTAL_FRAMES != 84:
-    raise RuntimeError(f"Expected 84 total frames across all categories, found {_TOTAL_FRAMES}")
+if _TOTAL_FRAMES != 85:
+    raise RuntimeError(f"Expected 85 total frames across all categories, found {_TOTAL_FRAMES}")

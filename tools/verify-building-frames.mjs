@@ -89,9 +89,11 @@ const BUILDING_SIZES = {
   WaterTower: { w: 1, h: 1 },
   Church: { w: 2, h: 2 },
   Brothel: { w: 2, h: 2 },
+  // Phase 92: always-unlocked basic-goods seller, the entry point to the sell economy.
+  MarketStall: { w: 1, h: 1 },
 };
 
-const expectedTypeCount = 34;
+const expectedTypeCount = 35;
 const typeNames = Object.keys(BUILDING_SIZES);
 if (typeNames.length !== expectedTypeCount) {
   console.error(

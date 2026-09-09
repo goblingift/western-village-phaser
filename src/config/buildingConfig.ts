@@ -62,6 +62,7 @@ export enum BuildingType {
   Granary = 'Granary',
   Church = 'Church',
   Brothel = 'Brothel',
+  MarketStall = 'MarketStall',
 }
 
 /**
@@ -220,7 +221,18 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
   1: {
     tier: 1,
     population: POPULATION_PER_HOUSE,
-    taxPerTick: 0,
+    /**
+     * Phase 92: raised 0 -> 1. A Tier-1 House used to be a pure drain (0.5
+     * upkeep, no tax, no tier-up without a Church that needs the Forestry ->
+     * WoodCutter chain first), so the building a player is pushed to build
+     * FIRST and MOST made the money problem worse the more they engaged with
+     * it - measured at ~37% of a small town's gross upkeep. It now nets
+     * +0.5/tick instead of -0.5, and only while the household's Water need is
+     * actually being met (runHouseNeeds pays tax in the same atomic block that
+     * consumes the needs), so the Well -> Houses -> tax loop is a real, legible
+     * first income lever. Tier 2/3 stay clear upgrades at $2/$5.
+     */
+    taxPerTick: 1,
     needs: [{ label: 'Water', options: { water: 0.2 } }],
   },
   2: {
@@ -321,7 +333,7 @@ export type SaloonSale = AutoSale<SaloonSellableKey>;
  * file (declared after both tables) and state/market.ts for the fluctuating
  * price model itself.
  */
-export type MarketableResourceKey = SupermarketSellableKey | SaloonSellableKey;
+export type MarketableResourceKey = SupermarketSellableKey | SaloonSellableKey | MarketStallSellableKey;
 export type TradingPostSale = AutoSale<MarketableResourceKey>;
 
 /**
@@ -410,6 +422,13 @@ export interface PlacedBuilding {
    * sets and a future change to one rate table shouldn't risk the other.
    */
   saloonSale?: SaloonSale;
+  /**
+   * Phase 92: only meaningful for Market Stall; last tick's autonomous sale.
+   * Its own field for the same reason saloonSale is - a different sellable
+   * set (MarketStallSellableKey includes logs/rawMeat, which the Supermarket
+   * doesn't carry), so sharing lastSale would not even type-check.
+   */
+  marketStallSale?: AutoSale<MarketStallSellableKey>;
   /** Only meaningful for Barracks; trained cowboy count, starts at 0, mirrors animalCount. */
   cowboyCount: number;
   /**
@@ -784,8 +803,20 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
   [BuildingType.Fence]: {
     type: BuildingType.Fence,
     label: 'Fence',
-    cost: 6,
-    materials: { logs: 1 },
+    cost: 8,
+    /**
+     * Phase 92: the `{ logs: 1 }` material cost is gone (money raised 6 -> 8
+     * to compensate). It was a hidden t=0 blocker, found by scanning the
+     * whole 60x45 map with the real getPlacementRejection and getting a
+     * rejection on EVERY tile at game start: you begin with 0 logs, so not a
+     * single Fence was placeable until a Forestry (2 workers, so a House
+     * first) had run for several ticks. Livestock needs a CLOSED pen (12+
+     * tiles for a small one), so the always-unlocked Chicken Farm - the
+     * tutorial's own fourth step - was effectively gated behind the logs
+     * chain. Walls/Gates keep their material costs; they're upgrades, not
+     * the first thing a new town has to build.
+     */
+
     size: { width: 1, height: 1 },
     color: 0xc9a063,
     category: BuildingCategory.Barriers,
@@ -902,6 +933,41 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     size: { width: 1, height: 1 },
     color: 0xc9a227,
     category: BuildingCategory.Housing,
+    upkeep: 0.5,
+    requiresWorkers: true,
+    maxHp: 45,
+  },
+  /**
+   * Phase 92 (economy bootstrap fix). THE central problem this building
+   * solves, measured by simulating the real gameState over a 5-minute opener:
+   * a town's net worth only ever went DOWN. Production raises it (goods are
+   * created from nothing) but saturates against the storage cap within ~90
+   * ticks, after which upkeep drains cash forever - while every autonomous
+   * money source in the game (Supermarket 2500, Brothel 3000, Saloon 3200,
+   * Bank 4000, Trading Post 5000) was gated behind a NET-WORTH threshold
+   * above the 1800 you start with. A falling number can't cross a rising
+   * bar: measured 1800 -> 1347 over 5 minutes of reasonable play, i.e. the
+   * first seller was strictly unreachable and the only real income was House
+   * tax, itself gated behind a Church (200 + 8 Wood, needing the Forestry ->
+   * WoodCutter chain first) and 75 ticks of sustained needs.
+   *
+   * The Market Stall is the always-unlocked, no-materials, cheap entry point
+   * to the sell economy: it turns the three always-unlocked producers
+   * (ChickenFarm eggs, Forestry logs, PigFarm rawMeat) into actual income
+   * from minute one. It stays deliberately weak next to the Supermarket -
+   * basic goods only, no processed ones (meat/clothes/tools/wood) - so the
+   * Supermarket remains a real upgrade rather than being obsoleted.
+   */
+  [BuildingType.MarketStall]: {
+    type: BuildingType.MarketStall,
+    label: 'Market Stall',
+    cost: 70,
+    // No `materials` and no `unlockRequirement` on purpose: this is the
+    // bootstrap, so it cannot itself depend on a chain that needs money to
+    // build. Same reasoning that keeps House/Well/Road material-free.
+    size: { width: 1, height: 1 },
+    color: 0xd98c3f,
+    category: BuildingCategory.Commerce,
     upkeep: 0.5,
     requiresWorkers: true,
     maxHp: 45,
@@ -1372,6 +1438,45 @@ export const SALOON_SELL_RATES: Record<SaloonSellableKey, { amount: number; pric
 };
 
 /**
+ * Phase 92: the Market Stall's own table, same shape as the two above.
+ *
+ * BASIC goods only - the raw outputs of the always-unlocked producers
+ * (ChickenFarm eggs, Forestry logs, PigFarm rawMeat) plus potatoes. It
+ * deliberately does NOT carry the processed goods the Supermarket sells
+ * (meat, wood, clothes, tools), so the Supermarket stays a genuine upgrade
+ * rather than being made redundant by a cheaper building.
+ *
+ * `logs` and `rawMeat` become sellable here for the first time. Until now
+ * Forestry's entire output had no buyer at all (logs were a WoodCutter input
+ * and a Fence material and nothing else), which is why an early Forestry
+ * looked productive on the HUD while contributing exactly $0 - the clearest
+ * single example of the "what do I even do with this good" problem.
+ */
+export type MarketStallSellableKey = 'eggs' | 'logs' | 'rawMeat' | 'potatoes';
+
+export const MARKET_STALL_SELL_RATES: Record<MarketStallSellableKey, { amount: number; price: number }> = {
+  eggs: { amount: 2, price: 3 },
+  logs: { amount: 2, price: 2 },
+  rawMeat: { amount: 2, price: 2 },
+  potatoes: { amount: 2, price: 2 },
+};
+
+/**
+ * Phase 92: the three fixed-rate autonomous sellers, in one lookup, so a
+ * tooltip/UI never has to hardcode "which buildings sell things" again -
+ * gameState.runFixedRateSales is the matching single implementation of the
+ * behaviour. The Trading Post is deliberately absent: its goods are
+ * per-building player configuration (tradeOrders), not a fixed table.
+ */
+export const FIXED_RATE_SELL_TABLES: Partial<
+  Record<BuildingType, Record<string, { amount: number; price: number }>>
+> = {
+  [BuildingType.MarketStall]: MARKET_STALL_SELL_RATES,
+  [BuildingType.Supermarket]: SUPERMARKET_SELL_RATES,
+  [BuildingType.Saloon]: SALOON_SELL_RATES,
+};
+
+/**
  * Phase 51: every resource either sell table names, deduped (the two never
  * overlap today, but a Set guards against that changing later). This is the
  * full set of goods a Trading Post can carry an order for, and what
@@ -1381,6 +1486,7 @@ export const MARKETABLE_RESOURCE_KEYS: MarketableResourceKey[] = Array.from(
   new Set<MarketableResourceKey>([
     ...(Object.keys(SUPERMARKET_SELL_RATES) as SupermarketSellableKey[]),
     ...(Object.keys(SALOON_SELL_RATES) as SaloonSellableKey[]),
+    ...(Object.keys(MARKET_STALL_SELL_RATES) as MarketStallSellableKey[]),
   ]),
 );
 
@@ -1395,7 +1501,11 @@ export const BASE_MARKET_PRICES: Record<MarketableResourceKey, number> = MARKETA
       key
     ];
     const saloonRate = (SALOON_SELL_RATES as Partial<Record<MarketableResourceKey, { price: number }>>)[key];
-    acc[key] = supermarketRate?.price ?? saloonRate?.price ?? 0;
+    const stallRate = (MARKET_STALL_SELL_RATES as Partial<Record<MarketableResourceKey, { price: number }>>)[key];
+    // Supermarket first where tables overlap (eggs/potatoes): the higher-tier
+    // seller owns the peg, so adding the stall can't silently move an
+    // existing good's baseline price.
+    acc[key] = supermarketRate?.price ?? saloonRate?.price ?? stallRate?.price ?? 0;
     return acc;
   },
   {} as Record<MarketableResourceKey, number>,
@@ -1872,17 +1982,13 @@ export function describeBuilding(definition: BuildingDefinition): string {
     parts.push(`${animalLabel}s: $${costPerAnimal} each, up to ${maxAnimals}`);
     parts.push(`Produces per ${animalLabel}: ${formatResourceMap(outputPerAnimal)}`);
   }
-  if (definition.type === BuildingType.Supermarket) {
-    // Phase 51: "@$X" read as a fixed price, which stopped being true once
-    // SUPERMARKET_SELL_RATES became the fluctuating market's baseline peg
-    // rather than the actual sale price - "~$X" signals it moves.
-    const sellText = (Object.entries(SUPERMARKET_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
-      .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} ~$${price}`)
-      .join(', ');
-    parts.push(`Sells: ${sellText} per tick (market price fluctuates)`);
-  }
-  if (definition.type === BuildingType.Saloon) {
-    const sellText = (Object.entries(SALOON_SELL_RATES) as [ResourceKey, { amount: number; price: number }][])
+  // Phase 92: one shared formatter for all three fixed-rate sellers (was two
+  // copy-pasted blocks) - the Market Stall would have been a third copy.
+  // "~$X" rather than "@$X" since Phase 51 made these tables the fluctuating
+  // market's baseline peg rather than the actual sale price.
+  const sellRates = FIXED_RATE_SELL_TABLES[definition.type];
+  if (sellRates) {
+    const sellText = (Object.entries(sellRates) as [ResourceKey, { amount: number; price: number }][])
       .map(([key, { amount, price }]) => `${amount} ${RESOURCE_LABELS[key]} ~$${price}`)
       .join(', ');
     parts.push(`Sells: ${sellText} per tick (market price fluctuates)`);
