@@ -1,5 +1,10 @@
 import Phaser from 'phaser';
-import { ADJACENCY_RADIUS_TILES, CHURCH_BASE_RADIUS_TILES, TILE_SIZE } from '../../config/constants';
+import {
+  ADJACENCY_RADIUS_TILES,
+  CHURCH_BASE_RADIUS_TILES,
+  INDUSTRY_NUISANCE_RADIUS_TILES,
+  TILE_SIZE,
+} from '../../config/constants';
 import { getResourceChainBuildingTypes } from '../../config/resourceGraph';
 import {
   VEGETATION_ATLAS_KEY,
@@ -26,6 +31,7 @@ import {
   constructionFrameNameForTicks,
   getConstructionTicks,
   getWorkersRequired,
+  isHeavyIndustry,
   resolveBuildingFrameName,
 } from '../../config/buildingConfig';
 import { gameEvents } from '../../state/gameEvents';
@@ -103,6 +109,15 @@ const HARVEST_RING_DEPTH = 6;
 const HARVEST_RING_COLOR = 0x8bc34a;
 const HARVEST_RING_EMPTY_COLOR = 0xef5350;
 const HARVEST_RING_FILL_ALPHA = 0.08;
+/**
+ * Phase 98: the nuisance ring's own colour. Deliberately a third colour rather
+ * than reusing the green/red pair: this ring can be drawn at the same time as
+ * a heavy-industry building's own (green) supply-chain adjacency ring, and two
+ * concentric rings in the same palette would read as one shape. Orange also
+ * matches the advisory-warning register the placement hint text already uses -
+ * this never blocks a placement, it only says what it will cost.
+ */
+const NUISANCE_RING_COLOR = 0xffb74d;
 
 /**
  * Real Fence Enclosures debug overlay. Off by default, toggled with the 'E'
@@ -960,6 +975,14 @@ export class WorldVisualsSystem {
         const center = getHarvestCenterTile(previewTileX, previewTileY, selectedType);
         this.drawServiceRing(center.tileX, center.tileY, CHURCH_BASE_RADIUS_TILES, true);
       }
+      // Phase 98: drawn IN ADDITION to (not instead of) whichever ring the
+      // chain above picked, because six of the nine HEAVY_INDUSTRY_TYPES have
+      // production inputs and so already draw an adjacency ring - a player
+      // siting a Butcher needs to see both what it gains from its suppliers
+      // and what it costs the households it lands on.
+      if (previewTileX !== undefined && previewTileY !== undefined) {
+        this.drawNuisancePreviewRing(selectedType, previewTileX, previewTileY);
+      }
       return;
     }
 
@@ -1006,6 +1029,32 @@ export class WorldVisualsSystem {
     }
   }
 
+  /**
+   * Phase 98: the nuisance radius, shown while siting either half of the
+   * relationship - a heavy-industry building (the area whose households it
+   * will tax) or a House (the area that would tax it). Same square Chebyshev
+   * ring primitive as every other radius in the game, because that is exactly
+   * the shape getIndustryNuisance measures.
+   *
+   * Always drawn for those two building families, not only when someone is
+   * actually inside it: the point is to let a player position AROUND the
+   * radius, which needs the radius visible on empty ground too.
+   */
+  private drawNuisancePreviewRing(type: BuildingType, previewTileX: number, previewTileY: number): void {
+    const isIndustry = isHeavyIndustry(type);
+    if (!isIndustry && type !== BuildingType.House) {
+      return;
+    }
+    const center = getHarvestCenterTile(previewTileX, previewTileY, type);
+    this.drawServiceRing(
+      center.tileX,
+      center.tileY,
+      INDUSTRY_NUISANCE_RADIUS_TILES,
+      true,
+      NUISANCE_RING_COLOR,
+    );
+  }
+
   /** Finds and rings whichever Church is actually serving (or nearly serving) `house` - the nearest one, regardless of whether it currently qualifies, so the player can see how close they are. */
   private drawNearestChurchRingFor(house: PlacedBuilding): void {
     const houseCenter = getHarvestCenterTile(house.tileX, house.tileY, house.type);
@@ -1042,9 +1091,21 @@ export class WorldVisualsSystem {
     this.drawServiceRing(centerTileX, centerTileY, radiusTiles, hasVegetation);
   }
 
-  /** The shared square-ring (Chebyshev) primitive both the harvest radius and Church's service radius draw through - green when `ok`, red otherwise. */
-  private drawServiceRing(centerTileX: number, centerTileY: number, radiusTiles: number, ok: boolean): void {
-    const color = ok ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR;
+  /**
+   * The shared square-ring (Chebyshev) primitive the harvest radius, Church's
+   * service radius, the adjacency radius and (Phase 98) the nuisance radius
+   * all draw through - green when `ok`, red otherwise, or `colorOverride` when
+   * a ring needs to be told apart from a concentric one drawn in the same
+   * pass.
+   */
+  private drawServiceRing(
+    centerTileX: number,
+    centerTileY: number,
+    radiusTiles: number,
+    ok: boolean,
+    colorOverride?: number,
+  ): void {
+    const color = colorOverride ?? (ok ? HARVEST_RING_COLOR : HARVEST_RING_EMPTY_COLOR);
 
     const px = (centerTileX - radiusTiles) * TILE_SIZE;
     const py = (centerTileY - radiusTiles) * TILE_SIZE;

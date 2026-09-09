@@ -1377,9 +1377,21 @@ export class BuildingInfoPanel {
     if (nuisance.sources === 0) {
       return null;
     }
-    const percent = Math.round(nuisance.taxPenaltyFraction * 100);
     const net = building.lastHouseTax ? ` (now $${building.lastHouseTax.net}/tick)` : '';
-    return `Industry nearby: ${nuisance.sources} within ${INDUSTRY_NUISANCE_RADIUS_TILES} tiles - tax -${percent}%${net}`;
+    // Phase 98: report the penalty that was actually APPLIED, not the raw
+    // fraction - the guardrail in runHouseNeeds floors the net tax at the
+    // House's own upkeep, so on a heavily-industrialised House the nominal
+    // -75% and the real figure diverge, and showing the nominal one next to a
+    // "now $X/tick" that contradicts it is worse than showing neither.
+    const tax = building.lastHouseTax;
+    const effectiveFraction =
+      tax && tax.gross > 0 ? 1 - tax.net / tax.gross : nuisance.taxPenaltyFraction;
+    const percent = Math.round(effectiveFraction * 100);
+    const floored =
+      tax && tax.gross > 0 && effectiveFraction < nuisance.taxPenaltyFraction - 0.001
+        ? ' - capped so this House still breaks even'
+        : '';
+    return `Industry nearby: ${nuisance.sources} within ${INDUSTRY_NUISANCE_RADIUS_TILES} tiles - tax -${percent}%${net}${floored}`;
   }
 
   private formatSellHint(type: BuildingType): string | null {

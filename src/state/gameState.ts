@@ -1696,6 +1696,37 @@ export function getPlacementWarning(tileX: number, tileY: number, type: Building
     }
   }
 
+  /**
+   * Phase 98: zoning forewarning, both directions. Phase 95 shipped an
+   * adjacency/nuisance system that the placement preview said nothing at all
+   * about, so the only way to discover that a Butcher had just cut every
+   * neighbouring household's tax was to notice the money curve bend - and the
+   * penalty is per source, so three of them stacked to the cap silently.
+   *
+   * Reached after the harvest/crop branches above only because those building
+   * families are disjoint from Houses and HEAVY_INDUSTRY_TYPES (no harvester
+   * is heavy industry, and a House is neither); if that ever stops being true,
+   * whichever check runs first wins, and "this will produce nothing" is the
+   * stronger message to lead with.
+   */
+  if (type === BuildingType.House) {
+    const nuisance = getIndustryNuisance(tileX, tileY, type);
+    if (nuisance.sources > 0) {
+      return `${nuisance.sources} heavy industry within ${INDUSTRY_NUISANCE_RADIUS_TILES} tiles - this House's tax drops ${Math.round(
+        nuisance.taxPenaltyFraction * 100,
+      )}%`;
+    }
+  }
+
+  if (isHeavyIndustry(type)) {
+    const houses = countHousesInNuisanceRange(tileX, tileY, type);
+    if (houses > 0) {
+      return `${houses} House${houses === 1 ? '' : 's'} within ${INDUSTRY_NUISANCE_RADIUS_TILES} tiles - each loses ${Math.round(
+        HOUSE_INDUSTRY_TAX_PENALTY_PER_SOURCE * 100,
+      )}% of its tax`;
+    }
+  }
+
   // Item 1 (2026-09-07): a vegetated footprint is legal to build on (it gets
   // auto-cleared as part of placement, see getVegetationClearPlan/
   // placeBuilding) but the player should still see the cost coming before
@@ -3193,7 +3224,27 @@ function runHouseNeeds(): void {
         // panel can show the live figure rather than re-deriving it.
         const nuisance = getIndustryNuisance(building.tileX, building.tileY, building.type, building.id);
         const grossTax = tierConfig.taxPerTick + churchTaxBonus;
-        const netTax = Math.round(grossTax * (1 - nuisance.taxPenaltyFraction) * 100) / 100;
+        /**
+         * Phase 98 guardrail. Phase 95's penalty is a fraction of the tier
+         * tax, capped at HOUSE_INDUSTRY_TAX_PENALTY_MAX (0.75) - which at
+         * Tier 1's $1 tax leaves $0.25 against a $0.5 upkeep, i.e. a badly
+         * zoned House becomes a net DRAIN of -$0.25/tick. That inverts the
+         * building rather than costing it profit, and it is reachable in the
+         * early game: Quarry (population 8, no materials) and WoodCutter
+         * (population 8, 5 Logs from the always-unlocked Forestry) are both
+         * placeable at 4 Tier-1 houses.
+         *
+         * The invariant is now explicit: nuisance can cost a House all of its
+         * PROFIT but never more. The floor is the House's own upkeep as
+         * actually billed this tick (difficulty and prestige multipliers
+         * included - a flat 50% penalty cap would still go negative on Hard,
+         * where upkeep is scaled up but the tax is not), and it is itself
+         * capped at grossTax so this can only ever reduce a penalty, never
+         * hand out tax the House does not owe.
+         */
+        const houseUpkeep = BUILDING_DEFINITIONS[building.type].upkeep * getUpkeepMultiplier();
+        const penalisedTax = grossTax * (1 - nuisance.taxPenaltyFraction);
+        const netTax = Math.round(Math.max(penalisedTax, Math.min(grossTax, houseUpkeep)) * 100) / 100;
         building.lastHouseTax = { gross: grossTax, net: netTax, nuisanceSources: nuisance.sources };
         money = Math.round((money + netTax) * 100) / 100;
         addBuildingIncome(building.id, netTax);
@@ -3368,10 +3419,21 @@ function runBrothelIncome(): void {
  * a Hard-mode player who has bought both upkeep upgrades still pays MORE than
  * Normal, just less than an equally-progressed Hard run with no upgrades.
  */
+/**
+ * Phase 98: the two multipliers every upkeep bill is scaled by, extracted so
+ * runUpkeep and runHouseNeeds' nuisance floor bill from the same figure - a
+ * second hand-written copy would silently diverge the first time a difficulty
+ * or prestige modifier changed.
+ */
+function getUpkeepMultiplier(): number {
+  return (
+    DIFFICULTY_SETTINGS[currentDifficulty].upkeepMultiplier * getActivePrestigeModifiers().upkeepDiscountMultiplier
+  );
+}
+
 function runUpkeep(): number {
   let paid = 0;
-  const upkeepMultiplier =
-    DIFFICULTY_SETTINGS[currentDifficulty].upkeepMultiplier * getActivePrestigeModifiers().upkeepDiscountMultiplier;
+  const upkeepMultiplier = getUpkeepMultiplier();
 
   for (const building of placedBuildings) {
     const upkeep = BUILDING_DEFINITIONS[building.type].upkeep * upkeepMultiplier;
@@ -3895,6 +3957,35 @@ export function getIndustryNuisance(
     sources,
     taxPenaltyFraction: Math.min(sources * HOUSE_INDUSTRY_TAX_PENALTY_PER_SOURCE, HOUSE_INDUSTRY_TAX_PENALTY_MAX),
   };
+}
+
+/**
+ * Phase 98: the other side of getIndustryNuisance - how many standing Houses a
+ * heavy-industry building placed here would penalise. Same standing-and-
+ * finished rule and same Chebyshev centre-to-centre measurement, because it is
+ * the same relationship measured from the other end; anything else would let
+ * the placement preview promise a different answer than the tick delivers.
+ */
+export function countHousesInNuisanceRange(tileX: number, tileY: number, type: BuildingType): number {
+  const center = getHarvestCenterTile(tileX, tileY, type);
+  let houses = 0;
+  for (const candidate of placedBuildings) {
+    if (candidate.type !== BuildingType.House || candidate.hp <= 0) {
+      continue;
+    }
+    if (candidate.constructionTicksRemaining && candidate.constructionTicksRemaining > 0) {
+      continue;
+    }
+    const candidateCenter = getHarvestCenterTile(candidate.tileX, candidate.tileY, candidate.type);
+    const distance = Math.max(
+      Math.abs(center.tileX - candidateCenter.tileX),
+      Math.abs(center.tileY - candidateCenter.tileY),
+    );
+    if (distance <= INDUSTRY_NUISANCE_RADIUS_TILES) {
+      houses += 1;
+    }
+  }
+  return houses;
 }
 
 /**
