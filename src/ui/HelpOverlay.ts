@@ -39,6 +39,7 @@ const HOTKEYS: HotkeyEntry[] = [
   { keys: 'Delete / Backspace', description: 'Demolish the selected building' },
   { keys: 'C', description: 'Toggle the resource chain highlight overlay' },
   { keys: 'V', description: 'Toggle the statistics & efficiency panel' },
+  { keys: 'M', description: 'Toggle the economy panel - what each good sells for, and where' },
   { keys: 'E', description: 'Toggle the fence-enclosure debug overlay' },
   { keys: 'B', description: 'Toggle Blueprint Copy mode (drag a rectangle to capture buildings)' },
   { keys: 'H / ?', description: 'Open this help panel' },

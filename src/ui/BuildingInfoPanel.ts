@@ -11,6 +11,7 @@ import {
   MARKETABLE_RESOURCE_KEYS,
   MarketableResourceKey,
   PlacedBuilding,
+  FIXED_RATE_SELL_TABLES,
   RESOURCE_LABELS,
   ResourceKey,
   TradeOrderConfig,
@@ -18,6 +19,7 @@ import {
   WorkerPriority,
   getWorkersRequired,
 } from '../config/buildingConfig';
+import { getResourceConsumers } from '../config/resourceGraph';
 import { VEGETATION_DEFINITIONS } from '../config/vegetationConfig';
 import { countVegetationInRadius } from '../state/vegetation';
 import {
@@ -151,6 +153,9 @@ export class BuildingInfoPanel {
     const definition = BUILDING_DEFINITIONS[this.selected.type];
     const production = definition.production;
     const inputText = production?.inputs ? this.formatResourceMap(production.inputs) : null;
+    // Phase 93: "Produces: 1.2 Logs" never said what to DO with the logs. This
+    // answers it at the exact moment the player is looking at the producer.
+    const sellHintText = this.formatSellHint(this.selected.type);
     const outputText = production?.outputs ? this.formatResourceMap(production.outputs) : null;
     const workersRequired = getWorkersRequired(this.selected.type);
     const workersText =
@@ -399,6 +404,7 @@ export class BuildingInfoPanel {
       ${churchRadiusText ? `<div>${churchRadiusText}</div>` : ''}
       ${inputText ? `<div>Consumes: ${inputText}</div>` : ''}
       ${outputText ? `<div>Produces: ${outputText}</div>` : ''}
+      ${sellHintText ? `<div class="sell-hint">${sellHintText}</div>` : ''}
       ${workersText ? `<div>${workersText}</div>` : ''}
       ${understaffedText ? `<div class="hp-disabled">${understaffedText}</div>` : ''}
       ${animalText ? `<div>${animalText}</div>` : ''}
@@ -1292,6 +1298,57 @@ export class BuildingInfoPanel {
       return `Not selling (${this.formatUnderstaffedReason(building, workersRequired)})`;
     }
     return 'No stock to sell';
+  }
+
+  /**
+   * Phase 93: for a building that makes something, where its output turns
+   * into money - or, just as important, that it does NOT and is only useful
+   * as an input to another building. Covers all three ways a building can
+   * produce (production.outputs, an AnimalConfig, a HarvestConfig), since a
+   * Chicken Farm declares an empty `production` block and makes everything
+   * through its animals.
+   */
+  private formatSellHint(type: BuildingType): string | null {
+    const definition = BUILDING_DEFINITIONS[type];
+    const outputKeys = new Set<ResourceKey>([
+      ...(Object.keys(definition.production?.outputs ?? {}) as ResourceKey[]),
+      ...(Object.keys(definition.animal?.outputPerAnimal ?? {}) as ResourceKey[]),
+      ...(Object.keys(definition.harvest?.outputs ?? {}) as ResourceKey[]),
+    ]);
+    if (outputKeys.size === 0) {
+      return null;
+    }
+
+    const sellable: string[] = [];
+    const unsellable: string[] = [];
+    for (const key of outputKeys) {
+      const outlets: string[] = [];
+      for (const [sellerType, rates] of Object.entries(FIXED_RATE_SELL_TABLES) as [
+        BuildingType,
+        Record<string, { amount: number; price: number }>,
+      ][]) {
+        if (rates[key]) {
+          outlets.push(BUILDING_DEFINITIONS[sellerType].label);
+        }
+      }
+      if (outlets.length > 0) {
+        sellable.push(`${RESOURCE_LABELS[key]} at ${outlets.join('/')}`);
+      } else {
+        // Name the consumer chain instead, so "no buyer" is actionable
+        // rather than just discouraging.
+        const users = getResourceConsumers(key)
+          .filter((consumerType) => consumerType !== type)
+          .map((consumerType) => BUILDING_DEFINITIONS[consumerType].label);
+        unsellable.push(
+          users.length > 0
+            ? `${RESOURCE_LABELS[key]} (no buyer - feeds ${users.join('/')})`
+            : `${RESOURCE_LABELS[key]} (no buyer yet)`,
+        );
+      }
+    }
+
+    const parts = [...sellable, ...unsellable];
+    return `Sell: ${parts.join('; ')}`;
   }
 
   private formatResourceMap(map: Partial<Record<ResourceKey, number>>): string {

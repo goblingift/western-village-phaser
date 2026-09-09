@@ -97,6 +97,13 @@ export interface GameEventMap {
    */
   'toggle-help-overlay': () => void;
   /**
+   * Phase 93: opens/closes the Economy panel ("what sells where"). Emitted by
+   * the 'M' hotkey and BuildingBar's Economy button; EconomyPanel owns its own
+   * shown/hidden state and is the only listener, exactly like
+   * 'toggle-help-overlay'/'toggle-statistics-panel' above.
+   */
+  'toggle-economy-panel': () => void;
+  /**
    * Phase 64: (re)starts the first-run tutorial from step 1, regardless of
    * the "tutorial seen" flag. Emitted by the Help panel's Replay button, so a
    * player who skipped it can always get it back.

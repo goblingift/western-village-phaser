@@ -1462,6 +1462,19 @@ export const MARKET_STALL_SELL_RATES: Record<MarketStallSellableKey, { amount: n
 };
 
 /**
+ * Is this resource sold anywhere (Market Stall / Supermarket / Saloon /
+ * Trading Post) and therefore carries a fluctuating market price?
+ *
+ * Phase 93: promoted here from a private copy in ResourceHudPanel, since
+ * EconomyPanel needs the exact same predicate - and, being a type guard onto
+ * MarketableResourceKey, it's what lets either caller pass a plain ResourceKey
+ * to state/market's price lookups without a cast.
+ */
+export function isMarketableResource(key: ResourceKey): key is MarketableResourceKey {
+  return (MARKETABLE_RESOURCE_KEYS as ResourceKey[]).includes(key);
+}
+
+/**
  * Phase 92: the three fixed-rate autonomous sellers, in one lookup, so a
  * tooltip/UI never has to hardcode "which buildings sell things" again -
  * gameState.runFixedRateSales is the matching single implementation of the

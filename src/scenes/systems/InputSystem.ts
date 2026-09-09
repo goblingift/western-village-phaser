@@ -2236,6 +2236,17 @@ export class InputSystem {
         event.preventDefault();
       }
 
+      // Phase 93: 'M' ("market") toggles the Economy panel - what every good
+      // is worth and which building sells it. Bare emit like 'C'/'V'/'H':
+      // EconomyPanel owns all of its own state. Confirmed unbound before
+      // adding: grepped setupHotkeys/setupKeyboardCamera for every existing
+      // binding (WASD/arrows via cameraKeys, Shift, digits 1-9, Space,
+      // Delete/Backspace, C, V, E, G, B, H/Slash) - none use KeyM.
+      if (event.code === 'KeyM') {
+        gameEvents.emit('toggle-economy-panel');
+        event.preventDefault();
+      }
+
       // Phase 69: 'G' ("gates") toggles every placed WoodenGate open/closed
       // in one press - see toggleAllGates's own doc comment for the
       // majority-state logic. Confirmed unbound before adding: grepped

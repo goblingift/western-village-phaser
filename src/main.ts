@@ -5,6 +5,7 @@ import { BlueprintManageOverlay } from './ui/BlueprintManageOverlay';
 import { BuildingBar } from './ui/BuildingBar';
 import { BuildingInfoPanel } from './ui/BuildingInfoPanel';
 import { DifficultySelectOverlay } from './ui/DifficultySelectOverlay';
+import { EconomyPanel } from './ui/EconomyPanel';
 import { GameOverOverlay } from './ui/GameOverOverlay';
 import { HelpOverlay } from './ui/HelpOverlay';
 import { NotificationLogPanel } from './ui/NotificationLogPanel';
@@ -32,6 +33,8 @@ if (appContainer && stageContainer) {
   // modal like the game-over/difficulty screens, so it belongs on #app.
   new TutorialOverlay(stageContainer);
   new HelpOverlay(appContainer);
+  // Phase 93: full-screen modal reference like the help panel, so it sits on #app.
+  new EconomyPanel(appContainer);
   new SaveLoadOverlay(appContainer);
   new PrestigeOverlay(appContainer);
   new BlueprintManageOverlay(appContainer);

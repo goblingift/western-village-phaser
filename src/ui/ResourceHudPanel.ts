@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
 import {
-  MARKETABLE_RESOURCE_KEYS,
+  BUILDING_DEFINITIONS,
+  BuildingType,
+  FIXED_RATE_SELL_TABLES,
   MarketableResourceKey,
   RESOURCE_ICONS_ATLAS_KEY,
   RESOURCE_ICON_SIZE,
   RESOURCE_LABELS,
   ResourceKey,
+  isMarketableResource,
   resourceIconTextureKey,
 } from '../config/buildingConfig';
 import { getResourceConsumerLabels, getResourceProducerLabels } from '../config/resourceGraph';
@@ -21,11 +24,6 @@ import {
   getTotalPopulation,
 } from '../state/gameState';
 import { getBaselineMarketPrice, getCurrentMarketPrice } from '../state/market';
-
-/** Phase 51: is this resource sold anywhere (Supermarket/Saloon/Trading Post) and therefore has a fluctuating market price worth showing in the tooltip? */
-function isMarketable(key: ResourceKey): key is MarketableResourceKey {
-  return (MARKETABLE_RESOURCE_KEYS as ResourceKey[]).includes(key);
-}
 
 /**
  * Phase 33: the resource readout used to be three ever-lengthening lines of
@@ -227,17 +225,45 @@ export class ResourceHudPanel {
     const trendText = trend > 0 ? `+${trend}/tick` : `${trend}/tick`;
     const producers = getResourceProducerLabels(key);
     const consumers = getResourceConsumerLabels(key);
-    const marketPriceLine = isMarketable(key) ? this.formatMarketPriceLine(key) : '';
+    const marketPriceLine = isMarketableResource(key) ? this.formatMarketPriceLine(key) : '';
 
     this.tooltip.innerHTML = `
       <strong>${RESOURCE_LABELS[key]}</strong>
       <div>Stock: ${stock}</div>
       <div>Net rate: ${trendText}</div>
       ${marketPriceLine}
+      <div>${this.formatSoldAtLine(key)}</div>
       <div>Produced by: ${producers.length > 0 ? producers.join(', ') : 'Nothing yet'}</div>
       <div>Consumed by: ${consumers.length > 0 ? consumers.join(', ') : 'Nothing yet'}</div>
-      <div class="hint">Click: highlight on map | Esc: clear | C: toggle</div>
+      <div class="hint">Click: highlight on map | Esc: clear | C: toggle | M: economy panel</div>
     `;
+  }
+
+  /**
+   * Phase 93: the tooltip already listed "Consumed by", which technically
+   * includes the sellers - but a player reading "Consumed by: Supermarket"
+   * has no way to tell that means "this is where it turns into money" rather
+   * than "this is eaten as an input". So the sell outlets get their own
+   * explicit line with the per-tick rate, and a good with NO buyer says so
+   * outright rather than leaving the player to infer it from an absence.
+   */
+  private formatSoldAtLine(key: ResourceKey): string {
+    const outlets: string[] = [];
+    for (const [type, rates] of Object.entries(FIXED_RATE_SELL_TABLES) as [
+      BuildingType,
+      Record<string, { amount: number; price: number }>,
+    ][]) {
+      const rate = rates[key];
+      if (rate) {
+        outlets.push(`${BUILDING_DEFINITIONS[type].label} (${rate.amount}/tick)`);
+      }
+    }
+    if (isMarketableResource(key)) {
+      outlets.push('Trading Post');
+    }
+    return outlets.length > 0
+      ? `Sold at: ${outlets.join(', ')}`
+      : 'Sold at: nowhere - input only, never sells for money';
   }
 
   private drawBackground(): void {

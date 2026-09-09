@@ -81,6 +81,7 @@ export class BuildingBar {
     topRow.appendChild(this.createGateControls());
     topRow.appendChild(this.createBlueprintControls());
     topRow.appendChild(this.createStatsButton());
+    topRow.appendChild(this.createEconomyButton());
     topRow.appendChild(this.createHelpButton());
     topRow.appendChild(this.createSaveLoadButton());
     topRow.appendChild(this.createPrestigeButton());
@@ -350,6 +351,16 @@ export class BuildingBar {
    */
   private toggleBlueprintCopyMode(): void {
     gameEvents.emit('toggle-blueprint-copy-mode');
+  }
+
+  /** Phase 93: sibling of the Stats button; opens the "what sells where" reference. */
+  private createEconomyButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'speed';
+    button.textContent = 'Economy';
+    button.title = 'What every good is worth and which building sells it (M)';
+    button.addEventListener('click', () => gameEvents.emit('toggle-economy-panel'));
+    return button;
   }
 
   private createStatsButton(): HTMLButtonElement {
