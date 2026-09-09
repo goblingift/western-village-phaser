@@ -10,6 +10,20 @@ export const TILE_SIZE = 32;
 // each has its own display-size call site; terrain needed one because the
 // tilemap's tile-slicing size and the map's own grid-spacing size are two
 // separate Phaser API parameters that must be reasoned about together.
+//
+// Phase 91 evaluated dropping this to 2 to halve the texel count (the naive
+// math: CAMERA_MAX_ZOOM is 2.0, so a 1x1 building never exceeds 64 canvas px,
+// and a 4x/128px source therefore carries 2x more resolution than the
+// renderer can ever show). KEPT AT 4 after an actual A/B render of the House
+// sprite at both real on-screen sizes: at 32 px (zoom 1.0) the two are
+// indistinguishable, but at 64 px (max zoom) the 4x source is visibly
+// smoother/richer in the roof planks and wall boards while the 2x source
+// reads harsher and slightly aliased. The remaining art payload after Phase
+// 90's WebP conversion is 2.34 MB, and Phase 91 cut the BLOCKING part of it
+// to ~0.38 MB by deferring unlock-gated atlases - so there was no load-time
+// case left worth trading picture quality for. Downscaling would also have
+// been effectively irreversible for anyone but the original author: the 54 MB
+// of source renders under tools/asset_generation/raw/ is gitignored.
 export const ART_SCALE = 4;
 // Phase 66: raised from 40x30 (1200 tiles) to 60x45 (2700 tiles, 2.25x) -
 // same 4:3 aspect ratio, just a bigger world for later phases (Coal/terrain,

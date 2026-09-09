@@ -4,7 +4,6 @@ import {
   ANIMALS_ATLAS_KEY,
   BRAWLERS_ATLAS_KEY,
   BUILDING_DEFINITIONS,
-  BuildingType,
   CARTS_ATLAS_KEY,
   COWBOYS_ATLAS_KEY,
   DYNAMITERS_ATLAS_KEY,
@@ -14,11 +13,11 @@ import {
   RESOURCE_ICONS_ATLAS_KEY,
   VILLAGERS_ATLAS_KEY,
   buildingAtlasKey,
-  buildingTextureKey,
+  isEagerBuildingArt,
 } from '../config/buildingConfig';
 import { VEGETATION_ATLAS_KEY } from '../config/vegetationConfig';
 import { WILDLIFE_ATLAS_KEY } from '../config/wildlifeConfig';
-import { setBuildingIcons } from '../ui/buildingIcons';
+import { publishBuildingIconsForTypes } from './buildingIconRaster';
 
 export const TILESET_KEY = 'tiles-atlas';
 
@@ -86,7 +85,15 @@ export class BootScene extends Phaser.Scene {
     // supersampled (ART_SCALE) relative to their tile footprint and rendered
     // via setDisplaySize + LINEAR filtering (set below in create()) rather
     // than at native texture size, unlike every other atlas loaded here.
+    //
+    // Phase 91: only the EAGER (always-unlocked, placeable at t=0) buildings
+    // block startup - 7 of 34, 0.28 MB of the 2.24 MB building payload. The
+    // other 27 are unlock-gated and load in the background from
+    // MainScene.startDeferredBuildingArtLoad() while the player plays.
     for (const definition of Object.values(BUILDING_DEFINITIONS)) {
+      if (!isEagerBuildingArt(definition.type)) {
+        continue;
+      }
       this.load.atlas(
         buildingAtlasKey(definition.type),
         `art/buildings/${definition.type}.webp`,
@@ -131,7 +138,14 @@ export class BootScene extends Phaser.Scene {
 
   create(): void {
     this.destroyLoadingBar();
-    this.publishBuildingIcons();
+    // Phase 91: only the eagerly-loaded buildings exist as textures at this
+    // point; MainScene publishes the deferred ones' icons as they arrive.
+    publishBuildingIconsForTypes(
+      this,
+      Object.values(BUILDING_DEFINITIONS)
+        .map((definition) => definition.type)
+        .filter(isEagerBuildingArt),
+    );
 
     // Building atlases are 4x supersampled (ART_SCALE) and rendered scaled
     // down via setDisplaySize - LINEAR filtering is what actually makes that
@@ -140,7 +154,12 @@ export class BootScene extends Phaser.Scene {
     // Confirmed via a live in-game spike test that this is what makes the
     // higher resolution actually visible - NEAREST at 4x just point-samples
     // 1 of every 16 texels and looks no better than 1x.
+    // Deferred atlases get the same filter applied on arrival - see
+    // MainScene.startDeferredBuildingArtLoad().
     for (const definition of Object.values(BUILDING_DEFINITIONS)) {
+      if (!isEagerBuildingArt(definition.type)) {
+        continue;
+      }
       this.textures.get(buildingAtlasKey(definition.type)).setFilter(Phaser.Textures.FilterMode.LINEAR);
     }
 
@@ -223,41 +242,5 @@ export class BootScene extends Phaser.Scene {
     this.loadingBarGraphics = null;
     this.loadingText?.destroy();
     this.loadingText = null;
-  }
-
-  /**
-   * Rasterises each building frame out of the loaded atlas into a data URL
-   * for the DOM building bar (Phase 33). Wrapped in a try/catch because this
-   * is a purely cosmetic enhancement: if the canvas read ever fails (e.g. a
-   * renderer that doesn't back the texture with a readable canvas), the bar
-   * falls back to its text labels rather than taking the game down with it.
-   */
-  private publishBuildingIcons(): void {
-    try {
-      const icons: Partial<Record<BuildingType, string>> = {};
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      if (!context) {
-        return;
-      }
-
-      for (const definition of Object.values(BUILDING_DEFINITIONS)) {
-        const texture = this.textures.get(buildingAtlasKey(definition.type));
-        const source = texture.getSourceImage();
-        if (!(source instanceof HTMLCanvasElement) && !(source instanceof HTMLImageElement)) {
-          continue;
-        }
-        const frame = texture.get(buildingTextureKey(definition.type));
-        canvas.width = frame.width;
-        canvas.height = frame.height;
-        context.clearRect(0, 0, frame.width, frame.height);
-        context.drawImage(source, frame.cutX, frame.cutY, frame.width, frame.height, 0, 0, frame.width, frame.height);
-        icons[definition.type] = canvas.toDataURL();
-      }
-
-      setBuildingIcons(icons);
-    } catch {
-      // Icons stay empty; BuildingBar renders its text-label fallback.
-    }
   }
 }

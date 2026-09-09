@@ -51,6 +51,7 @@ import { TileType, getWorldTiles } from '../config/mapConfig';
 import { NightOverlay } from '../ui/NightOverlay';
 import { ResourceHudPanel } from '../ui/ResourceHudPanel';
 import { TILESET_KEY } from './BootScene';
+import { publishBuildingIconsForTypes } from './buildingIconRaster';
 import {
   BRAWLERS_ATLAS_KEY,
   BRAWLER_TEXTURE_KEY,
@@ -71,8 +72,10 @@ import {
   RESOURCE_LABELS,
   UnitKind,
   ANIMAL_SPRITE_SIZE,
+  buildingAtlasKey,
   getFactionUnitDamageMultiplier,
   getUnitHpArray,
+  isEagerBuildingArt,
 } from '../config/buildingConfig';
 import {
   installAudioUnlock,
@@ -627,7 +630,86 @@ export class MainScene extends Phaser.Scene {
     this.setupGameOverHalt();
     this.setupGameReset();
     this.setupSaveLoad();
+    this.startDeferredBuildingArtLoad();
     this.pauseForPreGameSelection();
+  }
+
+  /**
+   * Phase 91 (asset load budget): kicks off a background load of the 27
+   * unlock-gated building atlases (1.96 MB) that BootScene deliberately did
+   * NOT block startup on. The 7 always-unlocked buildings (0.28 MB) are
+   * already in memory; everything queued here needs population/net-worth/day
+   * progress the player cannot physically reach in the seconds this takes.
+   *
+   * Phaser's per-scene loader can be re-armed after a scene is running -
+   * queue, then `start()` - and fires `filecomplete-atlas-<key>` per file, so
+   * each atlas is usable the moment it lands rather than only when the whole
+   * batch is done.
+   *
+   * Self-healing rather than gated: instead of blocking placement on
+   * not-yet-loaded art (which would need a check threaded through the
+   * building bar, placement preview, blueprint stamping and save loading),
+   * any building visual already on the map for a type whose art has just
+   * arrived is re-pointed at the real texture. So even the pathological case
+   * - a blueprint stamping a Watchtower on a slow connection seconds into the
+   * run - resolves itself, and no gameplay path has to know about loading.
+   */
+  private startDeferredBuildingArtLoad(): void {
+    const deferred = Object.values(BUILDING_DEFINITIONS)
+      .map((definition) => definition.type)
+      .filter((type) => !isEagerBuildingArt(type));
+
+    const pending = deferred.filter((type) => !this.textures.exists(buildingAtlasKey(type)));
+    if (pending.length === 0) {
+      return;
+    }
+
+    const activated = new Set<BuildingType>();
+    const activate = (type: BuildingType): void => {
+      const atlasKey = buildingAtlasKey(type);
+      if (activated.has(type) || !this.textures.exists(atlasKey)) {
+        return;
+      }
+      activated.add(type);
+      // Same LINEAR filter BootScene.create() applies to the eager atlases -
+      // without it the 4x supersampled source point-samples and looks no
+      // better than 1x art.
+      this.textures.get(atlasKey).setFilter(Phaser.Textures.FilterMode.LINEAR);
+      publishBuildingIconsForTypes(this, [type]);
+      this.refreshVisualsForBuildingType(type);
+    };
+
+    for (const type of pending) {
+      const atlasKey = buildingAtlasKey(type);
+      this.load.atlas(atlasKey, `art/buildings/${type}.webp`, `art/buildings/${type}.json`);
+      // 'atlasjson', not 'atlas': load.atlas builds a MultiFile whose `type`
+      // is 'atlasjson' (verified in phaser/dist/phaser.js - MultiFile.call(
+      // loader, 'atlasjson', ...) and FILE_KEY_COMPLETE + type + '-' + key),
+      // so listening for 'filecomplete-atlas-<key>' would silently never fire.
+      this.load.once(`filecomplete-atlasjson-${atlasKey}`, () => activate(type));
+    }
+
+    // Belt-and-braces sweep: `activate` is idempotent, so this both covers any
+    // file whose keyed event we missed and keeps the feature working if a
+    // future Phaser version renames that event.
+    this.load.once('complete', () => {
+      for (const type of pending) {
+        activate(type);
+      }
+    });
+
+    this.load.start();
+  }
+
+  /** Re-points every placed building of `type` at its (now loaded) real texture. */
+  private refreshVisualsForBuildingType(type: BuildingType): void {
+    for (const visual of this.worldVisualsSystem.buildingVisuals.values()) {
+      if (visual.building.type !== type) {
+        continue;
+      }
+      const { atlasKey, frameName } = this.worldVisualsSystem.resolveBuildingTexture(visual.building);
+      visual.image.setTexture(atlasKey, frameName);
+    }
   }
 
   update(time: number, delta: number): void {

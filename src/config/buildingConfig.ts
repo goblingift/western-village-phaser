@@ -1435,6 +1435,26 @@ export function buildingAtlasKey(type: BuildingType): string {
  * base 'Intact' (open) frame, matching gateOpen's own "undefined defaults to
  * open" convention.
  */
+/**
+ * Phase 91 (asset load budget): whether this building's atlas has to be in
+ * memory before the first frame of gameplay, or can arrive in the background
+ * while the player plays.
+ *
+ * A building with no `unlockRequirement` is placeable at t=0, so its art must
+ * block startup. Every gated building needs population/net-worth/day progress
+ * the player physically cannot reach in the seconds a background load takes -
+ * the earliest gate is `populationAtLeast: 3`, which needs Houses placed AND
+ * built (construction ticks) first. 7 of 34 buildings are eager (0.28 MB); the
+ * other 27 (1.96 MB) are deferred.
+ *
+ * Deliberately derived from `unlockRequirement` rather than a hand-listed
+ * table, so adding a building can never accidentally omit it from loading -
+ * the worst case for a new always-unlocked building is that it loads eagerly.
+ */
+export function isEagerBuildingArt(type: BuildingType): boolean {
+  return BUILDING_DEFINITIONS[type].unlockRequirement === undefined;
+}
+
 export function buildingTextureKey(type: BuildingType, tier?: HouseTier, gateOpen?: boolean): string {
   if (type === BuildingType.House && tier && tier > 1) {
     return `Tier${tier}`;
