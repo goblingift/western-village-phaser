@@ -19,6 +19,8 @@ import {
   MOUNTED_COWBOY_MAX_PER_HORSERY,
   MOUNTED_COWBOY_TRAIN_COST,
   POPULATION_PER_HOUSE,
+  RIFLE_AMMO_PER_SHOT,
+  RIFLE_DAMAGE_MULTIPLIER,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
   WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
@@ -63,6 +65,7 @@ export enum BuildingType {
   Church = 'Church',
   Brothel = 'Brothel',
   MarketStall = 'MarketStall',
+  Gunsmith = 'Gunsmith',
 }
 
 /**
@@ -101,7 +104,11 @@ export type ResourceKey =
   | 'stone'
   | 'iron'
   | 'tools'
-  | 'coal';
+  | 'coal'
+  // Phase 94: the game's first tier-3 good - made from three ALREADY-PROCESSED
+  // goods (Tools + Wood + Leather) rather than from raw extraction, and the
+  // first resource that feeds combat instead of only ever feeding a sale.
+  | 'rifles';
 
 /**
  * Phase 32: per-unit cash value used to price the resource stock inside net
@@ -130,6 +137,11 @@ export const RESOURCE_VALUES: Record<ResourceKey, number> = {
   // between Stone and Iron (rarer terrain gate than Gravel, but still a raw
   // material rather than a manufactured good).
   coal: 4,
+  // Phase 94: above Tools (20), the previous most valuable good - it takes a
+  // Tool plus two other processed goods to make one, and it doubles as combat
+  // ammunition, so its stock is a real strategic choice rather than just cash
+  // in waiting.
+  rifles: 35,
 };
 
 export interface BuildingProduction {
@@ -252,7 +264,17 @@ export const HOUSE_TIER_CONFIG: Record<HouseTier, HouseTierConfig> = {
     needs: [
       { label: 'Water', options: { water: 0.4 } },
       { label: 'Meat or Eggs', options: { meat: 0.15, eggs: 0.15 } },
-      { label: 'Clothes or Liquor', options: { clothes: 0.05, liquor: 0.1 } },
+      /**
+       * Phase 94: Agave Juice added as a third option. It was the game's only
+       * pure dead end - produced by the Cactus Milker, sellable at the Saloon,
+       * and consumed by absolutely nothing - so a player who built the
+       * harvester had no reason to ever keep any. As a drink it belongs in the
+       * same "small luxury" group as Liquor; priced between Clothes and Liquor
+       * per unit since it's the cheapest of the three to make. Options are
+       * tried in declared key order, so a household still prefers Clothes,
+       * then Liquor, and only falls back to Agave Juice.
+       */
+      { label: 'Clothes, Liquor or Agave Juice', options: { clothes: 0.05, liquor: 0.1, agaveJuice: 0.15 } },
     ],
     requiresChurch: true,
   },
@@ -1235,6 +1257,35 @@ export const BUILDING_DEFINITIONS: Record<BuildingType, BuildingDefinition> = {
     unlockRequirement: { populationAtLeast: 12 },
   },
   /**
+   * Phase 94: the game's first TIER-3 processor. Every other chain in the game
+   * is exactly two steps deep (raw material -> one processor -> sell), and
+   * nothing anywhere consumed a processed good to make something else - so the
+   * Blacksmith's Tools, the Sewery's Clothes and the WoodCutter's Wood were all
+   * terminal. The Gunsmith consumes three ALREADY-PROCESSED goods at once,
+   * which makes it the first building whose input side depends on three
+   * separate chains running at the same time (Stone/Iron/Coal -> Blacksmith,
+   * Trees -> Forestry -> WoodCutter, Cows -> Cow Ranch -> leather).
+   *
+   * Output rate is deliberately low (0.5/tick, the slowest producer in the
+   * game): one Rifle takes 2 ticks and consumes 2 Tools, 4 Wood and 2 Leather
+   * along the way, and Rifles are what arm the town's defense (see
+   * RIFLE_DAMAGE_MULTIPLIER). Gated above Blacksmith's own population 12,
+   * since its inputs presuppose that whole chain already running.
+   */
+  [BuildingType.Gunsmith]: {
+    type: BuildingType.Gunsmith,
+    label: 'Gunsmith',
+    cost: 240,
+    materials: { wood: 8, tools: 3 },
+    size: { width: 2, height: 2 },
+    color: 0x6d4c41,
+    category: BuildingCategory.Industry,
+    upkeep: 2,
+    production: { inputs: { tools: 1, wood: 2, leather: 1 }, outputs: { rifles: 0.5 } },
+    maxHp: 80,
+    unlockRequirement: { populationAtLeast: 14 },
+  },
+  /**
    * Phase 51: Trading Post & Fluctuating Prices. A staffed, no-production
    * commerce building like Supermarket/Saloon/Bank, but instead of a fixed
    * per-type rate table it exposes per-resource manual sell orders
@@ -1408,7 +1459,7 @@ export function getWorkersRequired(type: BuildingType): number {
  * BuildingProduction because selling reads/writes the resource pool and
  * Money directly rather than following the input->output production shape.
  */
-export type SupermarketSellableKey = 'meat' | 'eggs' | 'potatoes' | 'wood' | 'clothes' | 'tools';
+export type SupermarketSellableKey = 'meat' | 'eggs' | 'potatoes' | 'wood' | 'clothes' | 'tools' | 'rifles';
 
 export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: number; price: number }> = {
   meat: { amount: 2, price: 5 },
@@ -1422,6 +1473,13 @@ export const SUPERMARKET_SELL_RATES: Record<SupermarketSellableKey, { amount: nu
   // hardcoding a second table, per the "widen the union, don't hardcode"
   // approach Phase 26 established for this exact table.
   tools: { amount: 2, price: 20 },
+  /**
+   * Phase 94: 1/tick, not 2 - a Rifle is the deepest thing the economy can
+   * make and is also this town's ammunition, so selling it is deliberately a
+   * slower drip than any other good. That's the whole tension: every Rifle on
+   * the shelf is either $35 or a 50%-harder-hitting defense, never both.
+   */
+  rifles: { amount: 1, price: 35 },
 };
 
 /**
@@ -1935,6 +1993,7 @@ export const RESOURCE_LABELS: Record<ResourceKey, string> = {
   iron: 'Iron',
   tools: 'Tools',
   coal: 'Coal',
+  rifles: 'Rifles',
 };
 
 /** Exported (Phase 37): also used to format a building's `materials` cost for tooltips/the building bar. */
@@ -2029,6 +2088,9 @@ export function describeBuilding(definition: BuildingDefinition): string {
   }
   if (definition.type === BuildingType.Watchtower) {
     parts.push(`Auto-fires ${WATCHTOWER_DAMAGE} dmg at the nearest raider within ${WATCHTOWER_RANGE_TILES} tiles`);
+    parts.push(
+      `x${RIFLE_DAMAGE_MULTIPLIER} damage while Rifles are in stock (every shot in town spends ${RIFLE_AMMO_PER_SHOT} Rifles)`,
+    );
   }
   if (definition.type === BuildingType.House) {
     parts.push(

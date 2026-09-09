@@ -48,6 +48,7 @@ import {
   MOUNTED_COWBOY_TRAIN_TICKS,
   PRODUCTION_STALL_NOTIFY_TICKS,
   REPAIR_COST_FRACTION,
+  RIFLE_AMMO_PER_SHOT,
   RunMode,
   STARTING_MONEY,
   THREAT_NET_WORTH_FULL,
@@ -164,6 +165,8 @@ export interface Resources {
   iron: number;
   tools: number;
   coal: number;
+  /** Phase 94: tier-3 manufactured good; sellable AND consumable as combat ammunition. */
+  rifles: number;
 }
 
 /**
@@ -266,6 +269,7 @@ function emptyResources(): Resources {
     iron: 0,
     tools: 0,
     coal: 0,
+    rifles: 0,
   };
 }
 
@@ -3601,6 +3605,24 @@ export function tickTimer(): void {
  * legitimate strategies, and losing a building to a raid is a visible hit to
  * the number the player is graded on.
  */
+/**
+ * Phase 94: spends one shot's worth of Rifles if the town has any, returning
+ * whether the shot is armed. Called once per fired shot from MainScene's
+ * combat resolution (units and Watchtowers alike).
+ *
+ * Deliberately does NOT emit 'resources-changed': combat resolution rides the
+ * production tick, which emits it once at the end anyway, and firing a
+ * 15-shot volley should not push 15 HUD refreshes through the event bus.
+ */
+export function consumeRifleAmmo(amount: number = RIFLE_AMMO_PER_SHOT): boolean {
+  if (resources.rifles < amount) {
+    return false;
+  }
+  resources.rifles = Math.round((resources.rifles - amount) * 1000) / 1000;
+  addConsumedThisTick('rifles', amount);
+  return true;
+}
+
 export function computeNetWorth(): NetWorthBreakdown {
   const round2 = (n: number) => Math.round(n * 100) / 100;
 

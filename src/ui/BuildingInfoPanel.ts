@@ -44,6 +44,7 @@ import {
   MOUNTED_COWBOY_TRAIN_COST,
   TRADING_POST_DEFAULT_AMOUNT,
   TRADING_POST_DEFAULT_THRESHOLD,
+  RIFLE_DAMAGE_MULTIPLIER,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
   WATER_DEPENDENT_CROP_MAX_DISTANCE_TILES,
@@ -218,6 +219,15 @@ export class BuildingInfoPanel {
     const watchtowerText = isWatchtower
       ? `Range: ${WATCHTOWER_RANGE_TILES} tiles | Damage: ${WATCHTOWER_DAMAGE}/shot`
       : null;
+    // Phase 94: whether the town's shots are currently rifle-armed. Shown on
+    // the Watchtower (the only always-on shooter a player can click) rather
+    // than invented as a new HUD element - the multiplier is town-wide and
+    // applies to units too, which the wording says explicitly.
+    const ammoText = isWatchtower
+      ? getResources().rifles > 0
+        ? `Ammo: Rifles in stock - every shot in town hits for x${RIFLE_DAMAGE_MULTIPLIER}`
+        : 'Ammo: no Rifles - shots hit at base damage (build a Gunsmith)'
+      : null;
     const saleText = isSupermarket
       ? this.formatSaleText(this.selected.lastSale, this.selected, workersRequired)
       : isMarketStall
@@ -387,6 +397,7 @@ export class BuildingInfoPanel {
       ${constructionText ? `<div>${constructionText}</div>` : ''}
       ${statusText ? `<div>${statusText}</div>` : ''}
       ${watchtowerText ? `<div>${watchtowerText}</div>` : ''}
+      ${ammoText ? `<div>${ammoText}</div>` : ''}
       ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}
       ${saleText ? `<div>${saleText}</div>` : ''}
       ${harvestStatus ? `<div${harvestStatus.blocked ? ' class="hp-disabled"' : ''}>${harvestStatus.text}</div>` : ''}

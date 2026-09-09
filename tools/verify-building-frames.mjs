@@ -91,9 +91,11 @@ const BUILDING_SIZES = {
   Brothel: { w: 2, h: 2 },
   // Phase 92: always-unlocked basic-goods seller, the entry point to the sell economy.
   MarketStall: { w: 1, h: 1 },
+  // Phase 94: tier-3 processor (Tools + Wood + Leather -> Rifles).
+  Gunsmith: { w: 2, h: 2 },
 };
 
-const expectedTypeCount = 35;
+const expectedTypeCount = 36;
 const typeNames = Object.keys(BUILDING_SIZES);
 if (typeNames.length !== expectedTypeCount) {
   console.error(

@@ -161,9 +161,9 @@ const ASSET_CHECKS = [
   },
   {
     file: 'public/art/resource-icons-atlas.webp',
-    expectedWidth: 720,
+    expectedWidth: 768,
     expectedHeight: 48,
-    note: '15 resource icon frames x 48x48px each (12x12 x 4x ART_SCALE, one per ResourceKey)',
+    note: '16 resource icon frames x 48x48px each (12x12 x 4x ART_SCALE, one per ResourceKey)',
   },
 ];
 

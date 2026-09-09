@@ -30,7 +30,7 @@ const repoRoot = join(__dirname, '..');
 // via setDisplaySize back to real 12x12 on-screen size.
 const ICON_SIZE = 12 * 4;
 
-// Mirrors buildingConfig.ts's ResourceKey union exactly (15 entries).
+// Mirrors buildingConfig.ts's ResourceKey union exactly (16 entries).
 const RESOURCE_KEYS = [
   'rawMeat',
   'meat',
@@ -47,6 +47,8 @@ const RESOURCE_KEYS = [
   'iron',
   'tools',
   'coal',
+  // Phase 94: tier-3 manufactured good (Gunsmith) that doubles as ammunition.
+  'rifles',
 ];
 
 const ATLAS_CHECKS = [

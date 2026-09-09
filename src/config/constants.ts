@@ -252,6 +252,25 @@ export const WATCHTOWER_RANGE_TILES = 6;
 export const WATCHTOWER_DAMAGE = 6;
 
 /**
+ * Phase 94: Rifles as ammunition - the link between the economy and combat.
+ *
+ * Until now defense drew on the economy only as a flat money+Tools cost at
+ * training time; nothing you produced afterwards made your town fight better.
+ * Every shot fired by a unit or a Watchtower now consumes RIFLE_AMMO_PER_SHOT
+ * Rifles if any are in stock, and hits for RIFLE_DAMAGE_MULTIPLIER times its
+ * normal damage when it does. Running dry is not a failure state - shots
+ * simply fall back to their base damage - so a town with no Gunsmith plays
+ * exactly as it did before this phase.
+ *
+ * 0.05/shot is deliberately small: a Gunsmith making 0.5 Rifles/tick sustains
+ * ~10 armed shots per tick, comfortably arming a mid-size garrison, so the
+ * interesting decision is Rifles-as-ammo versus Rifles-as-$35-each at the
+ * Supermarket rather than micro-managing a scarce magazine.
+ */
+export const RIFLE_DAMAGE_MULTIPLIER = 1.5;
+export const RIFLE_AMMO_PER_SHOT = 0.05;
+
+/**
  * Phase 39: Endless Mode & Difficulty Select. Difficulty is a small runtime
  * multiplier bundle rather than mutated base constants - everything above
  * this line stays the Normal baseline, and gameState reads whichever

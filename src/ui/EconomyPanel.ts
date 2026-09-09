@@ -8,6 +8,7 @@ import {
   ResourceKey,
   isMarketableResource,
 } from '../config/buildingConfig';
+import { RIFLE_AMMO_PER_SHOT, RIFLE_DAMAGE_MULTIPLIER } from '../config/constants';
 import { getResourceConsumers, getResourceProducerLabels } from '../config/resourceGraph';
 import { gameEvents } from '../state/gameEvents';
 import { getResourceTrends, getResources } from '../state/gameState';
@@ -133,6 +134,11 @@ export class EconomyPanel {
         <tr><th>Good</th><th>Stock</th><th>Rate</th><th>Price now</th><th>Sold at</th></tr>
         ${sellable.map((key) => this.renderSellableRow(key)).join('')}
       </table>
+      <div class="economy-note">
+        Rifles are the exception: they sell for the most of anything, but every shot your units and
+        Watchtowers fire spends ${RIFLE_AMMO_PER_SHOT} of one to hit ${RIFLE_DAMAGE_MULTIPLIER}x as hard.
+        Selling your armoury is a real decision, not free money.
+      </div>
       <h3>Goods with no buyer (inputs only)</h3>
       <div class="economy-note">
         These are never worth money directly &mdash; they only matter as inputs to something else,

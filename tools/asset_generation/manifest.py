@@ -136,6 +136,11 @@ BUILDINGS = Category(
               "Small frontier chapel — steeple with a cross, arched window, double doors."),
         Frame("building-Brothel", 64, 64, 1024,
               "Two-storey false front, balcony, hanging lantern, upstairs window row, plain double doors, rose/dusky-pink accent."),
+        Frame("building-Gunsmith", 64, 64, 1024,
+              "Frontier gunsmith workshop — a walled workshop with a wide front "
+              "window displaying racked long rifles, a workbench with gun parts, "
+              "a hanging painted rifle sign over the door. Clearly a weapons shop, "
+              "distinct from the Blacksmith's open anvil-and-forge look."),
         Frame("building-MarketStall", 32, 32, 512,
               "Tiny one-tile open market stall — a small wooden counter under a "
               "short striped awning, a couple of crates/baskets of eggs and produce "
@@ -151,8 +156,8 @@ BUILDINGS = Category(
     ),
 )
 
-if len(BUILDINGS.frames) != 38:
-    raise RuntimeError(f"Expected 38 building frames, found {len(BUILDINGS.frames)}")
+if len(BUILDINGS.frames) != 39:
+    raise RuntimeError(f"Expected 39 building frames, found {len(BUILDINGS.frames)}")
 
 # --- 3. Player units — one atlas per unit type (§5) --------------------------
 
@@ -360,11 +365,12 @@ RESOURCE_ICONS = Category(
         Frame("resource-icon-iron", 12, 12, 768, "Rust-orange ore chunk. Simplified/iconic HUD icon."),
         Frame("resource-icon-tools", 12, 12, 768, "Hammer or wrench silhouette. Simplified/iconic HUD icon."),
         Frame("resource-icon-coal", 12, 12, 768, "Black/dark-grey coal chunk. Simplified/iconic HUD icon."),
+        Frame("resource-icon-rifles", 12, 12, 768, "A single lever-action rifle in side profile, brown stock and dark barrel. Simplified/iconic HUD icon."),
     ),
 )
 
-if len(RESOURCE_ICONS.frames) != 15:
-    raise RuntimeError(f"Expected 15 resource icon frames, found {len(RESOURCE_ICONS.frames)}")
+if len(RESOURCE_ICONS.frames) != 16:
+    raise RuntimeError(f"Expected 16 resource icon frames, found {len(RESOURCE_ICONS.frames)}")
 
 # -----------------------------------------------------------------------------
 
@@ -389,5 +395,5 @@ CATEGORIES: tuple[Category, ...] = (
 CATEGORIES_BY_KEY = {c.key: c for c in CATEGORIES}
 
 _TOTAL_FRAMES = sum(len(c.frames) for c in CATEGORIES)
-if _TOTAL_FRAMES != 85:
-    raise RuntimeError(f"Expected 85 total frames across all categories, found {_TOTAL_FRAMES}")
+if _TOTAL_FRAMES != 87:
+    raise RuntimeError(f"Expected 87 total frames across all categories, found {_TOTAL_FRAMES}")

@@ -73,10 +73,11 @@ const BUILDINGS = [
   // Phase 92: always-unlocked basic-goods seller (real generated art shipped;
   // this entry exists so a placeholder regeneration stays complete).
   { type: 'MarketStall', w: 1, h: 1, category: 'Commerce' },
+  { type: 'Gunsmith', w: 2, h: 2, category: 'Industry' },
 ];
 
-if (BUILDINGS.length !== 35) {
-  throw new Error(`Expected 35 BuildingType entries, found ${BUILDINGS.length}. Update this table.`);
+if (BUILDINGS.length !== 36) {
+  throw new Error(`Expected 36 BuildingType entries, found ${BUILDINGS.length}. Update this table.`);
 }
 
 // Every frame name buildingTextureKey() can produce for a given building

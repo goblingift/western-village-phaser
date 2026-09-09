@@ -41,6 +41,7 @@ import {
   TILE_SIZE,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
+  RIFLE_DAMAGE_MULTIPLIER,
   WATCHTOWER_DAMAGE,
   WATCHTOWER_RANGE_TILES,
   WORLD_EVENT_BANNER_DURATION_MS,
@@ -105,6 +106,7 @@ import {
   getDayNumber,
   getDayPhase,
   getElapsedSeconds,
+  consumeRifleAmmo,
   getPlacedBuildings,
   isGameOver,
   runProductionTick,
@@ -2194,18 +2196,24 @@ export class MainScene extends Phaser.Scene {
     shooterPosition: { x: number; y: number },
   ): void {
     const config = UNIT_KIND_CONFIG[unit.kind];
+    // Phase 94: one ammo check per SHOT (not per damage application), so a
+    // Dynamiter's splash rides the same armed/unarmed decision as its primary
+    // hit rather than being charged twice or armed inconsistently.
+    const ammo = this.riflePowerMultiplier();
+    const damage = config.damage * ammo;
+    const splashDamage = config.splashDamage ? config.splashDamage * ammo : undefined;
 
     if (target.kind === 'wildlife') {
-      target.wildlife.hp -= config.damage;
+      target.wildlife.hp -= damage;
       this.spawnCowboyShotVisual(shooterPosition, target.wildlife.image);
-      if (unit.kind === 'dynamiter' && config.splashRadiusTiles && config.splashDamage) {
-        this.applyDynamiterSplash(target.wildlife.image.x, target.wildlife.image.y, target, config.splashRadiusTiles, config.splashDamage);
+      if (unit.kind === 'dynamiter' && config.splashRadiusTiles && splashDamage) {
+        this.applyDynamiterSplash(target.wildlife.image.x, target.wildlife.image.y, target, config.splashRadiusTiles, splashDamage);
       }
       return;
     }
 
     const primaryFaction = target.kind === 'raider' ? target.raider.faction : target.camp.faction;
-    const primaryDamage = config.damage * getFactionUnitDamageMultiplier(primaryFaction, unit.kind);
+    const primaryDamage = damage * getFactionUnitDamageMultiplier(primaryFaction, unit.kind);
 
     if (target.kind === 'raider') {
       target.raider.hp -= primaryDamage;
@@ -2214,11 +2222,27 @@ export class MainScene extends Phaser.Scene {
       this.raidSystem.damageCamp(target.camp, primaryDamage, shooterPosition);
     }
 
-    if (unit.kind === 'dynamiter' && config.splashRadiusTiles && config.splashDamage) {
+    if (unit.kind === 'dynamiter' && config.splashRadiusTiles && splashDamage) {
       const centerX = target.kind === 'raider' ? target.raider.image.x : target.camp.x;
       const centerY = target.kind === 'raider' ? target.raider.image.y : target.camp.y;
-      this.applyDynamiterSplash(centerX, centerY, target, config.splashRadiusTiles, config.splashDamage);
+      this.applyDynamiterSplash(centerX, centerY, target, config.splashRadiusTiles, splashDamage);
     }
+  }
+
+  /**
+   * Phase 94: Rifles are ammunition. Every shot (unit or Watchtower) spends
+   * RIFLE_AMMO_PER_SHOT Rifles if the town has any and hits
+   * RIFLE_DAMAGE_MULTIPLIER times as hard when it does; an empty armoury just
+   * returns 1 and the shot lands at its normal strength, so a town without a
+   * Gunsmith fights exactly as it did before this existed.
+   *
+   * This is the only place the economy touches combat resolution, and it's
+   * deliberately a buff-with-a-sink rather than a gate: gating training or
+   * firing on Rifles would soft-lock a town that lost its Gunsmith to a raid
+   * precisely when it needed to shoot back.
+   */
+  private riflePowerMultiplier(): number {
+    return consumeRifleAmmo() ? RIFLE_DAMAGE_MULTIPLIER : 1;
   }
 
   /**
@@ -2381,7 +2405,7 @@ export class MainScene extends Phaser.Scene {
       if (!target) {
         continue;
       }
-      target.hp -= WATCHTOWER_DAMAGE;
+      target.hp -= WATCHTOWER_DAMAGE * this.riflePowerMultiplier();
       this.spawnCowboyShotVisual(position, target.image);
       shots.push(position);
       anyHit = true;
