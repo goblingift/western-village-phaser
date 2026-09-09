@@ -100,6 +100,7 @@ import {
   TrainingQueueJob,
   UnitKind,
   WorkerPriority,
+  getConstructionTicks,
   getUnitCount,
   getUnitHpArray,
   getWorkersRequired,
@@ -1685,6 +1686,7 @@ export function placeBuilding(tileX: number, tileY: number, type: BuildingType):
     trainingQueue: [],
     gateOpen: type === BuildingType.WoodenGate ? true : undefined,
     ladyCount: type === BuildingType.Brothel ? 0 : undefined,
+    constructionTicksRemaining: getConstructionTicks(type),
   };
 
   for (let y = tileY; y < tileY + height; y++) {
@@ -2687,7 +2689,11 @@ function assignWorkforce(): void {
   // House-derived sum, never replacing it.
   totalPopulation =
     placedBuildings
-      .filter((building) => building.type === BuildingType.House)
+      .filter(
+        (building) =>
+          building.type === BuildingType.House &&
+          !(building.constructionTicksRemaining && building.constructionTicksRemaining > 0),
+      )
       .reduce((sum, building) => sum + HOUSE_TIER_CONFIG[building.houseTier].population, 0) +
     getActivePrestigeModifiers().permanentPopulationBonus;
 
@@ -2703,6 +2709,15 @@ function assignWorkforce(): void {
     // A 0 HP building has no one working in it; recomputed every tick, so this
     // also covers a building that just dropped to 0 HP mid-game.
     if (building.hp <= 0) {
+      building.assignedWorkers = 0;
+      building.staffed = false;
+      continue;
+    }
+
+    // Construction mechanic: a building still being built has no workers
+    // yet and doesn't compete for the population pool - it isn't producing
+    // anything to staff.
+    if (building.constructionTicksRemaining && building.constructionTicksRemaining > 0) {
       building.assignedWorkers = 0;
       building.staffed = false;
       continue;
@@ -2979,6 +2994,9 @@ function runHouseNeeds(): void {
       continue;
     }
     if (building.hp <= 0 || building.disabled) {
+      continue;
+    }
+    if (building.constructionTicksRemaining && building.constructionTicksRemaining > 0) {
       continue;
     }
 
@@ -3290,6 +3308,31 @@ function runBankInterest(): void {
   }
 }
 
+/**
+ * Construction mechanic: counts down every building's constructionTicksRemaining
+ * by one, deleting the field (not zeroing it) the instant it reaches 0 -
+ * `undefined` is the "fully built" steady state resolveBuildingTexture/
+ * assignWorkforce/runUpkeep all already check for. Fires a one-time info
+ * notification on completion.
+ */
+function runConstructionProgress(): void {
+  for (const building of placedBuildings) {
+    if (building.constructionTicksRemaining === undefined || building.constructionTicksRemaining <= 0) {
+      continue;
+    }
+    building.constructionTicksRemaining -= 1;
+    if (building.constructionTicksRemaining <= 0) {
+      delete building.constructionTicksRemaining;
+      addNotification(
+        `${BUILDING_DEFINITIONS[building.type].label} finished construction`,
+        'info',
+        elapsedSeconds,
+        building.id,
+      );
+    }
+  }
+}
+
 /** Phase 44: which of a production building's required inputs are currently short, for the stall notification's message. */
 function describeMissingInputs(inputs: Partial<Record<ResourceKey, number>>): string {
   return (Object.entries(inputs) as [ResourceKey, number][])
@@ -3331,6 +3374,10 @@ export function runProductionTick(): void {
   runWorldEventsTick(elapsedSeconds);
 
   runBankInterest();
+  // Construction mechanic: decremented before assignWorkforce so a building
+  // that finishes construction THIS tick is immediately eligible for
+  // staffing/production the same tick, not one tick late.
+  runConstructionProgress();
   assignWorkforce();
   runUpkeep();
   runTrainingQueues();
@@ -3348,6 +3395,12 @@ export function runProductionTick(): void {
     if (building.hp <= 0) {
       building.active = false;
       recordProductivityTick(building.id, false, 'Destroyed');
+      continue;
+    }
+
+    if (building.constructionTicksRemaining && building.constructionTicksRemaining > 0) {
+      building.active = false;
+      recordProductivityTick(building.id, false, 'Under construction');
       continue;
     }
 

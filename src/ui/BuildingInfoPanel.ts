@@ -166,9 +166,19 @@ export class BuildingInfoPanel {
     const isWoodenGate = this.selected.type === BuildingType.WoodenGate;
     const isChurch = this.selected.type === BuildingType.Church;
     const isBrothel = this.selected.type === BuildingType.Brothel;
+    // Construction mechanic: while under construction, none of the normal
+    // staffed/production/understaffed status text applies yet - a single
+    // ticks-remaining line replaces it entirely.
+    const isUnderConstruction = (this.selected.constructionTicksRemaining ?? 0) > 0;
+    const constructionText = isUnderConstruction
+      ? `Under construction: ${this.selected.constructionTicksRemaining} tick${this.selected.constructionTicksRemaining === 1 ? '' : 's'} remaining`
+      : null;
+
     // Harvesters (Forestry, Cactus Milker) have no `production` block but are
     // still production buildings from the player's point of view.
-    const statusText = production || definition.harvest
+    const statusText = isUnderConstruction
+      ? null
+      : production || definition.harvest
       ? `Production: ${this.selected.active ? 'On' : 'Off'}`
       : isBarracks || isHorsery || isBank || isTradingPost || isChurch || isBrothel
         ? `Staffed: ${this.selected.staffed ? 'Active' : `Inactive (${this.formatUnderstaffedReason(this.selected, workersRequired)})`}`
@@ -189,7 +199,12 @@ export class BuildingInfoPanel {
     // cause; harvesters get the equivalent detail from describeHarvestStatus
     // instead, so this is gated to non-harvest production buildings.
     const understaffedText =
-      production && !definition.harvest && workersRequired > 0 && !this.selected.staffed && this.selected.hp > 0
+      !isUnderConstruction &&
+      production &&
+      !definition.harvest &&
+      workersRequired > 0 &&
+      !this.selected.staffed &&
+      this.selected.hp > 0
         ? `Understaffed: ${this.formatUnderstaffedReason(this.selected, workersRequired)}`
         : null;
     const watchtowerText = isWatchtower
@@ -359,6 +374,7 @@ export class BuildingInfoPanel {
     this.panel.innerHTML = `
       <strong>${definition.label}</strong>
       <div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${hpText}</div>
+      ${constructionText ? `<div>${constructionText}</div>` : ''}
       ${statusText ? `<div>${statusText}</div>` : ''}
       ${watchtowerText ? `<div>${watchtowerText}</div>` : ''}
       ${upkeepText ? `<div${this.selected.disabled ? ' class="hp-disabled"' : ''}>${upkeepText}</div>` : ''}

@@ -19,6 +19,15 @@ export const MAP_HEIGHT_TILES = 45;
 export const VIEWPORT_WIDTH = 960;
 export const VIEWPORT_HEIGHT = 640;
 export const PRODUCTION_TICK_MS = 2000;
+// Construction mechanic (2026-09-09): how many production ticks a freshly
+// placed building spends inert/under-construction before it starts
+// functioning - see buildingConfig.ts's getConstructionTicks. 3 ticks = 6s
+// for a 1x1, 6 ticks = 12s for a 2x2 - short enough not to feel like a
+// second resource sink on top of cost/materials, long enough that the
+// Construction25/50/75 sprite frames are actually visible before the
+// building finishes.
+export const CONSTRUCTION_TICKS_1X1 = 3;
+export const CONSTRUCTION_TICKS_2X2 = 6;
 // Phase 32: raised from 500 now that upkeep (per-tick drain), repairs and
 // rebuilding after destruction all compete for the same starting purse.
 export const STARTING_MONEY = 1800;

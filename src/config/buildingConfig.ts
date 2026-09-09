@@ -3,6 +3,8 @@ import {
   BRAWLER_MAX_PER_BARRACKS,
   BRAWLER_TRAIN_COST,
   CHURCH_BASE_RADIUS_TILES,
+  CONSTRUCTION_TICKS_1X1,
+  CONSTRUCTION_TICKS_2X2,
   CHURCH_MAX_CLERGY,
   CHURCH_NUN_COST,
   CHURCH_PRIEST_COST,
@@ -519,6 +521,52 @@ export interface PlacedBuilding {
    * lastSale/lastHarvest's "absent means not yet meaningful" convention.
    */
   lastBrothelIncome?: { housesServed: number; income: number };
+  /**
+   * Construction mechanic (2026-09-09): ticks remaining before this building
+   * is actually finished. Set on placement to a footprint-scaled duration
+   * (getConstructionTicks), counted down once per production tick, and
+   * deleted (not just zeroed) the instant it reaches 0 - `undefined` is the
+   * steady-state "fully built" condition every pre-existing PlacedBuilding
+   * (and every older save) already satisfies, so this field being entirely
+   * absent needs no migration. While present and > 0, the building is inert:
+   * no production/harvest/sales, no staffing, no upkeep charged - but it
+   * still has real hp and can be damaged/destroyed by a raid mid-build,
+   * which is deliberate (a build-time vulnerability window), not an
+   * oversight. Drives the Construction25/50/75 sprite frame via
+   * resolveConstructionFrameName below.
+   */
+  constructionTicksRemaining?: number;
+}
+
+/**
+ * Construction mechanic: how many production ticks a freshly placed building
+ * spends "under construction" before it starts functioning, scaled by
+ * footprint size only (not per-building cost/complexity - a simple, uniform
+ * rule rather than a 34-entry tuning table) - a 1x1 building takes
+ * CONSTRUCTION_TICKS_1X1 ticks, anything larger (currently only 2x2 exists)
+ * takes CONSTRUCTION_TICKS_2X2.
+ */
+export function getConstructionTicks(type: BuildingType): number {
+  const { width, height } = BUILDING_DEFINITIONS[type].size;
+  return width * height > 1 ? CONSTRUCTION_TICKS_2X2 : CONSTRUCTION_TICKS_1X1;
+}
+
+/**
+ * Maps a building's remaining construction ticks to one of the
+ * Construction25/50/75 frame names (falling back through resolveBuildingFrameName's
+ * existence check to plain 'Intact' if that percentage's frame was never
+ * generated for this building type) - percent BUILT, not percent remaining,
+ * so a building that's almost done shows Construction75, not Construction25.
+ */
+export function constructionFrameNameForTicks(ticksRemaining: number, totalTicks: number): string {
+  const fractionBuilt = totalTicks > 0 ? 1 - ticksRemaining / totalTicks : 1;
+  if (fractionBuilt < 0.4) {
+    return 'Construction25';
+  }
+  if (fractionBuilt < 0.7) {
+    return 'Construction50';
+  }
+  return 'Construction75';
 }
 
 /**

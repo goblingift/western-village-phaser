@@ -22,6 +22,8 @@ import {
   animalTextureKey,
   buildingAtlasKey,
   buildingTextureKey,
+  constructionFrameNameForTicks,
+  getConstructionTicks,
   getWorkersRequired,
   resolveBuildingFrameName,
 } from '../../config/buildingConfig';
@@ -282,8 +284,20 @@ export class WorldVisualsSystem {
    */
   resolveBuildingTexture(building: PlacedBuilding): { atlasKey: string; frameName: string } {
     const atlasKey = buildingAtlasKey(building.type);
-    const baseFrame = buildingTextureKey(building.type, building.houseTier, building.gateOpen);
     const texture = this.scene.textures.get(atlasKey);
+
+    // Construction mechanic: while still being built, show the closest
+    // Construction25/50/75 frame instead of the normal tier/gate/damage
+    // frame - a half-built structure showing a Damaged skin (or a House
+    // mid-build already showing its Tier2 sprite) would read as nonsensical.
+    if (building.constructionTicksRemaining && building.constructionTicksRemaining > 0) {
+      const totalTicks = getConstructionTicks(building.type);
+      const constructionFrame = constructionFrameNameForTicks(building.constructionTicksRemaining, totalTicks);
+      const frameName = texture.has(constructionFrame) ? constructionFrame : 'Intact';
+      return { atlasKey, frameName };
+    }
+
+    const baseFrame = buildingTextureKey(building.type, building.houseTier, building.gateOpen);
     const { maxHp } = BUILDING_DEFINITIONS[building.type];
     const frameName = resolveBuildingFrameName(baseFrame, building.hp, maxHp, (f) => texture.has(f));
     return { atlasKey, frameName };
