@@ -223,6 +223,23 @@ export interface GameEventMap {
    * InputSystem is the sole listener and enters/exits Paste mode accordingly.
    */
   'blueprint-paste-selected': (blueprintId: string | null) => void;
+  /**
+   * Phase 99: Fence-Pen Assist. Emitted by BuildingInfoPanel's "Build Pen"
+   * button with the farm's buildingId (or `null` to cancel an armed pen);
+   * InputSystem is the sole listener and arms/cancels pen mode accordingly -
+   * the same shape 'blueprint-paste-selected' already uses, because
+   * mechanically a pen IS a blueprint stamp whose tiles are computed from the
+   * farm rather than captured from the map.
+   */
+  'pen-assist-requested': (buildingId: string | null) => void;
+  /**
+   * Phase 99: fired by InputSystem once pen mode actually arms/disarms (a
+   * commit, an Escape, the farm being removed), so BuildingInfoPanel's button
+   * label can never disagree with the scene's real state - the same
+   * "the owning system is the single source of truth" split
+   * 'rally-point-mode-changed' already uses.
+   */
+  'pen-assist-mode-changed': (buildingId: string | null) => void;
 }
 
 class GameEventBus extends Phaser.Events.EventEmitter {}

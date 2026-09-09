@@ -69,6 +69,7 @@ import {
   getLaborShortfall,
   getMoney,
   getNearestChurchDistance,
+  getPenLayout,
   getNearestStaffedWaterTowerDistance,
   getRepairCost,
   getAdjacencyStatus,
@@ -107,6 +108,15 @@ export class BuildingInfoPanel {
   private rallyPointArmedFor: string | null = null;
 
   /**
+   * Phase 99: the same mirror-only relationship for Fence-Pen Assist -
+   * InputSystem owns whether pen mode is armed; this only tracks it so the
+   * button reads "Build Pen" vs "Cancel Pen" correctly, including when the
+   * mode is cancelled from somewhere else entirely (Escape, entering
+   * placement/demolish mode, the farm being destroyed).
+   */
+  private penArmedFor: string | null = null;
+
+  /**
    * Phase 62: which tier's tab is currently open in a House's info panel.
    * Defaults to the building's own current tier every time selection changes
    * (a fresh look at a House should show what's actually happening, not
@@ -136,6 +146,10 @@ export class BuildingInfoPanel {
     gameEvents.on('gate-state-changed', () => this.render());
     gameEvents.on('rally-point-mode-changed', (buildingId: string | null) => {
       this.rallyPointArmedFor = buildingId;
+      this.render();
+    });
+    gameEvents.on('pen-assist-mode-changed', (buildingId: string | null) => {
+      this.penArmedFor = buildingId;
       this.render();
     });
 
@@ -466,6 +480,9 @@ export class BuildingInfoPanel {
     }
     if (animalConfig) {
       this.renderBuyAnimalButton(this.selected, animalConfig);
+      // Phase 99: right below Buy Animal, since the pen is the prerequisite
+      // that button most often reports as missing.
+      this.renderPenAssistButton(this.selected);
     }
     if (isBarracks) {
       this.renderTrainCowboyButton(this.selected);
@@ -1242,6 +1259,40 @@ export class BuildingInfoPanel {
         this.render();
       });
       this.panel.appendChild(clearButton);
+    }
+  }
+
+  /**
+   * Phase 99: Fence-Pen Assist. Offered contextually on any farm with an
+   * AnimalConfig - the only buildings an enclosure means anything for - and
+   * labelled with the real size and requirement, so the tool explains itself
+   * before it is armed rather than after.
+   *
+   * Both figures come from gameState's getPenLayout, which derives the
+   * required area from the same getRequiredEnclosureArea that buyAnimal's
+   * actual gate uses; nothing here re-derives the enclosure rules.
+   */
+  private renderPenAssistButton(building: PlacedBuilding): void {
+    const layout = getPenLayout(building);
+    if (!layout) {
+      return;
+    }
+    const isArmed = this.penArmedFor === building.id;
+
+    const button = document.createElement('button');
+    button.textContent = isArmed
+      ? 'Cancel Pen'
+      : `Build Pen (${layout.width}x${layout.height}, holds all animals)`;
+    button.addEventListener('click', () => {
+      gameEvents.emit('pen-assist-requested', isArmed ? null : building.id);
+    });
+    this.panel.appendChild(button);
+
+    if (isArmed) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'Move the ghost ring and click to build it - it stays around this farm';
+      this.panel.appendChild(hint);
     }
   }
 

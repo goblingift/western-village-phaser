@@ -25,13 +25,16 @@ import {
   isLinePlacementBuilding,
 } from '../../config/buildingConfig';
 import { playPlacementSound, playUiSound, playWorldSound } from '../../audio/sound';
-import { gameEvents } from '../../state/gameEvents';
+import { BuildingRemovedPayload, gameEvents } from '../../state/gameEvents';
 import { getVegetationAtTile } from '../../state/vegetation';
 import { BlueprintTile, getBlueprintById, saveBlueprint } from '../../state/blueprints';
 import {
   clearVegetationAt,
   demolishBuilding,
   getBuildingAtTile,
+  getBuildingById,
+  getPenLayout,
+  getPenPlanAt,
   getPlacedBuildings,
   getPlacementRejection,
   getPlacementWarning,
@@ -224,6 +227,18 @@ export class InputSystem {
   private blueprintPreviewImages: Phaser.GameObjects.Image[] = [];
   private blueprintCostText!: Phaser.GameObjects.Text;
 
+  /**
+   * Phase 99: Fence-Pen Assist. The farm a pen is currently being sited for,
+   * armed by BuildingInfoPanel's "Build Pen" button. Mechanically this is a
+   * blueprint stamp - it reuses the same ghost-preview pool, the same
+   * per-tile getPlacementRejection tint, and the same tile-by-tile
+   * placeBuildingAt commit - the only difference is that the tile list is
+   * COMPUTED from the farm's own enclosure requirement (gameState's
+   * getPenPlanAt) instead of captured off the map, so it is deliberately not a
+   * saved Blueprint record.
+   */
+  private penAssistBuildingId: string | null = null;
+
   constructor(scene: MainScene) {
     this.scene = scene;
   }
@@ -363,7 +378,13 @@ export class InputSystem {
         dragDistance > CLICK_MOVE_THRESHOLD;
       const isBlueprintCopyDragging =
         this.blueprintCopyMode && pointer.leftButtonDown() && dragDistance > CLICK_MOVE_THRESHOLD;
+      // Phase 99: Fence-Pen Assist is a FIFTH mode on the same gesture,
+      // resolved the same way - one more condition ahead of the chain. It is
+      // mutually exclusive with the blueprint modes by construction
+      // (armPenAssist/cancelPenAssist each cancel the others), so at most one
+      // of these three preview branches is ever live.
       const isBlueprintPasting = this.blueprintPasteId !== null;
+      const isPenPasting = this.penAssistBuildingId !== null;
 
       if (pointer.rightButtonDown() && this.scene.selectedType === null) {
         const dx = pointer.x - this.lastPointerX;
@@ -371,6 +392,8 @@ export class InputSystem {
         this.scene.cameras.main.scrollX -= dx;
         this.scene.cameras.main.scrollY -= dy;
         this.scene.minimapSystem.redrawMinimapViewportThrottled();
+      } else if (isPenPasting) {
+        this.updatePenPreview(pointer);
       } else if (isBlueprintPasting) {
         this.updateBlueprintPastePreview(pointer);
       } else if (isBlueprintCopyDragging) {
@@ -393,7 +416,7 @@ export class InputSystem {
       this.lastPointerX = pointer.x;
       this.lastPointerY = pointer.y;
       this.updateInfoText(pointer);
-      if (!isLineDragging && !isBlueprintPasting) {
+      if (!isLineDragging && !isBlueprintPasting && !isPenPasting) {
         this.updatePreview(pointer);
       }
     });
@@ -906,6 +929,12 @@ export class InputSystem {
     gameEvents.on('blueprint-paste-selected', (blueprintId: string | null) => {
       this.beginBlueprintPaste(blueprintId);
     });
+    // Phase 99: Fence-Pen Assist joins the same family - armed from
+    // BuildingInfoPanel's "Build Pen" button rather than a picker, but
+    // otherwise sharing every mechanism below.
+    gameEvents.on('pen-assist-requested', (buildingId: string | null) => {
+      this.armPenAssist(buildingId);
+    });
     // BuildingBar's Copy button has no direct reference to InputSystem (it
     // only ever talks to gameState/gameEvents), so it emits this bare toggle
     // rather than calling toggleBlueprintCopyMode() directly - the 'B'
@@ -919,20 +948,31 @@ export class InputSystem {
     gameEvents.on('select-building', () => {
       this.exitBlueprintCopyMode();
       this.cancelBlueprintPaste();
+      this.cancelPenAssist();
     });
     gameEvents.on('demolish-mode-changed', (active: boolean) => {
       if (active) {
         this.exitBlueprintCopyMode();
         this.cancelBlueprintPaste();
+        this.cancelPenAssist();
       }
     });
     gameEvents.on('cancel-placement', () => {
       this.exitBlueprintCopyMode();
       this.cancelBlueprintPaste();
+      this.cancelPenAssist();
     });
     gameEvents.on('game-reset', () => {
       this.exitBlueprintCopyMode();
       this.cancelBlueprintPaste();
+      this.cancelPenAssist();
+    });
+    // A pen is sited for one specific farm; if that farm is bulldozed or lost
+    // to a raid mid-siting there is nothing left to enclose.
+    gameEvents.on('building-removed', ({ building }: BuildingRemovedPayload) => {
+      if (this.penAssistBuildingId === building.id) {
+        this.cancelPenAssist();
+      }
     });
 
     this.scene.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
@@ -952,6 +992,10 @@ export class InputSystem {
       }
       if (this.blueprintPasteId !== null) {
         this.commitBlueprintPaste(pointer);
+        return;
+      }
+      if (this.penAssistBuildingId !== null) {
+        this.commitPenPlacement(pointer);
       }
     });
   }
@@ -1198,6 +1242,205 @@ export class InputSystem {
     }
 
     this.updateBlueprintPastePreview(pointer);
+  }
+
+  // ---------------------------------------------------------------------
+  // Fence-Pen Assist (Phase 99)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Arms pen mode for one farm (or cancels with `null`). Cancels every other
+   * left-drag mode on entry, exactly like beginBlueprintPaste does - the
+   * exclusivity rule setupBlueprints documents.
+   */
+  private armPenAssist(buildingId: string | null): void {
+    if (buildingId === null) {
+      this.cancelPenAssist();
+      return;
+    }
+    const building = getBuildingById(buildingId);
+    if (!building || getPenLayout(building) === null) {
+      this.cancelPenAssist();
+      return;
+    }
+    this.exitBlueprintCopyMode();
+    this.cancelBlueprintPaste();
+    gameEvents.emit('cancel-placement');
+    if (this.demolishMode) {
+      gameEvents.emit('demolish-mode-changed', false);
+    }
+    this.penAssistBuildingId = buildingId;
+    gameEvents.emit('pen-assist-mode-changed', buildingId);
+  }
+
+  private cancelPenAssist(): void {
+    if (this.penAssistBuildingId === null) {
+      return;
+    }
+    this.penAssistBuildingId = null;
+    this.hideBlueprintPastePreview();
+    gameEvents.emit('pen-assist-mode-changed', null);
+  }
+
+  /**
+   * Where the pen's outer top-left actually lands for a given cursor tile.
+   *
+   * The cursor drives the position (so a player can slide the ring to
+   * whichever side has room) but it is CLAMPED so the farm's whole footprint
+   * always stays inside the ring. A pen that doesn't contain its own farm is
+   * never a thing anyone wants, and clamping removes that entire failure mode
+   * rather than reporting it after the fact.
+   */
+  private resolvePenOrigin(
+    building: PlacedBuilding,
+    layout: { width: number; height: number },
+    cursorTileX: number,
+    cursorTileY: number,
+  ): { tileX: number; tileY: number } {
+    const footprint = BUILDING_DEFINITIONS[building.type].size;
+    // Interior spans origin+1 .. origin+size-2, and must cover the footprint.
+    const minX = building.tileX + footprint.width + 1 - layout.width;
+    const maxX = building.tileX - 1;
+    const minY = building.tileY + footprint.height + 1 - layout.height;
+    const maxY = building.tileY - 1;
+
+    // Prefer an origin that also keeps the whole ring on the map, but only
+    // within the containment range above - if a farm sits so close to an edge
+    // that the two ranges don't overlap, containment wins and the preview
+    // honestly shows the off-map side as blocked, rather than silently sliding
+    // the pen off its own farm.
+    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+    const boundedMinX = Math.min(maxX, Math.max(minX, 0));
+    const boundedMaxX = Math.max(minX, Math.min(maxX, MAP_WIDTH_TILES - layout.width));
+    const boundedMinY = Math.min(maxY, Math.max(minY, 0));
+    const boundedMaxY = Math.max(minY, Math.min(maxY, MAP_HEIGHT_TILES - layout.height));
+
+    return {
+      tileX: clamp(cursorTileX, Math.min(boundedMinX, boundedMaxX), Math.max(boundedMinX, boundedMaxX)),
+      tileY: clamp(cursorTileY, Math.min(boundedMinY, boundedMaxY), Math.max(boundedMinY, boundedMaxY)),
+    };
+  }
+
+  /**
+   * Ghost preview of the computed fence ring, reusing the blueprint paste's
+   * pooled images, per-tile green/red `getPlacementRejection` tint and cost
+   * tag verbatim - the only additions are the clamped origin and the live
+   * enclosed-area readout.
+   *
+   * The readout's numbers come from gameState's getPenPlanAt, which derives
+   * the requirement from the same getRequiredEnclosureArea that buyAnimal's
+   * real gate uses, so "N more enclosed tiles needed" cannot disagree with the
+   * message the info panel will show once the pen is built.
+   */
+  private updatePenPreview(pointer: Phaser.Input.Pointer): void {
+    if (this.penAssistBuildingId === null) {
+      return;
+    }
+    const building = getBuildingById(this.penAssistBuildingId);
+    const layout = building ? getPenLayout(building) : null;
+    if (!building || !layout) {
+      this.cancelPenAssist();
+      return;
+    }
+
+    const cursor = this.pointerToTile(pointer);
+    const origin = this.resolvePenOrigin(building, layout, cursor.tileX, cursor.tileY);
+    const plan = getPenPlanAt(building, origin.tileX, origin.tileY);
+    if (!plan) {
+      this.cancelPenAssist();
+      return;
+    }
+
+    let validCount = 0;
+    let blockedCount = 0;
+    let totalMoney = 0;
+    const totalMaterials: Partial<Record<ResourceKey, number>> = {};
+
+    plan.fenceTiles.forEach((tile, index) => {
+      const rejection = getPlacementRejection(tile.tileX, tile.tileY, BuildingType.Fence);
+      const image = this.getOrCreateBlueprintPreviewImage(index, BuildingType.Fence);
+      image.setPosition(tile.tileX * TILE_SIZE, tile.tileY * TILE_SIZE);
+      image.setVisible(true);
+      image.setTint(rejection === null ? VALID_TINT : INVALID_TINT);
+
+      if (rejection === null) {
+        validCount++;
+        const definition = BUILDING_DEFINITIONS[BuildingType.Fence];
+        totalMoney += definition.cost;
+        if (definition.materials) {
+          for (const [key, amount] of Object.entries(definition.materials) as [ResourceKey, number][]) {
+            totalMaterials[key] = (totalMaterials[key] ?? 0) + amount;
+          }
+        }
+      } else {
+        blockedCount++;
+      }
+    });
+
+    for (let index = plan.fenceTiles.length; index < this.blueprintPreviewImages.length; index++) {
+      this.blueprintPreviewImages[index].setVisible(false);
+    }
+
+    const costLabel =
+      Object.keys(totalMaterials).length > 0
+        ? `$${totalMoney} + ${formatResourceMap(totalMaterials)}`
+        : `$${totalMoney}`;
+    const shortfall = plan.requiredArea - plan.enclosedTiles;
+    const areaLabel =
+      blockedCount > 0
+        ? `${blockedCount} ring tile${blockedCount === 1 ? '' : 's'} blocked - pen will not close here`
+        : shortfall > 0
+          ? `${shortfall} more enclosed tile${shortfall === 1 ? '' : 's'} needed`
+          : `encloses ${plan.enclosedTiles}/${plan.requiredArea} tiles - fits all animals`;
+
+    this.blueprintCostText.setText(`Pen: ${validCount}/${plan.fenceTiles.length} fence - ${costLabel} - ${areaLabel}`);
+    this.blueprintCostText.setPosition(plan.originTileX * TILE_SIZE, (plan.originTileY - 1) * TILE_SIZE - 4);
+    this.blueprintCostText.setVisible(true);
+    this.placementHintText.setVisible(false);
+    this.scene.worldVisualsSystem.clearHarvestRing();
+  }
+
+  /**
+   * Commits the ring one tile at a time through the shared placeBuildingAt
+   * primitive - commitBlueprintPaste's exact semantic, including the "a pen
+   * that outruns the player's funds stops placing partway rather than
+   * overspending or aborting" rule, since each call re-checks affordability
+   * against whatever remains at that point.
+   *
+   * Unlike blueprint paste (which stays armed for repeat stamping), pen mode
+   * disarms after a commit: a farm needs exactly one pen, so staying armed
+   * would only invite a second, overlapping ring.
+   */
+  private commitPenPlacement(pointer: Phaser.Input.Pointer): void {
+    if (this.penAssistBuildingId === null) {
+      return;
+    }
+    const building = getBuildingById(this.penAssistBuildingId);
+    const layout = building ? getPenLayout(building) : null;
+    if (!building || !layout) {
+      this.cancelPenAssist();
+      return;
+    }
+
+    const cursor = this.pointerToTile(pointer);
+    const origin = this.resolvePenOrigin(building, layout, cursor.tileX, cursor.tileY);
+    const plan = getPenPlanAt(building, origin.tileX, origin.tileY);
+    if (!plan) {
+      this.cancelPenAssist();
+      return;
+    }
+
+    let placedCount = 0;
+    for (const tile of plan.fenceTiles) {
+      if (this.placeBuildingAtType(tile.tileX, tile.tileY, BuildingType.Fence)) {
+        placedCount++;
+      }
+    }
+
+    if (placedCount > 0) {
+      playPlacementSound();
+    }
+    this.cancelPenAssist();
   }
 
   setupBuildingSelection(): void {

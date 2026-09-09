@@ -2199,6 +2199,121 @@ function collectAdjacentRoadIds(building: PlacedBuilding): Set<string> {
 }
 
 /**
+ * Phase 99: Fence-Pen Assist. The geometry of a fence ring big enough to hold
+ * a farm's FULL animal capacity, so a player never has to reverse-engineer
+ * `ANIMAL_ENCLOSURE_TILES_PER_ANIMAL x maxAnimals` from a "too small" message.
+ *
+ * The required area comes from `getRequiredEnclosureArea` - the exact function
+ * `getEnclosureBuyStatus`/`buyAnimal` gate on - so the pen this suggests and
+ * the pen the game demands cannot disagree.
+ *
+ * A square interior is chosen deliberately over a tighter fitted rectangle:
+ * it is the cheapest perimeter for a given area (a 7x7 needs 32 fence tiles,
+ * a 4x13 covering the same area needs 38), it looks like a pen, and it makes
+ * the suggested size trivially predictable across farms.
+ *
+ * Note the farm's own footprint does NOT count toward the enclosed area - it
+ * self-blocks in `computeEnclosure`'s flood fill - so it is added on top of
+ * the required floor area here.
+ */
+export interface PenLayout {
+  /** Outer size of the ring, fence tiles included. */
+  width: number;
+  height: number;
+  requiredArea: number;
+}
+
+export function getPenLayout(building: PlacedBuilding): PenLayout | null {
+  const definition = BUILDING_DEFINITIONS[building.type];
+  const animalConfig = definition.animal;
+  if (!animalConfig) {
+    return null;
+  }
+
+  const requiredArea = getRequiredEnclosureArea(animalConfig.animalLabel, animalConfig.maxAnimals);
+  const footprint = definition.size;
+  const footprintArea = footprint.width * footprint.height;
+
+  let interior = Math.max(footprint.width, footprint.height, 1);
+  while (interior * interior - footprintArea < requiredArea) {
+    interior += 1;
+  }
+
+  return { width: interior + 2, height: interior + 2, requiredArea };
+}
+
+/**
+ * Phase 99: the concrete tile list for a pen ring whose OUTER top-left sits at
+ * (originTileX, originTileY), plus how much floor area it would actually
+ * enclose there.
+ *
+ * Perimeter tiles that already hold a wall segment are omitted rather than
+ * reported as blocked - extending or reusing an existing fence line is the
+ * common case, and `getPlacementRejection` would otherwise reject them as
+ * "Tile already occupied" and paint a perfectly good pen red.
+ *
+ * `enclosedTiles` predicts what `computeEnclosure` will report once the ring
+ * closes: interior tiles that are in bounds and hold no building. It uses the
+ * same "a building's footprint is not floor area" rule the flood fill itself
+ * uses, so the preview's number and the info panel's post-build number agree.
+ */
+export interface PenPlan {
+  originTileX: number;
+  originTileY: number;
+  width: number;
+  height: number;
+  fenceTiles: { tileX: number; tileY: number }[];
+  enclosedTiles: number;
+  requiredArea: number;
+}
+
+export function getPenPlanAt(building: PlacedBuilding, originTileX: number, originTileY: number): PenPlan | null {
+  const layout = getPenLayout(building);
+  if (!layout) {
+    return null;
+  }
+
+  const { width, height, requiredArea } = layout;
+  const fenceTiles: { tileX: number; tileY: number }[] = [];
+
+  const addPerimeterTile = (tileX: number, tileY: number): void => {
+    if (tileX < 0 || tileY < 0 || tileX >= MAP_WIDTH_TILES || tileY >= MAP_HEIGHT_TILES) {
+      return;
+    }
+    const occupant = getBuildingAtTile(tileX, tileY);
+    if (occupant && isWallSegment(occupant)) {
+      return;
+    }
+    fenceTiles.push({ tileX, tileY });
+  };
+
+  for (let dx = 0; dx < width; dx++) {
+    addPerimeterTile(originTileX + dx, originTileY);
+    addPerimeterTile(originTileX + dx, originTileY + height - 1);
+  }
+  for (let dy = 1; dy < height - 1; dy++) {
+    addPerimeterTile(originTileX, originTileY + dy);
+    addPerimeterTile(originTileX + width - 1, originTileY + dy);
+  }
+
+  let enclosedTiles = 0;
+  for (let dy = 1; dy < height - 1; dy++) {
+    for (let dx = 1; dx < width - 1; dx++) {
+      const tileX = originTileX + dx;
+      const tileY = originTileY + dy;
+      if (tileX < 0 || tileY < 0 || tileX >= MAP_WIDTH_TILES || tileY >= MAP_HEIGHT_TILES) {
+        continue;
+      }
+      if (getBuildingAtTile(tileX, tileY) === null) {
+        enclosedTiles += 1;
+      }
+    }
+  }
+
+  return { originTileX, originTileY, width, height, fenceTiles, enclosedTiles, requiredArea };
+}
+
+/**
  * Real Fence Enclosures: whether `building` (a farm) currently qualifies to
  * buy its NEXT animal - reads the cached enclosure (getEnclosureFor, never
  * re-runs the flood-fill here) and checks it's closed and has enough
