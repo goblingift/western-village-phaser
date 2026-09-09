@@ -29,9 +29,16 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-const SPRITE_SIZE = 18;
-const MOUNTED_WIDTH = 24;
-const MOUNTED_HEIGHT = 18;
+// Asset-pipeline rework (2026-09-09): these atlases are now 4x supersampled
+// (ART_SCALE, matching the buildings' treatment) and rendered via
+// setDisplaySize back down to their real 18x18/24x18 on-screen size - see
+// MainScene's spawnUnitOfKind, AmbientLifeSystem.spawnOneVillagerAt,
+// WorldVisualsSystem.redrawAnimalSprites. Expected sizes below are the
+// supersampled SOURCE resolution, not the on-screen size.
+const ART_SCALE = 4;
+const SPRITE_SIZE = 18 * ART_SCALE;
+const MOUNTED_WIDTH = 24 * ART_SCALE;
+const MOUNTED_HEIGHT = 18 * ART_SCALE;
 
 /**
  * One entry per atlas file this phase owns: which frame names it must

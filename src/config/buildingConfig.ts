@@ -1342,30 +1342,94 @@ export const BASE_MARKET_PRICES: Record<MarketableResourceKey, number> = MARKETA
   {} as Record<MarketableResourceKey, number>,
 );
 
-export const BUILDING_ATLAS_KEY = 'buildings-atlas';
+/**
+ * Asset-pipeline rework (2026-09-09): each building type has its OWN atlas
+ * file/texture instead of every building sharing one `buildings-atlas`
+ * (see docs/ASSET_GENERATION_CHECKLIST.md history and the AI art pipeline in
+ * tools/asset_generation/) - a per-building spriteset can carry its own
+ * Intact/Damaged/Ruined/Construction/Tier states as named frames within that
+ * one file, without those states colliding across every other building's
+ * frame-name space. BootScene.preload() loop-loads one of these per
+ * BuildingType.
+ */
+export function buildingAtlasKey(type: BuildingType): string {
+  return `building-atlas-${type}`;
+}
 
 /**
- * Phase 46: House is the only building type with more than one sprite frame -
- * `tier` is accepted for every type (so callers can just pass a
+ * Returns the BASE (undamaged, full-health) frame name within that
+ * building's own atlas - no longer prefixed with `building-${type}` since
+ * the atlas itself is now scoped to one building type, so that prefix would
+ * be redundant.
+ *
+ * Phase 46: House is the only building type with more than one BASE sprite
+ * frame - `tier` is accepted for every type (so callers can just pass a
  * PlacedBuilding's `houseTier` unconditionally) but only changes the key for
- * House at Tier 2/3; everything else always resolves to its single base
- * frame, exactly as before.
+ * House at Tier 2/3; House at Tier 1 (or no tier passed) and every other
+ * building type resolve to the universal 'Intact' base frame every
+ * per-building atlas is expected to carry.
  *
  * Phase 69: `gateOpen` is the same idea for WoodenGate - accepted for every
  * type (so callers can just pass a PlacedBuilding's `gateOpen` unconditionally
  * alongside `houseTier`) but only changes the key for WoodenGate, and only
  * when explicitly `false` (closed); `true`/`undefined` both resolve to the
- * base (open) frame, matching gateOpen's own "undefined defaults to open"
- * convention.
+ * base 'Intact' (open) frame, matching gateOpen's own "undefined defaults to
+ * open" convention.
  */
 export function buildingTextureKey(type: BuildingType, tier?: HouseTier, gateOpen?: boolean): string {
   if (type === BuildingType.House && tier && tier > 1) {
-    return `building-${type}-tier${tier}`;
+    return `Tier${tier}`;
   }
   if (type === BuildingType.WoodenGate && gateOpen === false) {
-    return `building-${type}-closed`;
+    return 'Closed';
   }
-  return `building-${type}`;
+  return 'Intact';
+}
+
+/**
+ * Damage-state suffix derived from a building's live hp/maxHp ratio - the
+ * same 3-band split ("Intact"/"Damaged"/"Ruined") the asset pipeline's
+ * tools/asset_generation/lib/post_process.py generates locally (free, no
+ * paid API call per state) for every building's spriteset. Not every
+ * building's atlas necessarily HAS the damage frames yet (real generation is
+ * incremental, one building at a time), so this is only ever a *candidate*
+ * suffix - see resolveBuildingFrameName below for the existence-checked
+ * fallback that actually decides what gets rendered.
+ */
+export function damageStateSuffix(hp: number, maxHp: number): '' | '-Damaged' | '-Ruined' {
+  if (maxHp <= 0) {
+    return '';
+  }
+  const ratio = hp / maxHp;
+  if (ratio < 0.34) {
+    return '-Ruined';
+  }
+  if (ratio < 0.67) {
+    return '-Damaged';
+  }
+  return '';
+}
+
+/**
+ * Combines a base frame name (from buildingTextureKey) with the hp-derived
+ * damage suffix, but only actually uses the damage-suffixed frame if it
+ * exists in the given atlas - `frameExists` is injected (rather than this
+ * function reaching into a Phaser Texture itself) so buildingConfig.ts stays
+ * scene/Phaser-free, matching every other pure derivation in this file.
+ * Falls back to the plain base frame for any building whose atlas hasn't had
+ * its Damaged/Ruined states generated yet - the whole point of this
+ * indirection is that a building's visual degrades gracefully rather than
+ * erroring or showing a missing-frame placeholder the moment its hp drops
+ * before its damage art exists.
+ */
+export function resolveBuildingFrameName(
+  baseFrame: string,
+  hp: number,
+  maxHp: number,
+  frameExists: (frameName: string) => boolean,
+): string {
+  const candidate = `${baseFrame}${damageStateSuffix(hp, maxHp)}`;
+  return frameExists(candidate) ? candidate : baseFrame;
 }
 
 /** Separate atlas from BUILDING_ATLAS_KEY: animals are a different asset class (small, per-instance, not per-tile). */

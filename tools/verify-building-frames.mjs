@@ -1,22 +1,37 @@
-// Phase 74 (buildings): verifies every frame name buildingTextureKey() can
-// produce (for every BuildingType, every relevant House tier, and both
-// WoodenGate open/closed states) actually exists in
-// public/art/buildings-atlas.json, AND that each frame's packed rectangle in
-// the JSON matches its expected pixel size (derived from the building's own
-// footprint * TILE_SIZE - 32x32 for 1x1, 64x64 for 2x2 - never hardcoded per
-// building). This is a separate, narrower check from
-// tools/verify-asset-dimensions.mjs (which only checks whole-PNG-file
-// dimensions) - an atlas PNG's overall size passing says nothing about
-// whether any individual packed frame is the right size or even present.
+// Verifies every frame name buildingTextureKey() can produce (base state,
+// House tier2/tier3, WoodenGate closed) actually exists in its OWN
+// per-building atlas JSON under public/art/buildings/<BuildingType>.json
+// (asset-pipeline rework, 2026-09-09 - each building now has its own
+// spriteset file instead of all 37 sharing one buildings-atlas.json).
+//
+// Size check is deliberately NOT an exact-pixel-match against the
+// footprint: building textures are rendered via `setDisplaySize()` (see
+// WorldVisualsSystem.createVisualForBuilding), so a 128x128 (4x
+// supersampled) or a 32x32 (1x, e.g. an untouched placeholder) source both
+// render correctly at the same on-screen tile footprint - source resolution
+// is decoupled from footprint by design. What WOULD still break the game:
+// (a) a frame whose size isn't a clean integer multiple of its building's
+// footprint aspect ratio (a distorted/stretched sprite), or (b) two frames
+// of the SAME building at different resolutions (a damage-state swap or
+// tier upgrade would visibly snap to a different apparent scale, since
+// Phaser's Image keeps whatever scaleX/scaleY setDisplaySize computed for
+// the frame present at creation time rather than recomputing it on
+// setFrame()/setTexture() - see resolveBuildingTexture's doc comment).
+// Both of those are exactly what's checked below.
 //
 // Usage: node tools/verify-building-frames.mjs
-// Exit code 0 = every expected frame exists with the correct size.
-// Exit code 1 = at least one frame is missing or the wrong size.
+// Exit code 0 = every building's atlas file exists with every expected frame
+// at the correct size (real building art beyond the required "Intact"/base
+// frame is optional - Damaged/Ruined/Construction*/Tier* frames are checked
+// ONLY if present, never required, since real generation lands one building
+// and one state at a time).
+// Exit code 1 = a building's atlas file is missing entirely, or an expected
+// frame is missing/wrong-size, or a present-but-nonstandard frame is the
+// wrong size for its declared dimensions.
 //
 // Mirrors tools/generate-placeholder-buildings.mjs's hand-transcribed
-// BUILDING_TYPES/size table (see that file's own doc comment for why this
-// can't just import buildingConfig.ts directly) - if a building is added,
-// removed, or resized, BOTH files need updating together.
+// BUILDING_SIZES table - if a building is added, removed, or resized, BOTH
+// files need updating together.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -76,96 +91,117 @@ if (typeNames.length !== expectedTypeCount) {
   process.exit(1);
 }
 
-/** Mirrors buildingTextureKey(type, tier, gateOpen) from buildingConfig.ts. */
+/** Mirrors buildingTextureKey(type, tier, gateOpen) from buildingConfig.ts - note the
+ * RETURN VALUE no longer includes a `building-${type}` prefix (the atlas itself is
+ * now scoped to one building type, so that prefix would be redundant). */
 function buildingTextureKey(type, tier, gateOpen) {
   if (type === 'House' && tier && tier > 1) {
-    return `building-${type}-tier${tier}`;
+    return `Tier${tier}`;
   }
   if (type === 'WoodenGate' && gateOpen === false) {
-    return `building-${type}-closed`;
+    return 'Closed';
   }
-  return `building-${type}`;
+  return 'Intact';
 }
 
-// Every frame name + expected size the running game can actually request.
-const expectedFrames = [];
-for (const [type, size] of Object.entries(BUILDING_SIZES)) {
-  expectedFrames.push({
-    name: buildingTextureKey(type),
-    width: size.w * TILE_SIZE,
-    height: size.h * TILE_SIZE,
-    note: `${type} base frame`,
-  });
+// Every REQUIRED frame name per type (base state, plus House/WoodenGate's
+// extra base-state variants) - every other building only requires 'Intact'.
+function requiredFrameNamesForType(type) {
+  const names = [buildingTextureKey(type)];
+  if (type === 'House') {
+    names.push(buildingTextureKey(type, 2), buildingTextureKey(type, 3));
+  }
+  if (type === 'WoodenGate') {
+    names.push(buildingTextureKey(type, undefined, false));
+  }
+  return names;
 }
-// House tier2/tier3 (buildingTextureKey ignores tier for every other type).
-expectedFrames.push({
-  name: buildingTextureKey('House', 2),
-  width: BUILDING_SIZES.House.w * TILE_SIZE,
-  height: BUILDING_SIZES.House.h * TILE_SIZE,
-  note: 'House tier 2 variant',
-});
-expectedFrames.push({
-  name: buildingTextureKey('House', 3),
-  width: BUILDING_SIZES.House.w * TILE_SIZE,
-  height: BUILDING_SIZES.House.h * TILE_SIZE,
-  note: 'House tier 3 variant',
-});
-// WoodenGate closed (gateOpen === false is the only state that changes the key).
-expectedFrames.push({
-  name: buildingTextureKey('WoodenGate', undefined, false),
-  width: BUILDING_SIZES.WoodenGate.w * TILE_SIZE,
-  height: BUILDING_SIZES.WoodenGate.h * TILE_SIZE,
-  note: 'WoodenGate closed variant',
-});
 
 function main() {
-  const atlasPath = join(repoRoot, 'public/art/buildings-atlas.json');
-  if (!existsSync(atlasPath)) {
-    console.error(`[FAIL] ${atlasPath} does not exist.`);
-    process.exit(1);
-  }
-
-  let atlas;
-  try {
-    atlas = JSON.parse(readFileSync(atlasPath, 'utf8'));
-  } catch (error) {
-    console.error(`[FAIL] Could not parse ${atlasPath} as JSON: ${error.message}`);
-    process.exit(1);
-  }
-
-  const frames = atlas.frames ?? {};
   let failed = false;
+  let totalRequiredChecked = 0;
+  let totalFramesChecked = 0;
 
-  for (const expected of expectedFrames) {
-    const found = frames[expected.name];
-    if (!found) {
-      console.error(`[FAIL] Missing frame "${expected.name}" (${expected.note}) in buildings-atlas.json.`);
+  for (const [type, size] of Object.entries(BUILDING_SIZES)) {
+    const pngPath = join(repoRoot, 'public/art/buildings', `${type}.png`);
+    const jsonPath = join(repoRoot, 'public/art/buildings', `${type}.json`);
+
+    if (!existsSync(pngPath)) {
+      console.error(`[FAIL] public/art/buildings/${type}.png does not exist.`);
       failed = true;
       continue;
     }
-    const { w, h } = found.frame ?? {};
-    if (w !== expected.width || h !== expected.height) {
-      console.error(
-        `[FAIL] Frame "${expected.name}" (${expected.note}): expected ${expected.width}x${expected.height}px, ` +
-          `found ${w}x${h}px.`,
-      );
+    if (!existsSync(jsonPath)) {
+      console.error(`[FAIL] public/art/buildings/${type}.json does not exist.`);
       failed = true;
       continue;
     }
-    console.log(`[OK]   "${expected.name}": ${w}x${h}px matches expected (${expected.note}).`);
+
+    let atlas;
+    try {
+      atlas = JSON.parse(readFileSync(jsonPath, 'utf8'));
+    } catch (error) {
+      console.error(`[FAIL] Could not parse public/art/buildings/${type}.json as JSON: ${error.message}`);
+      failed = true;
+      continue;
+    }
+
+    const frames = atlas.frames ?? {};
+    let buildingFailed = false;
+
+    // (1) every required frame name is present.
+    const requiredNames = requiredFrameNamesForType(type);
+    for (const name of requiredNames) {
+      totalRequiredChecked++;
+      if (!frames[name]) {
+        console.error(`[FAIL] ${type}.json: missing required frame "${name}".`);
+        failed = true;
+        buildingFailed = true;
+      }
+    }
+
+    // (2) every present frame's aspect ratio matches this building's real
+    // footprint (size.w : size.h) - catches a distorted/stretched sprite,
+    // independent of absolute resolution.
+    let referenceSize = null; // (3) every frame is the SAME size as every other for this building.
+    for (const [name, data] of Object.entries(frames)) {
+      totalFramesChecked++;
+      const { w, h } = data.frame ?? {};
+      if (!w || !h) {
+        console.error(`[FAIL] ${type}.json: frame "${name}" has no valid frame.w/frame.h.`);
+        failed = true;
+        buildingFailed = true;
+        continue;
+      }
+      if (w * size.h !== h * size.w) {
+        console.error(
+          `[FAIL] ${type}.json: frame "${name}" is ${w}x${h}px, which isn't ${size.w}:${size.h} aspect ratio ` +
+            `(${type}'s real footprint) - looks stretched/distorted.`,
+        );
+        failed = true;
+        buildingFailed = true;
+      }
+      if (referenceSize === null) {
+        referenceSize = { w, h, name };
+      } else if (w !== referenceSize.w || h !== referenceSize.h) {
+        console.error(
+          `[FAIL] ${type}.json: frame "${name}" is ${w}x${h}px but frame "${referenceSize.name}" (same building) ` +
+            `is ${referenceSize.w}x${referenceSize.h}px - every state frame for one building must render at the ` +
+            'SAME resolution, or swapping between them (e.g. a damage-state change) will visibly snap to a ' +
+            "different on-screen size (Phaser's setDisplaySize-derived scale is fixed at sprite-creation time, " +
+            'not recomputed on setFrame()/setTexture()).',
+        );
+        failed = true;
+        buildingFailed = true;
+      }
+    }
+
+    if (!buildingFailed) {
+      console.log(`[OK]   ${type}.json: ${Object.keys(frames).length} frame(s) at ${referenceSize.w}x${referenceSize.h}px, all present/consistent.`);
+    }
   }
 
-  // Also flag any frame in the JSON that no live BuildingType/variant
-  // actually maps to - not a hard failure (an atlas is allowed to have
-  // extra/unused frames), but worth surfacing since it usually means a stale
-  // or renamed entry.
-  const expectedNames = new Set(expectedFrames.map((f) => f.name));
-  const extraNames = Object.keys(frames).filter((name) => !expectedNames.has(name));
-  if (extraNames.length > 0) {
-    console.log(`[INFO] ${extraNames.length} frame(s) in the atlas are not referenced by buildingTextureKey(): ${extraNames.join(', ')}`);
-  }
-
-  console.log(`\nChecked ${expectedFrames.length} expected frame names against ${Object.keys(frames).length} atlas frames.`);
+  console.log(`\nChecked ${typeNames.length} building atlases: ${totalRequiredChecked} required frame-name checks, ${totalFramesChecked} frames size/consistency-verified.`);
 
   if (failed) {
     console.error('\nBuilding frame-name verification FAILED. See errors above.');

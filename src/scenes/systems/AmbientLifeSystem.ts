@@ -11,6 +11,7 @@ import {
   WILDLIFE_VILLAGER_HP,
 } from '../../config/constants';
 import {
+  ANIMAL_SPRITE_SIZE,
   BuildingType,
   CARTS_ATLAS_KEY,
   CART_TEXTURE_KEY,
@@ -187,6 +188,7 @@ export class AmbientLifeSystem {
   private spawnOneVillagerAt(x: number, y: number): void {
     const image = this.scene.add
       .image(x, y, VILLAGERS_ATLAS_KEY, VILLAGER_TEXTURE_KEY)
+      .setDisplaySize(ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE)
       .setDepth(VILLAGER_SPRITE_DEPTH);
     const villager: Villager = { id: `villager-${this.villagerIdCounter++}`, image, hp: WILDLIFE_VILLAGER_HP };
     this.villagers.push(villager);

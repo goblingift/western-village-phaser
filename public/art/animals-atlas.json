@@ -4,91 +4,91 @@
       "frame": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     },
     "animal-Pig": {
       "frame": {
-        "x": 18,
+        "x": 72,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     },
     "animal-Cow": {
       "frame": {
-        "x": 36,
+        "x": 144,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     },
     "animal-Ostrich": {
       "frame": {
-        "x": 54,
+        "x": 216,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "rotated": false,
       "trimmed": false,
       "spriteSourceSize": {
         "x": 0,
         "y": 0,
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       },
       "sourceSize": {
-        "w": 18,
-        "h": 18
+        "w": 72,
+        "h": 72
       }
     }
   },
   "meta": {
-    "app": "western-village-phaser tools/generate-placeholder-units.mjs",
+    "app": "western-village-phaser tools/asset_generation/generate_assets.py",
     "version": "1.0",
     "image": "animals-atlas.png",
     "format": "RGBA8888",
     "size": {
-      "w": 72,
-      "h": 18
+      "w": 288,
+      "h": 72
     },
     "scale": "1"
   }

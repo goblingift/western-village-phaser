@@ -14,12 +14,12 @@ import {
   VIEWPORT_WIDTH,
 } from '../../config/constants';
 import {
-  BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingCategory,
   BuildingType,
   PlacedBuilding,
   ResourceKey,
+  buildingAtlasKey,
   buildingTextureKey,
   formatResourceMap,
   isLinePlacementBuilding,
@@ -1087,13 +1087,16 @@ export class InputSystem {
   }
 
   private getOrCreateBlueprintPreviewImage(index: number, type: BuildingType): Phaser.GameObjects.Image {
+    const { size } = BUILDING_DEFINITIONS[type];
     const existing = this.blueprintPreviewImages[index];
     if (existing) {
-      existing.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(type));
+      existing.setTexture(buildingAtlasKey(type), buildingTextureKey(type));
+      existing.setDisplaySize(size.width * TILE_SIZE, size.height * TILE_SIZE);
       return existing;
     }
-    const image = this.scene.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(type));
+    const image = this.scene.add.image(0, 0, buildingAtlasKey(type), buildingTextureKey(type));
     image.setOrigin(0, 0);
+    image.setDisplaySize(size.width * TILE_SIZE, size.height * TILE_SIZE);
     image.setAlpha(0.6);
     image.setDepth(500);
     this.blueprintPreviewImages[index] = image;
@@ -1246,9 +1249,16 @@ export class InputSystem {
       return;
     }
 
+    const { size } = BUILDING_DEFINITIONS[this.scene.selectedType];
     this.previewImage?.destroy();
-    this.previewImage = this.scene.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(this.scene.selectedType));
+    this.previewImage = this.scene.add.image(
+      0,
+      0,
+      buildingAtlasKey(this.scene.selectedType),
+      buildingTextureKey(this.scene.selectedType),
+    );
     this.previewImage.setOrigin(0, 0);
+    this.previewImage.setDisplaySize(size.width * TILE_SIZE, size.height * TILE_SIZE);
     this.previewImage.setAlpha(0.6);
     this.previewImage.setDepth(500);
   }
@@ -1347,13 +1357,16 @@ export class InputSystem {
   }
 
   private getOrCreateLinePreviewImage(index: number, type: BuildingType): Phaser.GameObjects.Image {
+    const { size } = BUILDING_DEFINITIONS[type];
     const existing = this.linePreviewImages[index];
     if (existing) {
-      existing.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(type));
+      existing.setTexture(buildingAtlasKey(type), buildingTextureKey(type));
+      existing.setDisplaySize(size.width * TILE_SIZE, size.height * TILE_SIZE);
       return existing;
     }
-    const image = this.scene.add.image(0, 0, BUILDING_ATLAS_KEY, buildingTextureKey(type));
+    const image = this.scene.add.image(0, 0, buildingAtlasKey(type), buildingTextureKey(type));
     image.setOrigin(0, 0);
+    image.setDisplaySize(size.width * TILE_SIZE, size.height * TILE_SIZE);
     image.setAlpha(0.6);
     image.setDepth(500);
     this.linePreviewImages[index] = image;

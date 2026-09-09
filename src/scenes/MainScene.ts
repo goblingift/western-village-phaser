@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import {
+  ART_SCALE,
   BRAWLER_DAMAGE,
   BRAWLER_MAX_HP,
   BRAWLER_MAX_PER_BARRACKS,
@@ -53,7 +54,6 @@ import { TILESET_KEY } from './BootScene';
 import {
   BRAWLERS_ATLAS_KEY,
   BRAWLER_TEXTURE_KEY,
-  BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
   COWBOYS_ATLAS_KEY,
@@ -71,7 +71,6 @@ import {
   RESOURCE_LABELS,
   UnitKind,
   ANIMAL_SPRITE_SIZE,
-  buildingTextureKey,
   getFactionUnitDamageMultiplier,
   getUnitHpArray,
 } from '../config/buildingConfig';
@@ -331,17 +330,44 @@ interface UnitVisualConfig {
   atlasKey: string;
   textureKey: string;
   depth: number;
+  displayWidth: number;
+  displayHeight: number;
 }
 
+// displayWidth/displayHeight are asset-pipeline rework additions (2026-09-09):
+// unit textures may now be supersampled above their on-screen size (matching
+// the buildings' 4x + LINEAR-filtering treatment), so the sprite's actual
+// display size must be set explicitly via setDisplaySize rather than relying
+// on native texture pixel size as before.
 const UNIT_VISUAL_CONFIG: Record<UnitKind, UnitVisualConfig> = {
-  cowboy: { atlasKey: COWBOYS_ATLAS_KEY, textureKey: COWBOY_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
+  cowboy: {
+    atlasKey: COWBOYS_ATLAS_KEY,
+    textureKey: COWBOY_TEXTURE_KEY,
+    depth: COWBOY_SPRITE_DEPTH,
+    displayWidth: COWBOY_SPRITE_SIZE,
+    displayHeight: COWBOY_SPRITE_SIZE,
+  },
   cowboyOnHorse: {
     atlasKey: MOUNTED_COWBOYS_ATLAS_KEY,
     textureKey: MOUNTED_COWBOY_TEXTURE_KEY,
     depth: MOUNTED_COWBOY_SPRITE_DEPTH,
+    displayWidth: MOUNTED_COWBOY_SPRITE_WIDTH,
+    displayHeight: MOUNTED_COWBOY_SPRITE_HEIGHT,
   },
-  brawler: { atlasKey: BRAWLERS_ATLAS_KEY, textureKey: BRAWLER_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
-  dynamiter: { atlasKey: DYNAMITERS_ATLAS_KEY, textureKey: DYNAMITER_TEXTURE_KEY, depth: COWBOY_SPRITE_DEPTH },
+  brawler: {
+    atlasKey: BRAWLERS_ATLAS_KEY,
+    textureKey: BRAWLER_TEXTURE_KEY,
+    depth: COWBOY_SPRITE_DEPTH,
+    displayWidth: COWBOY_SPRITE_SIZE,
+    displayHeight: COWBOY_SPRITE_SIZE,
+  },
+  dynamiter: {
+    atlasKey: DYNAMITERS_ATLAS_KEY,
+    textureKey: DYNAMITER_TEXTURE_KEY,
+    depth: COWBOY_SPRITE_DEPTH,
+    displayWidth: COWBOY_SPRITE_SIZE,
+    displayHeight: COWBOY_SPRITE_SIZE,
+  },
 };
 
 /**
@@ -688,14 +714,26 @@ export class MainScene extends Phaser.Scene {
   }
 
   private buildTilemap(): void {
+    // Terrain art is generated ART_SCALE x its real tile-footprint size (see
+    // constants.ts's ART_SCALE doc comment) - the tileset is sliced at that
+    // supersampled pixel size (tileWidth/tileHeight args below), and the
+    // WHOLE LAYER is scaled back down by 1/ART_SCALE so the on-screen tile
+    // size and every existing tileX*TILE_SIZE world-position calculation
+    // elsewhere in the game (buildings, vegetation, units - all still based
+    // on the plain 32px TILE_SIZE) are completely unaffected. The map's own
+    // grid tileWidth/tileHeight must match the tileset's slicing size (both
+    // supersampled) - Phaser positions a tile at gridX*map.tileWidth in the
+    // layer's LOCAL space, so using TILE_SIZE there instead would misplace
+    // every tile relative to the (supersampled) source frames it's slicing.
+    const tilesetTileSize = TILE_SIZE * ART_SCALE;
     const map = this.make.tilemap({
-      tileWidth: TILE_SIZE,
-      tileHeight: TILE_SIZE,
+      tileWidth: tilesetTileSize,
+      tileHeight: tilesetTileSize,
       width: MAP_WIDTH_TILES,
       height: MAP_HEIGHT_TILES,
     });
 
-    const tileset = map.addTilesetImage('tiles', TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0);
+    const tileset = map.addTilesetImage('tiles', TILESET_KEY, tilesetTileSize, tilesetTileSize, 0, 0);
     if (!tileset) {
       throw new Error('Failed to load tileset image');
     }
@@ -704,6 +742,7 @@ export class MainScene extends Phaser.Scene {
     if (!layer) {
       throw new Error('Failed to create ground layer');
     }
+    layer.setScale(1 / ART_SCALE);
 
     this.groundLayer = layer;
     this.redrawGroundLayer();
@@ -1378,12 +1417,26 @@ export class MainScene extends Phaser.Scene {
         return;
       }
 
-      visual.image.setTexture(BUILDING_ATLAS_KEY, buildingTextureKey(building.type, building.houseTier));
+      const { atlasKey, frameName } = this.worldVisualsSystem.resolveBuildingTexture(building);
+      visual.image.setTexture(atlasKey, frameName);
 
       this.tweens.killTweensOf(visual.image);
       if (direction === 'upgrade') {
-        visual.image.setScale(1.25);
-        this.tweens.add({ targets: visual.image, scale: 1, duration: 300, ease: 'Back.easeOut' });
+        // Rebased relative to the image's OWN current scale rather than a
+        // hardcoded 1: House's texture is 4x supersampled (ART_SCALE) and
+        // rendered via setDisplaySize, so its correct "resting" scale is a
+        // fraction like 0.25, not 1 - animating toward a literal 1 would
+        // render House 4x too large for one tween.
+        const baseScaleX = visual.image.scaleX;
+        const baseScaleY = visual.image.scaleY;
+        visual.image.setScale(baseScaleX * 1.25, baseScaleY * 1.25);
+        this.tweens.add({
+          targets: visual.image,
+          scaleX: baseScaleX,
+          scaleY: baseScaleY,
+          duration: 300,
+          ease: 'Back.easeOut',
+        });
       } else {
         visual.image.setTint(0xff8a80);
         this.time.delayedCall(300, () => visual.image.clearTint());
@@ -1409,10 +1462,8 @@ export class MainScene extends Phaser.Scene {
       if (!visual) {
         return;
       }
-      visual.image.setTexture(
-        BUILDING_ATLAS_KEY,
-        buildingTextureKey(building.type, building.houseTier, building.gateOpen),
-      );
+      const { atlasKey, frameName } = this.worldVisualsSystem.resolveBuildingTexture(building);
+      visual.image.setTexture(atlasKey, frameName);
     });
   }
 
@@ -1469,7 +1520,10 @@ export class MainScene extends Phaser.Scene {
       kind === 'cowboyOnHorse'
         ? this.getMountedCowboySlotPosition(building, index)
         : this.getSquareUnitSlotPosition(building, (UNIT_KIND_SLOT_OFFSET[kind] ?? 0) + index);
-    const image = this.add.image(slot.x, slot.y, visual.atlasKey, visual.textureKey).setDepth(visual.depth);
+    const image = this.add
+      .image(slot.x, slot.y, visual.atlasKey, visual.textureKey)
+      .setDisplaySize(visual.displayWidth, visual.displayHeight)
+      .setDepth(visual.depth);
     const unit: CombatUnit = {
       id: `unit-${this.unitIdCounter++}`,
       image,

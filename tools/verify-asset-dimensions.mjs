@@ -1,10 +1,16 @@
 // Phase 73 (visual overhaul pipeline foundation): dimension-verification
-// tool. Per the plan's §3.4 step 5 / §5i risk: buildings/tiles/units are
-// rendered at native texture pixel size with `setOrigin(0, 0)` (buildings) or
-// centred (units) and are NEVER `setDisplaySize`d - so a PNG that is even 1px
-// off from its expected frame size does not error, it just silently misaligns
-// on the map or the unit grid forever. This script is the automated guard
-// against that failure mode.
+// tool. Per the plan's §3.4 step 5 / §5i risk: most categories (tiles,
+// units, animals, etc.) render at native texture pixel size with
+// `setOrigin(0, 0)`/centred and are never rescaled - so a PNG even 1px off
+// from its expected frame size doesn't error, it just silently misaligns on
+// the map or unit grid forever. Buildings are the one exception (asset-
+// pipeline rework, 2026-09-09): their textures are supersampled (currently
+// targeting 4x, ART_SCALE) and rendered via `setDisplaySize()` back down to
+// the correct tile footprint with LINEAR filtering - source resolution is
+// deliberately decoupled from on-screen footprint, so tools/verify-
+// building-frames.mjs checks a clean-multiple-of-the-footprint + internal
+// consistency (every state frame for one building is the same size as every
+// other) instead of one hardcoded absolute pixel size.
 //
 // Usage: node tools/verify-asset-dimensions.mjs
 // Exit code 0 = every checked file matches its expected dimensions.
@@ -35,70 +41,72 @@ const repoRoot = join(__dirname, '..');
 const ASSET_CHECKS = [
   {
     file: 'public/art/tiles-atlas.png',
-    expectedWidth: 160,
-    expectedHeight: 32,
+    expectedWidth: 640,
+    expectedHeight: 128,
     note:
-      '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 32x32px each. Loaded via ' +
-      'this.load.image() for Tilemap.addTilesetImage(), not this.load.atlas() - see ' +
-      "BootScene.ts's preload() comment. Its companion tiles-atlas.json (Phase 79) is " +
+      '5 terrain frames (Dirt, Gravel, Sand, Water, Rock) x 128x128px each (32x32 x 4x ' +
+      'ART_SCALE, 2026-09-09 asset-pipeline rework - see MainScene.buildTilemap()). ' +
+      'Loaded via this.load.image() for Tilemap.addTilesetImage(), not this.load.atlas() - ' +
+      "see BootScene.ts's preload() comment. Its companion tiles-atlas.json (Phase 79) is " +
       'documentation/tooling-only and is checked separately by verify-tileset-frames.mjs.',
   },
-  // Phase 74: 34 building base frames (11 x 32x32 1x1 + 23 x 64x64 2x2, all
-  // packed side-by-side in one row) + 3 appended 32x32 variant frames
-  // (House-tier2, House-tier3, WoodenGate-closed) = 1920x64px overall. This
-  // only checks the whole-file dimensions (packing sanity); per-frame name
-  // and per-frame size correctness is verified separately by
-  // tools/verify-building-frames.mjs, which reads buildings-atlas.json.
-  {
-    file: 'public/art/buildings-atlas.png',
-    expectedWidth: 1920,
-    expectedHeight: 64,
-    note:
-      '34 building base frames (11x 32x32 + 23x 64x64) + 3 appended 32x32 variant frames ' +
-      '(House-tier2, House-tier3, WoodenGate-closed), packed side-by-side in one row',
-  },
+  // Asset-pipeline rework (2026-09-09): buildings moved from one shared
+  // buildings-atlas.png to one atlas file PER BUILDING TYPE
+  // (public/art/buildings/<BuildingType>.png/.json), so there is no longer a
+  // single whole-file dimension to check here - each building's file size
+  // varies with how many state frames (Intact/Damaged/Ruined/Construction*/
+  // Tier*) it currently has. Per-building file existence, frame-name and
+  // frame-size correctness is verified by tools/verify-building-frames.mjs
+  // instead, which now owns this whole category end to end.
+
   // Phase 75: player units, villagers, animals. 4 single-frame atlases
-  // (cowboys/brawlers/dynamiters/villagers, all square 18x18) + one non-square
-  // single-frame atlas (mounted-cowboys, 24x18) + one 4-frame animal atlas
-  // (72x18, 4 x 18x18 packed side-by-side: Chicken/Pig/Cow/Ostrich). Per-frame
+  // (cowboys/brawlers/dynamiters/villagers, all square) + one non-square
+  // single-frame atlas (mounted-cowboys) + one 4-frame animal atlas
+  // (4 frames packed side-by-side: Chicken/Pig/Cow/Ostrich). Per-frame
   // name/size correctness (not just whole-file dimensions) is verified
   // separately by tools/verify-unit-frames.mjs, mirroring how
   // verify-building-frames.mjs complements this file for buildings-atlas.
+  //
+  // Asset-pipeline rework (2026-09-09): these are now 4x supersampled
+  // (ART_SCALE) and rendered via setDisplaySize back to their real 18x18/
+  // 24x18 on-screen size - expected dimensions below are the supersampled
+  // source resolution (72/96), matching verify-unit-frames.mjs's own
+  // ART_SCALE constant.
   {
     file: 'public/art/animals-atlas.png',
-    expectedWidth: 72,
-    expectedHeight: 18,
-    note: '4 animal frames (Chicken, Pig, Cow, Ostrich) x 18x18px each',
+    expectedWidth: 288,
+    expectedHeight: 72,
+    note: '4 animal frames (Chicken, Pig, Cow, Ostrich) x 72x72px each (18x18 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/cowboys-atlas.png',
-    expectedWidth: 18,
-    expectedHeight: 18,
-    note: 'single "cowboy" frame, 18x18px',
+    expectedWidth: 72,
+    expectedHeight: 72,
+    note: 'single "cowboy" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/mounted-cowboys-atlas.png',
-    expectedWidth: 24,
-    expectedHeight: 18,
-    note: 'single "cowboy-on-horse" frame, 24x18px (non-square, 4:3 ratio)',
+    expectedWidth: 96,
+    expectedHeight: 72,
+    note: 'single "cowboy-on-horse" frame, 96x72px (24x18 x 4x ART_SCALE, non-square 4:3 ratio)',
   },
   {
     file: 'public/art/brawlers-atlas.png',
-    expectedWidth: 18,
-    expectedHeight: 18,
-    note: 'single "brawler" frame, 18x18px',
+    expectedWidth: 72,
+    expectedHeight: 72,
+    note: 'single "brawler" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/dynamiters-atlas.png',
-    expectedWidth: 18,
-    expectedHeight: 18,
-    note: 'single "dynamiter" frame, 18x18px',
+    expectedWidth: 72,
+    expectedHeight: 72,
+    note: 'single "dynamiter" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   {
     file: 'public/art/villagers-atlas.png',
-    expectedWidth: 18,
-    expectedHeight: 18,
-    note: 'single "villager" frame, 18x18px',
+    expectedWidth: 72,
+    expectedHeight: 72,
+    note: 'single "villager" frame, 72x72px (18x18 x 4x ART_SCALE)',
   },
   // Phase 76: raiders, raider camps, wildlife. Raiders/wildlife are 3-frame
   // uniform-grid strips at 18x18 each (WILDLIFE_SPRITE_SIZE raised 12->18

@@ -11,7 +11,6 @@ import {
   AccentKind,
   ANIMALS_ATLAS_KEY,
   ANIMAL_SPRITE_SIZE,
-  BUILDING_ATLAS_KEY,
   BUILDING_DEFINITIONS,
   BuildingType,
   HOUSE_TIER_CONFIG,
@@ -21,8 +20,10 @@ import {
   UnitKind,
   accentTextureKey,
   animalTextureKey,
+  buildingAtlasKey,
   buildingTextureKey,
   getWorkersRequired,
+  resolveBuildingFrameName,
 } from '../../config/buildingConfig';
 import { gameEvents } from '../../state/gameEvents';
 import {
@@ -269,15 +270,32 @@ export class WorldVisualsSystem {
    * through gameState.placeBuilding - avoiding a second, parallel
    * visual-creation path that could drift from this one.
    */
+  /**
+   * Resolves which atlas + frame to render for a building's CURRENT state:
+   * atlas is always that building type's own per-building spriteset
+   * (buildingAtlasKey); frame starts from the tier/gate-open base
+   * (buildingTextureKey) and layers on an hp-derived Damaged/Ruined suffix
+   * ONLY if that building's atlas actually has the frame generated
+   * (resolveBuildingFrameName's existence check) - falls back to the base
+   * frame gracefully for the (currently: most) buildings whose damage art
+   * hasn't been generated yet.
+   */
+  resolveBuildingTexture(building: PlacedBuilding): { atlasKey: string; frameName: string } {
+    const atlasKey = buildingAtlasKey(building.type);
+    const baseFrame = buildingTextureKey(building.type, building.houseTier, building.gateOpen);
+    const texture = this.scene.textures.get(atlasKey);
+    const { maxHp } = BUILDING_DEFINITIONS[building.type];
+    const frameName = resolveBuildingFrameName(baseFrame, building.hp, maxHp, (f) => texture.has(f));
+    return { atlasKey, frameName };
+  }
+
   createVisualForBuilding(building: PlacedBuilding): BuildingVisual {
+    const definition = BUILDING_DEFINITIONS[building.type];
+    const { atlasKey, frameName } = this.resolveBuildingTexture(building);
     const image = this.scene.add
-      .image(
-        building.tileX * TILE_SIZE,
-        building.tileY * TILE_SIZE,
-        BUILDING_ATLAS_KEY,
-        buildingTextureKey(building.type, building.houseTier, building.gateOpen),
-      )
+      .image(building.tileX * TILE_SIZE, building.tileY * TILE_SIZE, atlasKey, frameName)
       .setOrigin(0, 0)
+      .setDisplaySize(definition.size.width * TILE_SIZE, definition.size.height * TILE_SIZE)
       .setDepth(10);
 
     const visual: BuildingVisual = {
@@ -563,6 +581,7 @@ export class WorldVisualsSystem {
       const slot = this.getAnimalSlotPosition(visual.building, index);
       const animalImage = this.scene.add
         .image(slot.x, slot.y, ANIMALS_ATLAS_KEY, animalTextureKey(animalConfig.animalLabel))
+        .setDisplaySize(ANIMAL_SPRITE_SIZE, ANIMAL_SPRITE_SIZE)
         .setDepth(ANIMAL_SPRITE_DEPTH);
       visual.animalImages.push(animalImage);
       this.startAnimalWander(animalImage, slot);
@@ -750,7 +769,19 @@ export class WorldVisualsSystem {
   redrawHpBars(): void {
     this.hpBarGraphics.clear();
 
-    for (const { building } of this.buildingVisuals.values()) {
+    for (const visual of this.buildingVisuals.values()) {
+      const { building } = visual;
+      // Damage-state sprite swap rides the same per-tick pass as the HP bar
+      // redraw below (both keyed off the same hp/maxHp), rather than a
+      // separate listener - a plain setFrame() (not setTexture()) since the
+      // atlas itself never changes for a building's lifetime, and only when
+      // the resolved frame actually differs from what's showing, so a
+      // building sitting at full health every tick costs nothing extra.
+      const { frameName } = this.resolveBuildingTexture(building);
+      if (visual.image.frame.name !== frameName) {
+        visual.image.setFrame(frameName);
+      }
+
       const { size, maxHp } = BUILDING_DEFINITIONS[building.type];
       if (building.hp >= maxHp) {
         continue;

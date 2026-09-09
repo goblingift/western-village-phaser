@@ -1,16 +1,17 @@
-// Phase 74 (buildings): generates a PLACEHOLDER buildings atlas
-// (public/art/buildings-atlas.png + .json) at BUILDING_ATLAS_KEY.
+// Generates PLACEHOLDER per-building atlases: public/art/buildings/<BuildingType>.png
+// + .json, one file pair per BuildingType, replacing the old single shared
+// buildings-atlas.png/.json (asset-pipeline rework, 2026-09-09 - each
+// building now gets its own spriteset file so it can carry its own
+// Intact/Damaged/Ruined/Construction*/Tier* state frames without colliding
+// with every other building's frame-name space).
 //
-// THIS IS NOT REAL ART. No AI-image-generation tool was available in the
-// environment this was built in (see
-// docs/phase_73_to_78_visual_overhaul_plan.md sections 2/3 for the real
-// target art spec). This script exists purely to prove the loading pipeline
-// end-to-end - correct file path, correct per-frame dimensions (derived from
-// each building's real footprint, never hardcoded), correct frame names
-// exactly matching what `buildingTextureKey()` produces - with an obviously
-// fake flat-color-plus-marker sprite per building. It must be replaced with
-// real, AI-generated art before this overhaul is considered visually
-// complete; see public/art/README.md.
+// THIS IS NOT REAL ART. This script exists purely to prove the loading
+// pipeline end-to-end - correct file paths, correct per-frame dimensions
+// (derived from each building's real footprint, never hardcoded), correct
+// frame names exactly matching what `buildingTextureKey()` produces - with
+// an obviously fake flat-color-plus-marker sprite per building. Real
+// AI-generated art (tools/asset_generation/) replaces these one building at
+// a time; see public/art/README.md.
 //
 // Usage: node tools/generate-placeholder-buildings.mjs
 //
@@ -18,13 +19,12 @@
 // src/config/buildingConfig.ts's BUILDING_DEFINITIONS (type, footprint size,
 // category) - this script is plain Node (no TypeScript loader available), so
 // it cannot import the real .ts source directly. If a building is added,
-// removed, resized, or recategorized in buildingConfig.ts, this table (and
-// BUILDING_TIER_VARIANTS/BUILDING_GATE_VARIANTS below) must be updated to
-// match, or the two `node tools/*.mjs` verification scripts will start
+// removed, resized, or recategorized in buildingConfig.ts, this table must be
+// updated to match, or `node tools/verify-building-frames.mjs` will start
 // failing (missing/extra frame names, wrong dimensions) - which is the
 // intended guard rail, not a bug.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodePng } from './png-writer.mjs';
@@ -34,10 +34,7 @@ const repoRoot = join(__dirname, '..');
 
 const TILE_SIZE = 32;
 
-// One row per BuildingType, in BUILDING_DEFINITIONS' own declaration order
-// (order doesn't matter for a JSON atlas - frames are looked up by name, not
-// position - but keeping it in source order makes this table easy to diff
-// against buildingConfig.ts by eye).
+// One row per BuildingType, in BUILDING_DEFINITIONS' own declaration order.
 const BUILDINGS = [
   { type: 'OstrichFarm', w: 2, h: 2, category: 'Livestock' },
   { type: 'Butcher', w: 2, h: 2, category: 'Industry' },
@@ -79,31 +76,27 @@ if (BUILDINGS.length !== 34) {
   throw new Error(`Expected 34 BuildingType entries, found ${BUILDINGS.length}. Update this table.`);
 }
 
-// Extra named frames buildingTextureKey() can produce beyond the 34 base
-// frames above - see buildingConfig.ts's buildingTextureKey(). House's tier2/
-// tier3 variants and WoodenGate's closed variant are always 1x1 (matching
-// their base building's own footprint), so no separate size table is needed.
-const VARIANT_FRAMES = [
-  { key: 'building-House-tier2', w: 1, h: 1, category: 'Housing', markerSeed: 100 },
-  { key: 'building-House-tier3', w: 1, h: 1, category: 'Housing', markerSeed: 101 },
-  { key: 'building-WoodenGate-closed', w: 1, h: 1, category: 'Barriers', markerSeed: 102 },
-];
+// Every frame name buildingTextureKey() can produce for a given building
+// type (buildingConfig.ts) - most buildings only ever have 'Intact'; House
+// and WoodenGate are the two with extra base-state frames.
+function framesForBuilding(type) {
+  if (type === 'House') {
+    return ['Intact', 'Tier2', 'Tier3'];
+  }
+  if (type === 'WoodenGate') {
+    return ['Intact', 'Closed'];
+  }
+  return ['Intact'];
+}
 
-/**
- * A palette family per BuildingCategory (§ "vary by category so buildings in
- * the same category are visually grouped at a glance") - deliberately flat/
- * saturated placeholder hues, NOT the real Western palette from the plan's
- * §2.3 (that's for the real art pass). Each entry is [r,g,b] for the frame's
- * base fill.
- */
 const CATEGORY_BASE_COLOR = {
-  Housing: [0xff, 0xb3, 0x00], // amber
-  Barriers: [0x8d, 0x6e, 0x63], // brown
-  Livestock: [0x8b, 0xc3, 0x4a], // light green
-  Farming: [0x2e, 0x7d, 0x32], // dark green
-  Industry: [0xe6, 0x51, 0x00], // burnt orange
-  Commerce: [0x8e, 0x24, 0xaa], // purple
-  Military: [0x37, 0x47, 0x4f], // slate
+  Housing: [0xff, 0xb3, 0x00],
+  Barriers: [0x8d, 0x6e, 0x63],
+  Livestock: [0x8b, 0xc3, 0x4a],
+  Farming: [0x2e, 0x7d, 0x32],
+  Industry: [0xe6, 0x51, 0x00],
+  Commerce: [0x8e, 0x24, 0xaa],
+  Military: [0x37, 0x47, 0x4f],
 };
 
 const CATEGORY_MARKER_COLOR = {
@@ -122,17 +115,8 @@ function lighten([r, g, b], amount) {
   return [Math.min(255, r + amount), Math.min(255, g + amount), Math.min(255, b + amount)];
 }
 
-function darken([r, g, b], amount) {
-  return [Math.max(0, r - amount), Math.max(0, g - amount), Math.max(0, b - amount)];
-}
-
-// Deterministic small "index marker" pattern so two buildings in the same
-// category (same base/border color) are not pixel-identical - a 4x4 block
-// grid in the top-left corner, filled according to the building's own index
-// in bit-pattern form (still a flat placeholder, not art, just enough to
-// visually tell two same-category buildings apart while testing).
 function drawIndexMarker(rgba, width, originX, originY, index, markerColor, bgColor) {
-  const bits = index & 0xf; // 4 bits -> 4 marker cells
+  const bits = index & 0xf;
   const cellSize = 4;
   for (let cell = 0; cell < 4; cell++) {
     const on = (bits >> cell) & 1;
@@ -154,10 +138,6 @@ function drawIndexMarker(rgba, width, originX, originY, index, markerColor, bgCo
 }
 
 function drawFootprintSizeHint(rgba, width, originX, originY, frameW, frameH, w, h, color) {
-  // Bottom-right corner: draw `w` small ticks along the bottom edge and `h`
-  // small ticks along the right edge, so a 2x2 building visually differs
-  // from a 1x1 even within the same category/index-marker collision (there
-  // are more buildings than 16 index-marker combinations per category).
   const tick = 3;
   for (let i = 0; i < w; i++) {
     const px0 = originX + frameW - (i + 1) * (tick + 1);
@@ -207,91 +187,69 @@ function drawFrame(rgba, width, originX, originY, frameW, frameH, base, border, 
   drawFootprintSizeHint(rgba, width, originX, originY, frameW, frameH, w, h, marker);
 }
 
-// --- Layout: pack every base + variant frame left-to-right in one row,
-// mirroring generateBuildingAtlas()'s own simple side-by-side layout so the
-// packing strategy this replaces isn't a surprise. ---
-const frames = [];
-let atlasWidth = 0;
-let atlasHeight = 0;
+const outDir = join(repoRoot, 'public', 'art', 'buildings');
+// Clean slate: an old run's leftover per-building files for a since-removed
+// BuildingType would otherwise linger forever (nothing else in this script
+// deletes stale files by name).
+if (existsSync(outDir)) {
+  rmSync(outDir, { recursive: true });
+}
+mkdirSync(outDir, { recursive: true });
+
+let totalFrames = 0;
 
 BUILDINGS.forEach((b, index) => {
-  const w = b.w * TILE_SIZE;
-  const h = b.h * TILE_SIZE;
-  frames.push({
-    name: `building-${b.type}`,
-    x: atlasWidth,
-    y: 0,
-    w,
-    h,
-    category: b.category,
-    index,
-    tilesW: b.w,
-    tilesH: b.h,
-  });
-  atlasWidth += w;
-  atlasHeight = Math.max(atlasHeight, h);
-});
-
-VARIANT_FRAMES.forEach((v) => {
-  const w = v.w * TILE_SIZE;
-  const h = v.h * TILE_SIZE;
-  frames.push({
-    name: v.key,
-    x: atlasWidth,
-    y: 0,
-    w,
-    h,
-    category: v.category,
-    index: v.markerSeed,
-    tilesW: v.w,
-    tilesH: v.h,
-  });
-  atlasWidth += w;
-  atlasHeight = Math.max(atlasHeight, h);
-});
-
-const rgba = Buffer.alloc(atlasWidth * atlasHeight * 4);
-
-for (const frame of frames) {
-  const base = CATEGORY_BASE_COLOR[frame.category];
-  const marker = CATEGORY_MARKER_COLOR[frame.category];
+  const frameW = b.w * TILE_SIZE;
+  const frameH = b.h * TILE_SIZE;
+  const frameNames = framesForBuilding(b.type);
+  const base = CATEGORY_BASE_COLOR[b.category];
+  const marker = CATEGORY_MARKER_COLOR[b.category];
   const border = lighten(base, BORDER_LIGHTEN);
-  drawFrame(rgba, atlasWidth, frame.x, frame.y, frame.w, frame.h, base, border, marker, frame.index, frame.tilesW, frame.tilesH);
-}
 
-const png = encodePng(atlasWidth, atlasHeight, rgba);
-const outDir = join(repoRoot, 'public', 'art');
-mkdirSync(outDir, { recursive: true });
-const pngPath = join(outDir, 'buildings-atlas.png');
-writeFileSync(pngPath, png);
+  const atlasWidth = frameW * frameNames.length;
+  const atlasHeight = frameH;
+  const rgba = Buffer.alloc(atlasWidth * atlasHeight * 4);
 
-// Phaser 3/4 JSONHash atlas format: { frames: { "<name>": { frame: {x,y,w,h}, ... } }, meta: {...} }
-const atlasJson = {
-  frames: {},
-  meta: {
-    app: 'western-village-phaser tools/generate-placeholder-buildings.mjs',
-    version: '1.0',
-    image: 'buildings-atlas.png',
-    format: 'RGBA8888',
-    size: { w: atlasWidth, h: atlasHeight },
-    scale: '1',
-  },
-};
+  const frames = frameNames.map((name, frameIndex) => ({
+    name,
+    x: frameIndex * frameW,
+    y: 0,
+    w: frameW,
+    h: frameH,
+  }));
 
-for (const frame of frames) {
-  atlasJson.frames[frame.name] = {
-    frame: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
-    rotated: false,
-    trimmed: false,
-    spriteSourceSize: { x: 0, y: 0, w: frame.w, h: frame.h },
-    sourceSize: { w: frame.w, h: frame.h },
+  for (const frame of frames) {
+    drawFrame(rgba, atlasWidth, frame.x, frame.y, frame.w, frame.h, base, border, marker, index, b.w, b.h);
+  }
+
+  const png = encodePng(atlasWidth, atlasHeight, rgba);
+  const pngPath = join(outDir, `${b.type}.png`);
+  writeFileSync(pngPath, png);
+
+  const atlasJson = {
+    frames: {},
+    meta: {
+      app: 'western-village-phaser tools/generate-placeholder-buildings.mjs',
+      version: '1.0',
+      image: `${b.type}.png`,
+      format: 'RGBA8888',
+      size: { w: atlasWidth, h: atlasHeight },
+      scale: '1',
+    },
   };
-}
+  for (const frame of frames) {
+    atlasJson.frames[frame.name] = {
+      frame: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+      rotated: false,
+      trimmed: false,
+      spriteSourceSize: { x: 0, y: 0, w: frame.w, h: frame.h },
+      sourceSize: { w: frame.w, h: frame.h },
+    };
+  }
+  writeFileSync(join(outDir, `${b.type}.json`), JSON.stringify(atlasJson, null, 2));
 
-const jsonPath = join(outDir, 'buildings-atlas.json');
-writeFileSync(jsonPath, JSON.stringify(atlasJson, null, 2));
+  totalFrames += frames.length;
+});
 
-console.log(`Wrote placeholder buildings atlas: ${pngPath} (${atlasWidth}x${atlasHeight}px, ${frames.length} frames)`);
-console.log(`Wrote atlas JSON: ${jsonPath}`);
-console.log('Frame names: ' + frames.map((f) => f.name).join(', '));
-console.log('REMINDER: this is a PLACEHOLDER. Replace with real AI-generated art before shipping.');
+console.log(`Wrote ${BUILDINGS.length} placeholder building atlases (${totalFrames} total frames) to ${outDir}`);
+console.log('REMINDER: this is PLACEHOLDER art. Replace one building at a time with tools/asset_generation/.');

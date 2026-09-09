@@ -1,4 +1,16 @@
 export const TILE_SIZE = 32;
+// Asset-pipeline rework (2026-09-09): source art (buildings, terrain, units)
+// is generated at ART_SCALE x its real on-screen tile-footprint size and
+// rendered back down via setDisplaySize/tilemap-layer-scale + LINEAR
+// filtering, so painterly AI-generated detail survives instead of being
+// crushed by a hard 1x downscale + NEAREST sampling. Terrain specifically
+// uses this to size its tileset image/tilemap grid (see MainScene.buildTilemap) -
+// every other category (buildings/units/animals) already applies this factor
+// directly in the Python asset pipeline, not via a shared TS constant, since
+// each has its own display-size call site; terrain needed one because the
+// tilemap's tile-slicing size and the map's own grid-spacing size are two
+// separate Phaser API parameters that must be reasoned about together.
+export const ART_SCALE = 4;
 // Phase 66: raised from 40x30 (1200 tiles) to 60x45 (2700 tiles, 2.25x) -
 // same 4:3 aspect ratio, just a bigger world for later phases (Coal/terrain,
 // Wildlife edge-spawning) to build on.

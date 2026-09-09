@@ -23,7 +23,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-const TILE_SIZE = 32;
+// Asset-pipeline rework (2026-09-09): terrain tiles are now 4x supersampled
+// (ART_SCALE) and rendered via a scaled-down tilemap layer (see
+// MainScene.buildTilemap()'s tilesetTileSize/layer.setScale) rather than at
+// native 32px - the source PNG frames are 128px each, not 32px.
+const TILE_SIZE = 32 * 4;
 
 // Order MUST match src/config/mapConfig.ts's TileType enum exactly (Dirt=0,
 // Gravel=1, Sand=2, Water=3, Rock=4) - the same invariant
